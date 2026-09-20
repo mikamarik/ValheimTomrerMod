@@ -238,8 +238,9 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             Dim(scroll.content,
-                "The pad reaches the panels too. L3 with an empty hand opens the walk, the D-pad or the left "
-                + "stick moves, L1 and R1 change panel, cross presses, circle goes back to the view. Tab does "
+                "The pad reaches the panels too. L3 with an empty hand leaves the view and opens the walk, "
+                + "and circle is the way back to the view. The D-pad or the left stick moves, R1 goes on "
+                + "through left, top, right and wraps, L1 goes back the same way, cross presses. Tab does "
                 + "the same from the keyboard. The piece grid, the piece list and the problem list stay "
                 + "mouse-only: pick pieces with the cross menu instead.");
 

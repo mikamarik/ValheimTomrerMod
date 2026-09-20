@@ -51,7 +51,7 @@ namespace ValheimTomrer.Editor.Input
         {
             KeyCode.W, KeyCode.A, KeyCode.S, KeyCode.D, KeyCode.Space,
             KeyCode.LeftControl, KeyCode.RightControl,
-            KeyCode.Z, KeyCode.Y, KeyCode.G, KeyCode.R, KeyCode.Q, KeyCode.E,
+            KeyCode.Z, KeyCode.Y, KeyCode.G, KeyCode.R, KeyCode.Q, KeyCode.E, KeyCode.C,
             KeyCode.F, KeyCode.H, KeyCode.Slash, KeyCode.Question,
             KeyCode.UpArrow, KeyCode.DownArrow, KeyCode.LeftArrow, KeyCode.RightArrow,
             KeyCode.PageUp, KeyCode.PageDown, KeyCode.Delete, KeyCode.Backspace,
@@ -431,6 +431,11 @@ namespace ValheimTomrer.Editor.Input
                 case KeyCode.F:
                     ViewportHost.Frame();
                     return true;
+                case KeyCode.C:
+                    // Hand the mouse to the pane, so it looks around instead of pointing. Esc
+                    // gives it back. A click never does this: it selects.
+                    ViewportHost.Capture();
+                    return true;
                 case KeyCode.R:
                     var direction = Shift ? -1 : 1;
                     if (placing)
@@ -542,14 +547,15 @@ namespace ValheimTomrer.Editor.Input
         /// <summary>The mouse and keyboard half of the help, in the same order as Tomrer's.</summary>
         public static readonly HelpRow[] Keys =
         {
-            new HelpRow("Click the view", "The pane takes the mouse: it looks around, like flying in the game. Esc gives it back."),
-            new HelpRow("W, A, S, D", "Fly forward (where the camera looks), back, left, right"),
-            new HelpRow("Space, Ctrl", "Fly up, down. Hold Shift to fly 3 times faster."),
-            new HelpRow("Right drag", "Look around, without taking the mouse"),
+            new HelpRow("Click", "Select a piece, or drop what is in hand. Shift+click adds or removes."),
+            new HelpRow("Right drag", "Look around. The cursor stays where it is."),
             new HelpRow("Middle drag, or Shift + right drag", "Pan"),
             new HelpRow("Wheel", "Zoom toward the cursor. While placing it turns the piece 22.5 degrees."),
-            new HelpRow("Click", "Select a piece, or drop what is in hand. Shift+click adds or removes."),
-            new HelpRow("Drag on the view", "Select everything in the box. Only before the pane has the mouse."),
+            new HelpRow("Drag on the view", "Select everything in the box. Only while the cursor is free."),
+            new HelpRow("W, A, S, D", "Fly forward (where the camera looks), back, left, right"),
+            new HelpRow("Space, Ctrl", "Fly up, down. Hold Shift to fly 3 times faster."),
+            new HelpRow("C", "Hold the mouse in the pane, so it looks around like flying in the game. "
+                + "Esc gives the cursor back."),
             new HelpRow("Ctrl+A", "Select all"),
             new HelpRow("Pieces tab, click a piece", "Place it: it follows the mouse, click to place, Esc to stop"),
             new HelpRow("G", "Move the selection: it follows the mouse, click to drop, Esc to cancel"),

@@ -173,28 +173,21 @@ namespace ValheimTomrer.Editor.Input
 
             // 10. Circle: the Esc ladder, in EditorSession.
 
-            // 11. Square moves the selection, triangle copies it.
+            // 11. Square moves what the crosshair is on, triangle copies it, on their own.
             if (pad.Pressed(PadButton.Square) && !placing)
             {
-                EditorState.StartMove();
+                MoveAimed();
             }
 
             if (pad.Pressed(PadButton.Triangle) && !placing)
             {
-                EditorState.StartDuplicate();
+                CloneAimed();
             }
 
-            // 12. R1 removes the aimed piece, or clones it with L2.
+            // 12. R1 removes it.
             if (pad.Pressed(PadButton.R1) && !moving)
             {
-                if (l2)
-                {
-                    CloneAimed();
-                }
-                else
-                {
-                    DeleteAimed();
-                }
+                DeleteAimed();
             }
 
             // 13. L3 and R3: the snap point while placing, else R3 frames the selection.
@@ -362,37 +355,47 @@ namespace ValheimTomrer.Editor.Input
         }
 
         /// <summary>R1, like the game's remove: the aimed piece, or the selection when it is in it.</summary>
-        private static void DeleteAimed()
+        /// <summary>
+        /// What square, triangle and R1 act on. The pad works off the crosshair, so a piece in the
+        /// middle of the view is taken even when nothing was selected, and the whole selection is
+        /// taken when that piece is already part of it. Aiming at nothing keeps the selection that
+        /// is there, so the three buttons still work after picking several pieces with R2.
+        /// False means there is nothing to act on.
+        /// </summary>
+        private static bool TakeAimed()
         {
             var piece = Aimed();
-            if (piece == null)
-            {
-                return;
-            }
-
-            if (!EditorState.IsSelected(piece.Id))
+            if (piece != null && !EditorState.IsSelected(piece.Id))
             {
                 EditorState.Select(piece.Id);
             }
 
-            EditorState.DeleteSelection();
+            return EditorState.SelectionCount > 0;
+        }
+
+        private static void DeleteAimed()
+        {
+            if (TakeAimed())
+            {
+                EditorState.DeleteSelection();
+            }
+        }
+
+        private static void MoveAimed()
+        {
+            if (TakeAimed())
+            {
+                EditorState.StartMove();
+            }
         }
 
         /// <summary>L2 + R1: copies of the aimed piece, turned the same way, keep coming.</summary>
         private static void CloneAimed()
         {
-            var piece = Aimed();
-            if (piece == null)
+            if (TakeAimed())
             {
-                return;
+                EditorState.StartDuplicate();
             }
-
-            if (!EditorState.IsSelected(piece.Id))
-            {
-                EditorState.Select(piece.Id);
-            }
-
-            EditorState.StartDuplicate();
         }
 
         // ---------- the help table ----------
@@ -422,21 +425,28 @@ namespace ValheimTomrer.Editor.Input
                 new HelpRow($"{l1} + {r2}", "Add that piece to the selection, or take it out"),
                 new HelpRow($"{l2} + {g.Rs} left, right", "Turn 22.5 degrees: the piece being placed, else the selection"),
                 new HelpRow($"{l1} (hold)", "No snapping while held, like in the game"),
-                new HelpRow($"{l3}, {r3}",
-                    $"While placing: the snap point, like Q and E. Else: {l3} walks the panels, "
-                    + $"{r3} looks at the selection."),
+                new HelpRow($"{l3} (in the view)",
+                    $"Leave the view and walk the panels. {circle} comes back to the view."),
                 new HelpRow($"{l3} (in the panels)",
-                    $"{g.Dpad} or {g.Ls} moves, {l1} {r1} change panel, {cross} presses, "
-                    + $"{circle} goes back to the view"),
+                    $"{g.Dpad} or {g.Ls} moves, {r1} goes left, top, right and {l1} back, "
+                    + $"{cross} presses, {circle} goes back to the view"),
+                new HelpRow($"{l3}, {r3} (while placing)", "Pick the snap point, like Q and E"),
+                new HelpRow($"{r3} (in the view)", "Look at the selection, or at everything"),
                 new HelpRow(cross,
                     $"Pieces menu: {g.Dpad} to choose, {l1} {r1} for the tab, {cross} to place, {circle} to close"),
-                new HelpRow(circle, "Stop placing, or clear the selection, or close the editor"),
-                new HelpRow(g.Of(PadButton.Square), "Move the selection"),
-                new HelpRow(g.Of(PadButton.Triangle), "Duplicate the selection"),
-                new HelpRow(r1, "Delete the piece in the middle of the view (the whole selection when that piece is in it)"),
-                new HelpRow($"{l2} + {r1}",
-                    $"Clone it: copies of it, turned the same way, keep coming until {circle} stops "
-                    + "(the whole selection when that piece is in it)"),
+                new HelpRow(circle,
+                    "Stop placing, else leave the panels for the view, else clear the selection, "
+                    + "else close the editor"),
+                new HelpRow(g.Of(PadButton.Square),
+                    "Move the piece in the middle of the view. It follows the crosshair, "
+                    + $"{r2} drops it, {circle} puts it back."),
+                new HelpRow(g.Of(PadButton.Triangle),
+                    "Copy the piece in the middle of the view. Copies of it, turned the same way, "
+                    + $"keep coming until {circle} stops."),
+                new HelpRow(r1, "Delete the piece in the middle of the view"),
+                new HelpRow("The three above",
+                    "Take the whole selection when the aimed piece is part of it, and the selection "
+                    + "on its own when the crosshair is on nothing"),
                 new HelpRow($"{l2} + {r2}", "Place another piece of the kind in the middle of the view, like the game's copy"),
                 new HelpRow(g.Dpad + " left, right", "Undo, redo"),
                 new HelpRow(g.Of(PadButton.Options), "This help"),

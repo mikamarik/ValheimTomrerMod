@@ -14,7 +14,7 @@ Make blueprints in the game, then build them with the hammer. **Valheim 1.0**, s
   character has unlocked.
 - **Mouse and controller.** Placing, moving, turning and deleting all have a pad button, and
   L3 walks the top bar and the side panels, so Save, the filters and the name field work without
-  a mouse.
+  a mouse. The controls along the bottom of the 3D view show the game's own button icons.
 - **Plain text files.** A blueprint is a small text file you can read, edit or send to a friend.
 - **Nothing added to your world.** No custom pieces, no custom items, no files but the blueprints.
 
@@ -42,8 +42,6 @@ Valheim/BepInEx/plugins/
 4. **Click to place it.** It snaps to what is already there, the same way the hammer does.
    Hold Shift for no snapping. Q and E pick which corner of the piece goes on the spot you aim at.
    The piece stays in hand, so click again for the next one. Esc stops placing.
-   When the view does not have the mouse yet, the first click takes it for the camera and places
-   nothing. The next click places.
 5. **Fix mistakes:** click a piece to select it, G moves it, R turns it, Del removes it,
    Ctrl+Z undoes. Drag a box over several pieces to take them all.
 6. **Name it** on the right, write a line of description, and pick the icon the build card shows.
@@ -80,14 +78,14 @@ the ground is blocked. The message says which.
 
 | Key | What it does |
 |---|---|
-| Click the view | The view takes the mouse and looks around with it, like flying in the game. `Esc` gives it back. |
-| `W` `A` `S` `D` | Fly forward, back, left, right |
-| `Space` `Ctrl` | Fly up, down. Hold `Shift` to fly 3 times faster. |
-| Right drag | Look around, without taking the mouse |
+| Click | Select a piece, or drop what is in hand. `Shift`+click adds or removes. |
+| Right drag | Look around. The cursor stays where it is. |
 | Middle drag, `Shift` + right drag | Pan |
 | Wheel | Zoom toward the cursor. While placing it turns the piece 22.5 degrees. |
-| Click | Select a piece, or drop what is in hand. `Shift`+click adds or removes. |
-| Drag on the view | Select everything in the box. Only while the view does not have the mouse. |
+| Drag on the view | Select everything in the box. Only while the cursor is free. |
+| `W` `A` `S` `D` | Fly forward, back, left, right |
+| `Space` `Ctrl` | Fly up, down. Hold `Shift` to fly 3 times faster. |
+| `C` | Hold the mouse in the pane, so it looks around like flying in the game. `Esc` gives it back. |
 | `Ctrl+A` | Select all |
 | `G` | Move the selection |
 | `Ctrl+D` | Duplicate. Copies keep coming until `Esc`. |
@@ -129,10 +127,10 @@ PlayStation names first, Xbox names in brackets.
 | While walking: ○ (B) | Back to the 3D view |
 | × (A) | Pieces menu: D-pad chooses, L1 R1 change the tab, × places, ○ closes |
 | ○ (B) | The same order as `Esc`: stop placing, leave the walk, clear the selection, close the editor |
-| □ (X) | Move the selection |
-| △ (Y) | Duplicate the selection |
-| R1 (RB) | Delete the piece in the middle of the view |
-| L2 (LT) + R1 (RB) | Copies of that piece keep coming until ○ stops it |
+| □ (X) | Move the piece in the middle of the view. It follows the crosshair, R2 drops it. |
+| △ (Y) | Copy it. Copies keep coming until ○ stops them. |
+| R1 (RB) | Delete it |
+| The three above | Take the whole selection when the aimed piece is part of it, and the selection on its own when the crosshair is on nothing |
 | L2 (LT) + R2 (RT) | Place another piece of the kind in the middle of the view |
 | D-pad left, right | Undo, redo |
 | Options (Menu) | This help |

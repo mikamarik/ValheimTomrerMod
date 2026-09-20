@@ -66,6 +66,21 @@ namespace ValheimTomrer.Editor.Ui
             return label;
         }
 
+        /// <summary>
+        /// Gives a label the outlined material. For text drawn straight over the 3D picture: the
+        /// background there is whatever the camera is pointed at, and white on a light sky or a
+        /// pale floor is unreadable without an edge.
+        /// </summary>
+        public static TextMeshProUGUI OverPicture(TextMeshProUGUI label)
+        {
+            if (label != null && UiTheme.FontOutlined != null)
+            {
+                label.fontSharedMaterial = UiTheme.FontOutlined;
+            }
+
+            return label;
+        }
+
         public static UnityEngine.UI.Button Button(string name, Transform parent, string text, UnityAction onClick, float height = 38f)
         {
             var image = Panel(name, parent, UiTheme.Button);

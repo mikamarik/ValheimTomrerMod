@@ -21,8 +21,14 @@ namespace ValheimTomrer.Editor.Ui
         private const float Gap = 6f;
         private const int Columns = 4;
         private const float TileGap = 4f;
-        private const float ChipHeight = 28f;
+        private const float ChipHeight = 34f;
         private const float ChipGap = 4f;
+
+        // Padding is the space inside a chip, between its border and the text or the icon.
+        private const float ChipPadX = 16f;
+        private const float ChipPadY = 7f;
+        private const float ChipIconSize = 16f;
+        private const float ChipIconGap = 8f;
         private const float SearchHeight = 32f;
         private const float FooterHeight = 18f;
         private const float CardWidth = 320f;
@@ -619,7 +625,7 @@ namespace ValheimTomrer.Editor.Ui
             };
             button.onClick.AddListener(onClick);
 
-            var textLeft = 10f;
+            var textLeft = ChipPadX;
             if (icon != null)
             {
                 var image = UiBuild.Panel("Icon", background.transform, icon);
@@ -629,13 +635,13 @@ namespace ValheimTomrer.Editor.Ui
                 image.rectTransform.anchorMin = new Vector2(0f, 0.5f);
                 image.rectTransform.anchorMax = new Vector2(0f, 0.5f);
                 image.rectTransform.pivot = new Vector2(0f, 0.5f);
-                image.rectTransform.anchoredPosition = new Vector2(4f, 0f);
-                image.rectTransform.sizeDelta = new Vector2(16f, 16f);
-                textLeft = 26f;
+                image.rectTransform.anchoredPosition = new Vector2(ChipPadX - 4f, 0f);
+                image.rectTransform.sizeDelta = new Vector2(ChipIconSize, ChipIconSize);
+                textLeft = ChipPadX - 4f + ChipIconSize + ChipIconGap;
             }
 
             label = UiBuild.Label("Text", background.transform, text, 14f, TextAlignmentOptions.Left);
-            UiBuild.Stretch(label.rectTransform, textLeft, 4f, 10f, 4f);
+            UiBuild.Stretch(label.rectTransform, textLeft, ChipPadY, ChipPadX, ChipPadY);
 
             var chip = new Chip
             {
@@ -643,7 +649,7 @@ namespace ValheimTomrer.Editor.Ui
                 Rect = background.rectTransform,
                 Background = background,
                 Label = label,
-                Width = Mathf.Max(Mathf.Ceil(label.GetPreferredValues(text, 4000f, 0f).x) + textLeft + 14f, 48f),
+                Width = Mathf.Max(Mathf.Ceil(label.GetPreferredValues(text, 4000f, 0f).x) + textLeft + ChipPadX + 2f, 56f),
             };
             chip.SetOn(false);
             return chip;

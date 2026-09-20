@@ -6,11 +6,14 @@ using UnityEngine.UI;
 
 namespace ValheimTomrer.Editor.Ui
 {
-    /// <summary>The three regions the walk covers, in the order it walks them.</summary>
+    /// <summary>
+    /// The three regions the walk covers, laid out left to right on screen. R1 goes on through
+    /// them in this order and wraps, L1 goes back the same way.
+    /// </summary>
     internal enum FocusRegion
     {
-        TopBar,
         Left,
+        TopBar,
         Right,
     }
 
@@ -41,6 +44,12 @@ namespace ValheimTomrer.Editor.Ui
         private const float Outset = 3f;
 
         private const int Regions = 3;
+
+        // Where the walk starts. The top bar, whatever the left-to-right order above is.
+        private static readonly FocusRegion[] EnterOrder =
+        {
+            FocusRegion.TopBar, FocusRegion.Left, FocusRegion.Right,
+        };
 
         private static readonly List<Selectable> Walk = new List<Selectable>();
         private static readonly Vector3[] Corners = new Vector3[4];
@@ -94,9 +103,8 @@ namespace ValheimTomrer.Editor.Ui
             // game's own input module presses it on the first cross or Enter.
             Deselect();
 
-            for (var i = 0; i < Regions; i++)
+            foreach (var region in EnterOrder)
             {
-                var region = (FocusRegion)i;
                 Collect(region);
                 if (Walk.Count > 0)
                 {

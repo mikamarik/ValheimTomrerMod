@@ -26,8 +26,12 @@ namespace ValheimTomrer.Editor.Ui
 
         private const float Pad = 14f;
         private const float TileGap = 4f;
-        private const float TabHeight = 22f;
+        private const float TabHeight = 32f;
         private const float TabGap = 4f;
+
+        // Padding is the space inside a tab chip, between its border and the text.
+        private const float TabPadX = 16f;
+        private const float TabPadY = 7f;
         private const float InfoHeight = 74f;
         private const float HintHeight = 20f;
         private const float Width = 860f;
@@ -537,14 +541,14 @@ namespace ValheimTomrer.Editor.Ui
             button.onClick.AddListener(onClick);
 
             var label = UiBuild.Label("Text", background.transform, text, 14f, TextAlignmentOptions.Center);
-            UiBuild.Stretch(label.rectTransform, 6f, 0f, 6f, 0f);
+            UiBuild.Stretch(label.rectTransform, TabPadX, TabPadY, TabPadX, TabPadY);
 
             var chip = new Chip
             {
                 Rect = background.rectTransform,
                 Background = background,
                 Label = label,
-                Width = Mathf.Max(Mathf.Ceil(label.GetPreferredValues(text, 4000f, 0f).x) + 18f, 40f),
+                Width = Mathf.Max(Mathf.Ceil(label.GetPreferredValues(text, 4000f, 0f).x) + (2f * TabPadX) + 2f, 56f),
             };
             chip.SetOn(false);
             return chip;

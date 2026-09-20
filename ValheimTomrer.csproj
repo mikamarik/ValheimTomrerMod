@@ -107,6 +107,11 @@
       <HintPath>$(ValheimManaged)/Unity.TextMeshPro.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- Glyph and GlyphRect, needed to cut a controller icon out of the game's sprite sheet. -->
+    <Reference Include="UnityEngine.TextCoreFontEngineModule">
+      <HintPath>$(ValheimManaged)/UnityEngine.TextCoreFontEngineModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <!-- Ready-made blueprints ship inside the DLL. -->

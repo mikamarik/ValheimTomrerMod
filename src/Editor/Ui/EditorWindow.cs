@@ -173,25 +173,25 @@ namespace ValheimTomrer.Editor.Ui
             var bandTop = Pad + TopBarHeight + Gap;
             var bandBottom = Pad + StatusBarHeight + Gap;
 
-            TopBar = Region("TopBar", frame, UiTheme.PanelBkg, UiTheme.Inset);
+            TopBar = Region("TopBar", frame, UiTheme.PanelWood, UiTheme.PanelInterior);
             TopBar.anchorMin = new Vector2(0f, 1f);
             TopBar.anchorMax = new Vector2(1f, 1f);
             TopBar.offsetMin = new Vector2(Pad, -Pad - TopBarHeight);
             TopBar.offsetMax = new Vector2(-Pad, -Pad);
 
-            StatusBar = Region("StatusBar", frame, UiTheme.PanelBkg, UiTheme.Inset);
+            StatusBar = Region("StatusBar", frame, UiTheme.PanelWood, UiTheme.PanelInterior);
             StatusBar.anchorMin = new Vector2(0f, 0f);
             StatusBar.anchorMax = new Vector2(1f, 0f);
             StatusBar.offsetMin = new Vector2(Pad, Pad);
             StatusBar.offsetMax = new Vector2(-Pad, Pad + StatusBarHeight);
 
-            LeftPanel = Region("LeftPanel", frame, UiTheme.PanelBkg, UiTheme.Inset);
+            LeftPanel = Region("LeftPanel", frame, UiTheme.PanelWood, UiTheme.PanelInterior);
             LeftPanel.anchorMin = new Vector2(0f, 0f);
             LeftPanel.anchorMax = new Vector2(0f, 1f);
             LeftPanel.offsetMin = new Vector2(Pad, bandBottom);
             LeftPanel.offsetMax = new Vector2(Pad + LeftWidth, -bandTop);
 
-            RightPanel = Region("RightPanel", frame, UiTheme.PanelBkg, UiTheme.Inset);
+            RightPanel = Region("RightPanel", frame, UiTheme.PanelWood, UiTheme.PanelInterior);
             RightPanel.anchorMin = new Vector2(1f, 0f);
             RightPanel.anchorMax = new Vector2(1f, 1f);
             RightPanel.offsetMin = new Vector2(-Pad - RightWidth, bandBottom);

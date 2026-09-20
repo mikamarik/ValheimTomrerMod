@@ -1494,11 +1494,11 @@ namespace ValheimTomrer.Dev
                 $"the view changed after turning ({Difference(framed, turned) * 100f:0} % of the pixels)");
             yield return Screenshot("editor-view-2-turned");
 
-            // A click on the pane takes the mouse: the cursor is held, the mouse turns the view.
-            ViewportHost.Capture();
+            // C hands the mouse to the pane: the cursor is held, the mouse turns the view.
+            yield return PressKey(UnityEngine.InputSystem.Key.C);
             ViewportHost.Frame();
             yield return new WaitForSeconds(0.3f);
-            Check(ViewportHost.Captured, "a click on the pane took the mouse");
+            Check(ViewportHost.Captured, "C gave the mouse to the pane");
             Check(Cursor.lockState == CursorLockMode.Locked, $"the cursor is held (is {Cursor.lockState})");
 
             var yaw = camera.Yaw;
@@ -3036,18 +3036,24 @@ namespace ValheimTomrer.Dev
             Check(!ModUi.Open, "the editor closed");
         }
 
-        /// <summary>Click to take the pane, Esc to give it back, W A S D, Space, Ctrl, Shift and F.</summary>
+        /// <summary>C takes the pane, Esc gives it back, W A S D, Space, Ctrl, Shift and F.</summary>
         private static IEnumerator CameraKeys()
         {
             var camera = ViewportHost.Camera;
 
             Check(!ViewportHost.Captured, "the window opens with the mouse on the panels");
-            ViewportHost.Capture();
-            yield return null;
+            yield return PressKey(UnityEngine.InputSystem.Key.C);
             var took = ViewportHost.Captured && ModUi.LockCursor;
             var gave = Bindings.Cancel();
             Check(took && gave && !ViewportHost.Captured && !ModUi.LockCursor,
-                "a click takes the pane and Esc gives it back");
+                "C takes the pane and Esc gives it back");
+
+            // A click selects. It must never take the mouse: that used to hide the cursor and
+            // swing the view on the click that was meant to pick a piece.
+            ViewportHost.ClickAt(new Vector2(Screen.width * 0.5f, Screen.height * 0.5f), false);
+            yield return null;
+            Check(!ViewportHost.Captured && !ModUi.LockCursor,
+                "a click on the pane leaves the cursor alone");
 
             var forward = Travel(KeyCode.W, KeyMods.None, 0.2f);
             Check(forward.magnitude > 0.5f && Vector3.Dot(forward.normalized, camera.Forward) > 0.8f,
@@ -3617,8 +3623,8 @@ namespace ValheimTomrer.Dev
                 + $"{ps.Of(PadButton.Square)} {ps.Of(PadButton.Triangle)}");
 
             var rows = Bindings.Pad;
-            Check(rows.Length == 19, $"the help table has the whole controller half: {rows.Length} rows");
-            Check(Array.Exists(rows, r => r.Keys == "×") && Array.Exists(rows, r => r.Keys == "L2 + R1"),
+            Check(rows.Length == 21, $"the help table has the whole controller half: {rows.Length} rows");
+            Check(Array.Exists(rows, r => r.Keys == "×") && Array.Exists(rows, r => r.Keys == "L2 + R2"),
                 "and the rows are written in those names");
 
             _pad.Ps = false;
@@ -3917,18 +3923,22 @@ namespace ValheimTomrer.Dev
                 $"L2 + R2 puts another {aimed.PrefabName} in hand");
             EditorState.CancelMode();
 
-            EditorState.Select(aimed.Id);
+            // Square and triangle work off the crosshair on their own: nothing selected first,
+            // no second button held. They used to need R2 first, and copy needed L2 + R1.
+            EditorState.Select(Array.Empty<int>());
             yield return Tap(PadButton.Square);
-            var moving = EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Move;
+            var moving = EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Move
+                && EditorState.Moving != null && EditorState.Moving.Count == 1;
             yield return Tap(PadButton.Cross);
             Check(moving && !PiecePicker.IsOpen,
-                "square moves the selection, and cross is silent while it is in hand");
+                "square moves the aimed piece with nothing selected, and cross is silent while it is in hand");
             EditorState.CancelMode();
 
-            EditorState.Select(aimed.Id);
+            EditorState.Select(Array.Empty<int>());
             yield return Tap(PadButton.Triangle);
-            Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Duplicate,
-                "triangle copies the selection");
+            Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Duplicate
+                && EditorState.Moving != null && EditorState.Moving.Count == 1,
+                "triangle copies the aimed piece with nothing selected");
             yield return Tap(PadButton.Circle);
             Check(EditorState.Mode == EditMode.Idle, "circle stops placing");
             yield return Tap(PadButton.Circle);
@@ -3962,11 +3972,12 @@ namespace ValheimTomrer.Dev
             Check(both == count - 2,
                 $"and the whole selection when the aimed piece is in it: {count} -> {both}");
 
-            EditorState.Select(Array.Empty<int>());
-            yield return Tap(PadButton.L2, PadButton.R1);
+            // And they take the whole selection when the aimed piece is part of it.
+            EditorState.Select(ids);
+            yield return Tap(PadButton.Triangle);
             Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Duplicate
-                && EditorState.Moving != null && EditorState.Moving.Count == 1,
-                "L2 + R1 puts a copy of the aimed piece in hand instead");
+                && EditorState.Moving != null && EditorState.Moving.Count == ids.Count,
+                $"triangle copies the whole selection when the aimed piece is in it: {ids.Count} pieces");
             EditorState.CancelMode();
             EditorState.Select(Array.Empty<int>());
 
@@ -4117,25 +4128,30 @@ namespace ValheimTomrer.Dev
         /// <summary>L1 and R1 walk the three regions, and the left panel's list follows its tab.</summary>
         private static IEnumerator FocusRegions(BlueprintDocument document)
         {
+            // The regions sit left, top, right on screen. R1 goes on to the right and wraps,
+            // L1 goes back the same way.
             yield return FocusTap(PadButton.R1);
-            var left = FocusNav.Current;
+            var first = FocusNav.Current;
             yield return FocusTap(PadButton.R1);
-            var right = FocusNav.Current;
+            var second = FocusNav.Current;
             yield return FocusTap(PadButton.R1);
-            Check(left == FocusRegion.Left && right == FocusRegion.Right
+            Check(first == FocusRegion.Right && second == FocusRegion.Left
                 && FocusNav.Current == FocusRegion.TopBar,
-                $"R1 walks the regions and wraps: TopBar -> {left} -> {right} -> {FocusNav.Current}");
+                $"R1 walks left to right and wraps: TopBar -> {first} -> {second} -> {FocusNav.Current}");
 
             yield return FocusTap(PadButton.L1);
-            Check(FocusNav.Current == FocusRegion.Right,
+            Check(FocusNav.Current == FocusRegion.Left,
                 $"L1 walks them the other way: TopBar -> {FocusNav.Current}");
 
-            // The right panel with nothing selected: the name, the description and the two icons.
+            // L1 again wraps round to the right panel: the name, the description and the two icons.
+            yield return FocusTap(PadButton.L1);
             var rightCount = FocusNav.Count;
-            Check(rightCount == Interactable(EditorWindow.RightPanel) && rightCount == 4,
+            Check(FocusNav.Current == FocusRegion.Right
+                && rightCount == Interactable(EditorWindow.RightPanel) && rightCount == 4,
                 $"the right panel's walk with nothing selected: {rightCount} widgets (the probe measured 4)");
 
-            yield return FocusTap(PadButton.L1);
+            // R1 wraps on to the left panel.
+            yield return FocusTap(PadButton.R1);
             EditorWindow.SetLeftTab(0);
             yield return null;
             yield return null;
@@ -4182,8 +4198,9 @@ namespace ValheimTomrer.Dev
         /// <summary>Cross on a button fires it, cross on a text box starts typing.</summary>
         private static IEnumerator FocusPress(BlueprintDocument document)
         {
-            yield return FocusTap(PadButton.L1);
-            Check(FocusNav.Current == FocusRegion.TopBar, $"back on the {FocusNav.Current}");
+            yield return FocusTap(PadButton.R1);
+            Check(FocusNav.Current == FocusRegion.TopBar,
+                $"R1 from the left panel is the {FocusNav.Current}");
 
             var steps = 0;
             while (WidgetName(FocusNav.Focused) != "Undo" && steps < 20)
@@ -4202,10 +4219,10 @@ namespace ValheimTomrer.Dev
             yield return null;
 
             // The right panel's first widget is the blueprint's name box.
-            yield return FocusTap(PadButton.L1);
+            yield return FocusTap(PadButton.R1);
             var field = FocusNav.Focused as TMPro.TMP_InputField;
             Check(FocusNav.Current == FocusRegion.Right && field != null,
-                $"L1 lands on the right panel's first widget, the '{WidgetName(FocusNav.Focused)}' box");
+                $"R1 lands on the right panel's first widget, the '{WidgetName(FocusNav.Focused)}' box");
             if (field == null)
             {
                 yield break;

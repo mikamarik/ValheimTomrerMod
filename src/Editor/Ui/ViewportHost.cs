@@ -19,8 +19,9 @@ namespace ValheimTomrer.Editor.Ui
     /// model and the document in step, aim, draw the ghost, the snap dots and the selection boxes,
     /// read input, render).
     ///
-    /// <see cref="Captured"/> says who has the mouse. The window opens with the mouse on the
-    /// panels; a click on the picture gives it to the pane, and Esc gives it back.
+    /// <see cref="Captured"/> says who has the mouse. The cursor stays free: a click selects, the
+    /// right button drags the view round and the middle one pans. C hands the mouse to the pane
+    /// for looking, and Esc gives it back.
     ///
     /// The scene, the camera and the texture live only while the editor is open. Closing it
     /// destroys all three.
@@ -37,7 +38,7 @@ namespace ValheimTomrer.Editor.Ui
         private static RectTransform _host;
         private static RawImage _image;
         private static GameObject _crosshair;
-        private static TextMeshProUGUI _hint;
+        private static HintBar _hints;
         private static TextMeshProUGUI _placeLine;
         private static TextMeshProUGUI _stateLine;
         private static TextMeshProUGUI _aimName;
@@ -108,12 +109,12 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>
         /// True while the pane has the mouse: the cursor is held, the mouse turns the view and the
-        /// crosshair aims. A click on the picture takes it, Esc gives it back. It is not a camera
-        /// setting, the camera always flies free.
+        /// crosshair aims. C takes it, Esc gives it back. It is not a camera setting, the camera
+        /// always flies free, and a plain click never turns this on.
         /// </summary>
         public static bool Captured { get; private set; }
 
-        /// <summary>A click on the picture: the pane takes the mouse, and the crosshair aims.</summary>
+        /// <summary>C: the pane takes the mouse, so it looks around and the crosshair aims.</summary>
         public static void Capture()
         {
             if (_camera == null)
@@ -539,11 +540,7 @@ namespace ValheimTomrer.Editor.Ui
         private static void UpdateOverlays()
         {
             var placing = EditorState.Mode == EditMode.Place;
-            if (_hint != null)
-            {
-                _hint.gameObject.SetActive(!placing);
-                _hint.text = PadAim ? PadHint() : Captured ? CapturedHint : MouseHint;
-            }
+            ShowHints(placing);
 
             if (_placeLine != null)
             {
@@ -572,24 +569,80 @@ namespace ValheimTomrer.Editor.Ui
             }
         }
 
-        /// <summary>The line along the bottom of the pane, before the pane has the mouse.</summary>
-        private const string MouseHint =
-            "Click the view to look around with the mouse.   Drag a box to select many pieces."
-            + "   Pick a piece on the left to place it.";
-
-        /// <summary>And once it has it.</summary>
-        private const string CapturedHint =
-            "The mouse looks around, W A S D fly, the wheel zooms.   Click to select a piece, or to drop "
-            + "what is in hand.   G moves, Ctrl+D copies, R turns, Del removes.   Esc gives the cursor back.";
-
-        private static string PadHint()
+        /// <summary>
+        /// The row of controls along the bottom of the pane. Four sets: the mouse on the loose,
+        /// the mouse held for looking, the controller flying, and the controller walking the
+        /// panels. It is only rebuilt when the set changes, so this can run every frame.
+        /// </summary>
+        private static void ShowHints(bool placing)
         {
-            var g = EditorInput.Glyphs;
-            return $"{g.Of(PadButton.Cross)}: pieces menu   |   {g.Of(PadButton.R2)}: place or select   |   "
-                + $"{g.Of(PadButton.Square)}: move   |   {g.Of(PadButton.Triangle)}: copy   |   "
-                + $"{g.Of(PadButton.R1)}: delete   |   {g.Of(PadButton.Circle)}: back   |   "
-                + $"{g.Of(PadButton.Options)}: help";
+            if (_hints == null)
+            {
+                return;
+            }
+
+            _hints.SetActive(!placing);
+            if (placing)
+            {
+                return;
+            }
+
+            var set = FocusNav.Active ? "focus" : PadAim ? "pad" : Captured ? "held" : "mouse";
+            var key = set + (EditorInput.Pad != null && EditorInput.Pad.Ps ? "|ps" : "|xbox");
+            if (_hints.Is(key))
+            {
+                return;
+            }
+
+            switch (set)
+            {
+                case "focus":
+                    _hints.Show(key,
+                        new Hint("move",
+                            HintIcon.Pad(PadGlyphs.Dpad, EditorInput.Glyphs.Dpad),
+                            HintIcon.Pad(PadGlyphs.Stick(false), EditorInput.Glyphs.Ls)),
+                        new Hint("change panel", Pad(PadButton.R1), Pad(PadButton.L1)),
+                        new Hint("select", Pad(PadButton.Cross)),
+                        new Hint("back to the view", Pad(PadButton.Circle)));
+                    return;
+
+                case "pad":
+                    _hints.Show(key,
+                        new Hint("pieces menu", Pad(PadButton.Cross)),
+                        new Hint("place or select", Pad(PadButton.R2)),
+                        new Hint("move the piece", Pad(PadButton.Square)),
+                        new Hint("copy the piece", Pad(PadButton.Triangle)),
+                        new Hint("delete the piece", Pad(PadButton.R1)),
+                        new Hint("the panels", Pad(PadButton.L3)),
+                        new Hint("back", Pad(PadButton.Circle)),
+                        new Hint("help", Pad(PadButton.Options)));
+                    return;
+
+                case "held":
+                    _hints.Show(key,
+                        new Hint("look", HintIcon.Key("Mouse")),
+                        new Hint("select", HintIcon.Key("LMB")),
+                        new Hint("fly", HintIcon.Key("W"), HintIcon.Key("A"), HintIcon.Key("S"), HintIcon.Key("D")),
+                        new Hint("zoom", HintIcon.Key("Wheel")),
+                        new Hint("free the cursor", HintIcon.Key("Esc")));
+                    return;
+
+                default:
+                    _hints.Show(key,
+                        new Hint("select", HintIcon.Key("LMB")),
+                        new Hint("look", HintIcon.Key("RMB")),
+                        new Hint("pan", HintIcon.Key("MMB")),
+                        new Hint("zoom", HintIcon.Key("Wheel")),
+                        new Hint("fly", HintIcon.Key("W"), HintIcon.Key("A"), HintIcon.Key("S"), HintIcon.Key("D")),
+                        new Hint("mouse look", HintIcon.Key("C")),
+                        new Hint("help", HintIcon.Key("H")));
+                    return;
+            }
         }
+
+        /// <summary>A controller button as a picture, or as its name when the game has no icon.</summary>
+        private static HintIcon Pad(PadButton button) =>
+            HintIcon.Pad(PadGlyphs.Of(button), EditorInput.Glyphs.Of(button));
 
         private static string PlaceHud()
         {
@@ -772,13 +825,9 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
-            // The first click hands the mouse to the pane. After that a click selects or places.
-            if (!Captured)
-            {
-                Capture();
-                return;
-            }
-
+            // A click selects or places, always. It used to hand the mouse to the pane instead,
+            // which hid the cursor and started swinging the view on the click that was meant to
+            // pick a piece. Looking around is the right button, or C to hold the mouse.
             ClickAt(data.position, Key(KeyCode.LeftShift) + Key(KeyCode.RightShift) > 0f);
         }
 
@@ -959,17 +1008,19 @@ namespace ValheimTomrer.Editor.Ui
             Bar("V", _crosshair.transform, new Vector2(2f, 14f));
             _crosshair.SetActive(false);
 
-            _aimName = UiBuild.Label("AimName", _image.rectTransform, "", 15f, TextAlignmentOptions.Top, UiTheme.Text);
+            _aimName = UiBuild.OverPicture(
+                UiBuild.Label("AimName", _image.rectTransform, "", 15f, TextAlignmentOptions.Top, UiTheme.Text));
             Centre(_aimName.rectTransform, new Vector2(0f, -80f), new Vector2(420f, 22f));
 
-            _hint = UiBuild.Label("Hint", _image.rectTransform, MouseHint,
-                14f, TextAlignmentOptions.BottomLeft, UiTheme.TextDim);
-            Strip(_hint.rectTransform, false, 8f, 44f);
+            _hints = HintBar.Create("Hints", _image.rectTransform);
+            Strip(_hints.Rect, false, 8f, HintBar.Height);
 
-            _placeLine = UiBuild.Label("Placing", _image.rectTransform, "", 17f, TextAlignmentOptions.TopLeft, UiTheme.Accent);
+            _placeLine = UiBuild.OverPicture(
+                UiBuild.Label("Placing", _image.rectTransform, "", 17f, TextAlignmentOptions.TopLeft, UiTheme.Accent));
             Strip(_placeLine.rectTransform, true, 10f, 24f);
 
-            _stateLine = UiBuild.Label("PlaceState", _image.rectTransform, "", 14f, TextAlignmentOptions.TopLeft, UiTheme.TextDim);
+            _stateLine = UiBuild.OverPicture(
+                UiBuild.Label("PlaceState", _image.rectTransform, "", 14f, TextAlignmentOptions.TopLeft, UiTheme.TextDim));
             Strip(_stateLine.rectTransform, true, 36f, 20f);
             _placeLine.gameObject.SetActive(false);
             _stateLine.gameObject.SetActive(false);
