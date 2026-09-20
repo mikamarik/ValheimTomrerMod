@@ -1,0 +1,17 @@
+<Project>
+
+  <!--
+    Resolves the local Valheim install. Override by exporting VALHEIM_INSTALL,
+    or by passing -p:ValheimInstall=... to dotnet build.
+    macOS note: game assemblies live in valheim.app/Contents/Resources/Data/Managed,
+    NOT valheim_Data/Managed as on Windows/Linux.
+  -->
+  <PropertyGroup>
+    <ValheimInstall Condition="'$(ValheimInstall)' == '' and '$(VALHEIM_INSTALL)' != ''">$(VALHEIM_INSTALL)</ValheimInstall>
+    <ValheimInstall Condition="'$(ValheimInstall)' == ''">$(HOME)/Library/Application Support/Steam/steamapps/common/Valheim</ValheimInstall>
+
+    <ValheimManaged>$(ValheimInstall)/valheim.app/Contents/Resources/Data/Managed</ValheimManaged>
+    <BepInExDir>$(ValheimInstall)/BepInEx</BepInExDir>
+  </PropertyGroup>
+
+</Project>

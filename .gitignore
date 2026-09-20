@@ -1,0 +1,16 @@
+bin/
+obj/
+*.user
+.DS_Store
+
+# Local machine overrides (Valheim path etc.)
+Directory.Build.props.user
+
+# Build output staged for Thunderstore
+thunderstore/build/
+
+CLAUDE.md
+.claude/
+
+# Automatic test output (scripts/autotest.sh)
+.devtest/

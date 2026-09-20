@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Attaches to the Mono soft debugger that UnityDoorstop opens.
+      // Launch the game FIRST with:  ./scripts/dev.sh --debug
+      // Uses the already-installed "Visual Studio Tools for Unity" extension (vstuc);
+      // its endPoint option lets it attach to an arbitrary Mono debugger address.
+      "name": "Attach to Valheim",
+      "type": "vstuc",
+      "request": "attach",
+      "endPoint": "127.0.0.1:10000"
+    }
+  ]
+}

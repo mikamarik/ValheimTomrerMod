@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "detail": "Compile and auto-deploy into BepInEx/plugins",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "${workspaceFolder}/ValheimTomrer.csproj", "-v", "minimal"],
+      "problemMatcher": "$msCompile",
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "run: game (debug)",
+      "detail": "Build, launch Valheim with the Mono debugger on :10000, tail our log",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/dev.sh --debug",
+      "problemMatcher": [],
+      "isBackground": true
+    }
+  ]
+}

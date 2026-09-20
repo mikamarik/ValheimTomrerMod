@@ -1,0 +1,9 @@
+{
+  "name": "ValheimTomrer",
+  "version_number": "0.1.0",
+  "website_url": "https://github.com/mikamarik/ValheimTomrerMod",
+  "description": "Build whole structures from blueprints in Valheim.",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2350"
+  ]
+}
