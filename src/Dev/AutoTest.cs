@@ -227,6 +227,9 @@ namespace ValheimTomrer.Dev
                 yield return ValheimTomrerPlugin.Instance.StartCoroutine(Guard(scenario));
             }
 
+            // A run never leaves the player's config file changed, whatever the scenario flipped.
+            ResetSettings();
+
             var summary = $"DONE pass={_pass} fail={_fail}";
             File.WriteAllText(Path.Combine(OutDir, "result.txt"), summary + "\n");
             Log(summary);
@@ -337,6 +340,7 @@ namespace ValheimTomrer.Dev
             BlueprintLibrary.UserFolder = null;
             BlueprintLibrary.Reload();
             PieceCatalog.Clear();
+            ResetSettings();
             if (player != null)
             {
                 player.SetGodMode(true);
@@ -344,6 +348,28 @@ namespace ValheimTomrer.Dev
             }
 
             yield return new WaitForSeconds(0.5f);
+        }
+
+        /// <summary>
+        /// Every editor setting back to its default. A scenario that flips one must not decide what
+        /// the next one sees, and the run must not leave the player's config file changed.
+        /// </summary>
+        private static void ResetSettings()
+        {
+            Default(EditorConfig.ShowAllPieces);
+            Default(EditorConfig.SnapDots);
+            Default(EditorConfig.Boxes);
+            Default(EditorConfig.StartCamera);
+            Default(EditorConfig.LookSensitivity);
+            Default(EditorConfig.PadLookSensitivity);
+        }
+
+        private static void Default<T>(BepInEx.Configuration.ConfigEntry<T> entry)
+        {
+            if (entry != null && !Equals(entry.Value, entry.DefaultValue))
+            {
+                entry.Value = (T)entry.DefaultValue;
+            }
         }
 
         /// <summary>

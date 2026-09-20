@@ -191,8 +191,9 @@ namespace ValheimTomrer.Editor.View
                 return;
             }
 
-            Turn(Mathf.Clamp(pixels.x, -LookJump, LookJump) * LookStep,
-                Mathf.Clamp(pixels.y, -LookJump, LookJump) * LookStep);
+            var step = LookStep * (EditorConfig.LookSensitivity != null ? EditorConfig.LookSensitivity.Value : 1f);
+            Turn(Mathf.Clamp(pixels.x, -LookJump, LookJump) * step,
+                Mathf.Clamp(pixels.y, -LookJump, LookJump) * step);
         }
 
         /// <summary>Moves in the view plane by pane pixels, so the point <paramref name="depth"/> away follows the mouse.</summary>
@@ -246,7 +247,8 @@ namespace ValheimTomrer.Editor.View
                 return;
             }
 
-            Rotate(stick.x * PadTurn * dt, stick.y * PadTurn * dt);
+            var speed = PadTurn * (EditorConfig.PadLookSensitivity != null ? EditorConfig.PadLookSensitivity.Value : 1f);
+            Rotate(stick.x * speed * dt, stick.y * speed * dt);
         }
 
         private void Fly(Vector3 wish, float speed, float dt)

@@ -21,19 +21,67 @@ namespace ValheimTomrer.Editor
         /// <summary>Off: the palette only lists what this character has unlocked.</summary>
         public static ConfigEntry<bool> ShowAllPieces;
 
+        /// <summary>The camera the pane starts in. The B key and the Orbit/Free buttons switch it.</summary>
+        public static ConfigEntry<View.CameraMode> StartCamera;
+
+        /// <summary>Snap dots while placing. The top bar's Dots button writes this.</summary>
+        public static ConfigEntry<bool> SnapDots;
+
+        /// <summary>Pieces as wire boxes instead of models. The top bar's Boxes button writes this.</summary>
+        public static ConfigEntry<bool> Boxes;
+
+        public static ConfigEntry<float> LookSensitivity;
+
+        public static ConfigEntry<float> PadLookSensitivity;
+
         public static void Bind(ConfigFile config)
         {
             Key = config.Bind(
                 "Editor",
                 "Key",
                 KeyCode.F7,
-                "Opens the blueprint editor. Esc, the same key, or the pad's B/circle closes it.");
+                "Opens and closes the blueprint editor. Esc and the pad's circle close it too.");
 
             ShowAllPieces = config.Bind(
                 "Editor",
                 "ShowAllPieces",
                 false,
                 "Show every building piece in the editor. Off means only the ones this character has unlocked.");
+
+            StartCamera = config.Bind(
+                "Editor",
+                "CameraMode",
+                View.CameraMode.Orbit,
+                "Which camera the editor starts in. Orbit circles the blueprint and keeps the cursor. "
+                + "Free flies with W A S D and looks with the mouse.");
+
+            SnapDots = config.Bind(
+                "Editor",
+                "SnapDots",
+                true,
+                "Show the snap dots while placing a piece. Snapping itself is always on.");
+
+            Boxes = config.Bind(
+                "Editor",
+                "Boxes",
+                false,
+                "Draw pieces as plain boxes instead of models. Easier to see through a full blueprint.");
+
+            LookSensitivity = config.Bind(
+                "Editor",
+                "LookSensitivity",
+                1f,
+                new ConfigDescription(
+                    "Mouse look speed in the free camera. 2 is twice as fast.",
+                    new AcceptableValueRange<float>(0.1f, 5f)));
+
+            PadLookSensitivity = config.Bind(
+                "Editor",
+                "PadLookSensitivity",
+                1f,
+                new ConfigDescription(
+                    "Right stick look speed on a controller. 2 is twice as fast.",
+                    new AcceptableValueRange<float>(0.1f, 5f)));
         }
     }
 }

@@ -131,6 +131,12 @@ namespace ValheimTomrer.Editor
 
         public static void Open(BlueprintDocument document)
         {
+            if (document != null)
+            {
+                PieceBoxesOn = EditorConfig.Boxes != null && EditorConfig.Boxes.Value;
+                SnapDotsOn = EditorConfig.SnapDots == null || EditorConfig.SnapDots.Value;
+            }
+
             Document = document;
             Selected.Clear();
             MovingIds.Clear();

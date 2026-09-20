@@ -237,6 +237,7 @@ namespace ValheimTomrer.Editor
         public static void ToggleBoxes()
         {
             EditorState.PieceBoxesOn = !EditorState.PieceBoxesOn;
+            Remember(EditorConfig.Boxes, EditorState.PieceBoxesOn);
             Toasts.Info(EditorState.PieceBoxesOn ? "Pieces as boxes." : "Pieces as models.");
         }
 
@@ -244,7 +245,17 @@ namespace ValheimTomrer.Editor
         public static void ToggleSnapDots()
         {
             EditorState.SnapDotsOn = !EditorState.SnapDotsOn;
+            Remember(EditorConfig.SnapDots, EditorState.SnapDotsOn);
             Toasts.Info(EditorState.SnapDotsOn ? "Snap dots on." : "Snap dots off.");
+        }
+
+        /// <summary>A view switch is kept, so the editor opens the way it was left.</summary>
+        private static void Remember(BepInEx.Configuration.ConfigEntry<bool> entry, bool value)
+        {
+            if (entry != null && entry.Value != value)
+            {
+                entry.Value = value;
+            }
         }
 
         public static void Help()

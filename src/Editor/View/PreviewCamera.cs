@@ -7,6 +7,7 @@ namespace ValheimTomrer.Editor.View
     /// The camera that draws the editor pane into a texture. It is switched off, so it never draws
     /// by itself: <see cref="Render"/> is called once a frame while the window is open, with the
     /// world's fog and ambient light swapped for the editor's own for the length of that one call.
+    /// The editor's fog is what stops the 800 m ground running to a hard horizon line.
     ///
     /// It only sees the editor layer, and the main camera does not see that layer at all
     /// (GameCameraAwakePatch), so the two views can never bleed into each other.
@@ -16,6 +17,10 @@ namespace ValheimTomrer.Editor.View
         /// <summary>The Tomrer editor's background, so the pane looks the same in both.</summary>
         private static readonly Color Background = new Color32(0xB9, 0xC7, 0xD2, 0xFF);
         private static readonly Color Ambient = new Color(0.42f, 0.45f, 0.5f, 1f);
+
+        /// <summary>The 800 m ground fades into the background between these two, like Tomrer's haze.</summary>
+        private const float FogFrom = 80f;
+        private const float FogTo = 420f;
 
         private readonly GameObject _object;
         private readonly Camera _camera;
@@ -92,9 +97,17 @@ namespace ValheimTomrer.Editor.View
             }
 
             var fog = RenderSettings.fog;
+            var fogMode = RenderSettings.fogMode;
+            var fogColor = RenderSettings.fogColor;
+            var fogFrom = RenderSettings.fogStartDistance;
+            var fogTo = RenderSettings.fogEndDistance;
             var mode = RenderSettings.ambientMode;
             var light = RenderSettings.ambientLight;
-            RenderSettings.fog = false;
+            RenderSettings.fog = true;
+            RenderSettings.fogMode = FogMode.Linear;
+            RenderSettings.fogColor = Background;
+            RenderSettings.fogStartDistance = FogFrom;
+            RenderSettings.fogEndDistance = FogTo;
             RenderSettings.ambientMode = AmbientMode.Flat;
             RenderSettings.ambientLight = Ambient;
             try
@@ -104,6 +117,10 @@ namespace ValheimTomrer.Editor.View
             finally
             {
                 RenderSettings.fog = fog;
+                RenderSettings.fogMode = fogMode;
+                RenderSettings.fogColor = fogColor;
+                RenderSettings.fogStartDistance = fogFrom;
+                RenderSettings.fogEndDistance = fogTo;
                 RenderSettings.ambientMode = mode;
                 RenderSettings.ambientLight = light;
             }

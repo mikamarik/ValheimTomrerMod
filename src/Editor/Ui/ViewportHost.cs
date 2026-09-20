@@ -202,6 +202,7 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             Fit();
+            SetMode(EditorConfig.StartCamera != null ? EditorConfig.StartCamera.Value : CameraMode.Orbit);
             ValheimTomrerPlugin.Log.LogInfo(blueprint != null
                 ? $"editor view opened on '{blueprint.Name}' ({_model.Total} pieces)"
                 : "editor view opened on an empty blueprint");

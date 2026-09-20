@@ -14,11 +14,19 @@
 #   ./scripts/autotest.sh editor_keys  drive every key, the wheel and the mouse, the top bar and the dialogs
 #   ./scripts/autotest.sh editor_pad   drive every controller button through a made-up pad, and the piece menu
 #   ./scripts/autotest.sh editor_build build a blueprint made in the editor, in the world, then edit it again
+#   ./scripts/autotest.sh editor_all   every scenario above in one game, then the "no game art" guard
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
+# VT_CHAIN="editor_build,blueprints" ./scripts/autotest.sh editor_all  runs only those, in that order.
 set -euo pipefail
 
 SCENARIO="${1:-blueprints}"
-TIMEOUT="${AUTOTEST_TIMEOUT:-600}"
+# editor_all chains every scenario, so it needs far longer than a single one.
+if [[ "$SCENARIO" == "editor_all" ]]; then
+  DEFAULT_TIMEOUT=1800
+else
+  DEFAULT_TIMEOUT=600
+fi
+TIMEOUT="${AUTOTEST_TIMEOUT:-$DEFAULT_TIMEOUT}"
 VALHEIM="${VALHEIM_INSTALL:-$HOME/Library/Application Support/Steam/steamapps/common/Valheim}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$REPO/.devtest"
@@ -63,4 +71,20 @@ if [[ ! -f "$OUT/result.txt" ]]; then
 fi
 
 cat "$OUT/result.txt"
+
+# The mod writes blueprints, nothing else. The in-game guard walks the folders the mod writes
+# to; this walks the repo, where only the autotest's own screenshots may be images.
+if [[ "$SCENARIO" == "editor_all" ]]; then
+  ART=$(find "$REPO" -path "$REPO/.git" -prune -o -path "$REPO/.devtest" -prune -o \
+    \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.tga' -o -name '*.glb' \
+    -o -name '*.fbx' -o -name '*.obj' -o -name '*.mat' -o -name '*.mesh' -o -name '*.bundle' \
+    -o -name '*.asset' -o -name '*.prefab' \) -print)
+  if [[ -n "$ART" ]]; then
+    echo "!! game art in the repo:"
+    echo "$ART"
+    exit 1
+  fi
+  echo "art guard: no image, mesh, material or bundle file in the repo"
+fi
+
 grep -q "fail=0" "$OUT/result.txt"
