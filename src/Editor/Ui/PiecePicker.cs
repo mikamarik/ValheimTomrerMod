@@ -645,7 +645,7 @@ namespace ValheimTomrer.Editor.Ui
             public void SetOn(bool on)
             {
                 Background.color = on ? UiTheme.Accent : Color.white;
-                Label.color = on ? new Color(0.1f, 0.08f, 0.05f) : UiTheme.Text;
+                Label.color = on ? UiTheme.TextOnAccent : UiTheme.Text;
             }
         }
 

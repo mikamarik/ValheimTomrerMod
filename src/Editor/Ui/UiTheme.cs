@@ -17,8 +17,11 @@ namespace ValheimTomrer.Editor.Ui
     {
         // Parchment and wood, taken from how the vanilla windows look.
         public static readonly Color Text = new Color32(0xE6, 0xDC, 0xC8, 0xFF);
-        public static readonly Color TextDim = new Color32(0x9E, 0x93, 0x80, 0xFF);
+        public static readonly Color TextDim = new Color32(0xC6, 0xBB, 0xA4, 0xFF);
         public static readonly Color Accent = new Color32(0xFF, 0xB4, 0x4C, 0xFF);
+
+        /// <summary>The label on an orange chip or button. Dark text on that orange is unreadable.</summary>
+        public static readonly Color TextOnAccent = new Color32(0xFF, 0xF3, 0xDC, 0xFF);
         public static readonly Color Warn = new Color32(0xE8, 0x6A, 0x4A, 0xFF);
         public static readonly Color Good = new Color32(0x8C, 0xD0, 0x7A, 0xFF);
         public static readonly Color Backdrop = new Color(0f, 0f, 0f, 0.65f);

@@ -2,7 +2,6 @@ using System.IO;
 using System.Linq;
 using UnityEngine;
 using ValheimTomrer.Blueprints;
-using ValheimTomrer.Editor.Catalog;
 using ValheimTomrer.Editor.Doc;
 using ValheimTomrer.Editor.Ui;
 
@@ -261,23 +260,6 @@ namespace ValheimTomrer.Editor
         public static void Help()
         {
             Dialogs.Help();
-        }
-
-        public static void Settings()
-        {
-            Dialogs.Settings();
-        }
-
-        /// <summary>Show all pieces, or only the ones this character has unlocked.</summary>
-        public static void ToggleShowAllPieces()
-        {
-            if (EditorConfig.ShowAllPieces == null)
-            {
-                return;
-            }
-
-            EditorConfig.ShowAllPieces.Value = !EditorConfig.ShowAllPieces.Value;
-            PieceCatalog.Invalidate();
         }
 
         /// <summary>Lets the busy chip fade after its shortest showing.</summary>

@@ -523,7 +523,7 @@ namespace ValheimTomrer.Editor.Ui
                 Background.color = on ? UiTheme.Accent : Color.white;
                 if (Label != null)
                 {
-                    Label.color = on ? new Color(0.1f, 0.08f, 0.05f) : UiTheme.Text;
+                    Label.color = on ? UiTheme.TextOnAccent : UiTheme.Text;
                 }
             }
         }
@@ -552,7 +552,7 @@ namespace ValheimTomrer.Editor.Ui
                 // The station squares: grey unless the blueprint brings the station itself.
                 Amount.text = slot.Own ? "in blueprint" : "station";
                 Amount.color = slot.Own ? UiTheme.Good : UiTheme.TextDim;
-                Icon.color = slot.Own ? Color.white : Color.gray;
+                Icon.color = slot.Own ? Color.white : new Color(0.85f, 0.85f, 0.85f);
             }
 
             public void Hide()

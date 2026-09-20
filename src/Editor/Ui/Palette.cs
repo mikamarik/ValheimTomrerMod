@@ -21,7 +21,7 @@ namespace ValheimTomrer.Editor.Ui
         private const float Gap = 6f;
         private const int Columns = 4;
         private const float TileGap = 4f;
-        private const float ChipHeight = 22f;
+        private const float ChipHeight = 28f;
         private const float ChipGap = 4f;
         private const float SearchHeight = 32f;
         private const float FooterHeight = 18f;
@@ -619,7 +619,7 @@ namespace ValheimTomrer.Editor.Ui
             };
             button.onClick.AddListener(onClick);
 
-            var textLeft = 8f;
+            var textLeft = 10f;
             if (icon != null)
             {
                 var image = UiBuild.Panel("Icon", background.transform, icon);
@@ -631,11 +631,11 @@ namespace ValheimTomrer.Editor.Ui
                 image.rectTransform.pivot = new Vector2(0f, 0.5f);
                 image.rectTransform.anchoredPosition = new Vector2(4f, 0f);
                 image.rectTransform.sizeDelta = new Vector2(16f, 16f);
-                textLeft = 22f;
+                textLeft = 26f;
             }
 
             label = UiBuild.Label("Text", background.transform, text, 14f, TextAlignmentOptions.Left);
-            UiBuild.Stretch(label.rectTransform, textLeft, 0f, 6f, 0f);
+            UiBuild.Stretch(label.rectTransform, textLeft, 4f, 10f, 4f);
 
             var chip = new Chip
             {
@@ -643,7 +643,7 @@ namespace ValheimTomrer.Editor.Ui
                 Rect = background.rectTransform,
                 Background = background,
                 Label = label,
-                Width = Mathf.Max(Mathf.Ceil(label.GetPreferredValues(text, 4000f, 0f).x) + textLeft + 10f, 40f),
+                Width = Mathf.Max(Mathf.Ceil(label.GetPreferredValues(text, 4000f, 0f).x) + textLeft + 14f, 48f),
             };
             chip.SetOn(false);
             return chip;
@@ -788,7 +788,7 @@ namespace ValheimTomrer.Editor.Ui
             public void SetOn(bool on)
             {
                 Background.color = on ? UiTheme.Accent : Color.white;
-                Label.color = on ? new Color(0.1f, 0.08f, 0.05f) : UiTheme.Text;
+                Label.color = on ? UiTheme.TextOnAccent : UiTheme.Text;
             }
         }
 

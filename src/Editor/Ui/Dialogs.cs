@@ -12,8 +12,8 @@ using ValheimTomrer.Editor.Input;
 namespace ValheimTomrer.Editor.Ui
 {
     /// <summary>
-    /// The editor's windows on top of the window: open, save as, help, the unsaved-changes
-    /// question and the settings. One at a time, over a dark backdrop that swallows clicks.
+    /// The editor's windows on top of the window: open, save as, help and the unsaved-changes
+    /// question. One at a time, over a dark backdrop that swallows clicks.
     ///
     /// While one is up the editor's keys are silent (<see cref="Bindings.Press"/> reads
     /// <see cref="IsOpen"/>) and Esc closes it instead of the editor.
@@ -46,7 +46,7 @@ namespace ValheimTomrer.Editor.Ui
         private static TextMeshProUGUI _fileLine;
         private static Button _submit;
 
-        /// <summary>"open", "saveAs", "help", "confirm", "settings", or "" when none is up.</summary>
+        /// <summary>"open", "saveAs", "help", "confirm", or "" when none is up.</summary>
         public static string Kind { get; private set; } = "";
 
         public static bool IsOpen => Kind.Length > 0;
@@ -263,51 +263,6 @@ namespace ValheimTomrer.Editor.Ui
             label.enableWordWrapping = true;
             UiBuild.Stretch(label.rectTransform);
             Foot("Cancel", () => Close(), ok, Answer);
-        }
-
-        /// <summary>The editor's own settings, the ones worth reaching without the config file.</summary>
-        public static void Settings()
-        {
-            if (!Begin("settings", "Settings", 660f, 360f))
-            {
-                return;
-            }
-
-            var key = EditorConfig.Key != null ? EditorConfig.Key.Value.ToString() : "F7";
-
-            var line = UiBuild.Label("Key", _body, $"Opens the editor: {key}", 16f, TextAlignmentOptions.TopLeft);
-            Line(line.rectTransform, 0f, 24f);
-
-            var button = UiBuild.Button("ShowAll", _body, "", null, 32f);
-            var label = button.GetComponentInChildren<TextMeshProUGUI>();
-            label.text = ShowAllLabel();
-            button.onClick.AddListener(() =>
-            {
-                EditorCommands.ToggleShowAllPieces();
-                label.text = ShowAllLabel();
-            });
-            var rect = (RectTransform)button.transform;
-            rect.anchorMin = new Vector2(0f, 1f);
-            rect.anchorMax = new Vector2(0f, 1f);
-            rect.pivot = new Vector2(0f, 1f);
-            rect.anchoredPosition = new Vector2(0f, -34f);
-            rect.sizeDelta = new Vector2(280f, 32f);
-
-            var where = UiBuild.Label("Where", _body,
-                "Blueprints: " + BlueprintLibrary.UserFolder
-                + "\nEverything else is in the mod's config file, under Editor.",
-                14f, TextAlignmentOptions.TopLeft, UiTheme.TextDim);
-            where.enableWordWrapping = true;
-            Line(where.rectTransform, 80f, 80f);
-
-            Foot("Close", () => Close(), null, null);
-        }
-
-        private static string ShowAllLabel()
-        {
-            return EditorConfig.ShowAllPieces != null && EditorConfig.ShowAllPieces.Value
-                ? "Showing every piece"
-                : "Showing unlocked pieces only";
         }
 
         // ---------- building ----------

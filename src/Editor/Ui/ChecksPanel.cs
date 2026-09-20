@@ -212,7 +212,7 @@ namespace ValheimTomrer.Editor.Ui
                 Label.text = LevelTag(check) + check.Message;
                 Background.color = check.Pieces != null && check.Pieces.Length > 0
                     ? Color.white
-                    : new Color(1f, 1f, 1f, 0.6f);
+                    : new Color(1f, 1f, 1f, 0.85f);
             }
 
             public void Hide()

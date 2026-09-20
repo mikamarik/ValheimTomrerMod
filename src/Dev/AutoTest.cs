@@ -869,6 +869,131 @@ namespace ValheimTomrer.Dev
             var path = Path.Combine(OutDir, "probe.txt");
             File.WriteAllText(path, report.ToString());
             Check(File.Exists(path), "probe written to " + path);
+
+            yield return ProbeFocus();
+        }
+
+        /// <summary>
+        /// What a focus walk over the panels would find: the input module the UI runs on, whether
+        /// a pad competes with it, what the EventSystem has selected, how many widgets each region
+        /// holds and in what order, and whether the canvas picks one by itself. Writes focus.txt.
+        /// Opens and closes the editor window, changes nothing in the world.
+        /// </summary>
+        private static IEnumerator ProbeFocus()
+        {
+            var report = new StringBuilder();
+            report.AppendLine($"ValheimTomrer focus probe | {DateTime.Now:yyyy-MM-dd HH:mm}");
+            report.AppendLine();
+
+            var events = UnityEngine.EventSystems.EventSystem.current;
+            var module = events != null ? events.currentInputModule : null;
+            report.AppendLine("input module: " + (module != null ? module.GetType().FullName : "<none>"));
+
+            var pad = UnityEngine.InputSystem.Gamepad.current;
+            report.AppendLine("Gamepad.current: " + (pad == null ? "null" : $"{pad.name} layout={pad.layout}"));
+            report.AppendLine("PadReader.Fake: " + (PadReader.Fake == null ? "null" : "set"));
+            report.AppendLine();
+
+            // A blueprint with one piece in it, so "one piece selected" is a real state and the
+            // selection panel's buttons can switch on.
+            PieceCatalog.Ensure();
+            var entry = PieceCatalog.Find("woodwall") ?? (PieceCatalog.All.Count > 0 ? PieceCatalog.All[0] : null);
+            Check(entry != null, "focus probe found a piece for its blueprint");
+            if (entry == null)
+            {
+                yield break;
+            }
+
+            var document = BlueprintDocument.New("focus probe");
+            var id = document.AddPiece(entry.PrefabName, Vector3.zero, Quaternion.identity);
+            EditorSession.OpenDocument(document);
+            yield return null;
+            yield return null;
+            Check(ModUi.Open, "focus probe opened the editor window");
+
+            report.AppendLine("EventSystem selection, window just open: " + Selection(events));
+            PadBindings.Tick();
+            yield return null;
+            report.AppendLine("EventSystem selection, after one PadBindings.Tick: " + Selection(events));
+
+            var handler = EditorWindow.Root != null ? EditorWindow.Root.GetComponent<UIGroupHandler>() : null;
+            report.AppendLine("UIGroupHandler on the editor canvas: " + (handler == null
+                ? "<none>"
+                : $"priority={handler.m_groupPriority} m_defaultElement="
+                    + (handler.m_defaultElement == null ? "null" : handler.m_defaultElement.name)));
+            report.AppendLine();
+
+            EditorState.Select(Array.Empty<int>());
+            yield return null;
+            yield return null;
+            report.AppendLine($"nothing selected (selection={EditorState.SelectionCount}):");
+            yield return ProbeRegions(report);
+
+            EditorState.Select(id);
+            yield return null;
+            yield return null;
+            report.AppendLine();
+            report.AppendLine($"one piece selected (selection={EditorState.SelectionCount}):");
+            yield return ProbeRegions(report);
+
+            EditorSession.Close();
+            yield return null;
+
+            var focus = Path.Combine(OutDir, "focus.txt");
+            File.WriteAllText(focus, report.ToString());
+            Check(File.Exists(focus), "focus probe written to " + focus);
+        }
+
+        /// <summary>The four regions a walk would cover, with the left panel on each of its tabs.</summary>
+        private static IEnumerator ProbeRegions(StringBuilder report)
+        {
+            ProbeWidgets(report, "TopBar", EditorWindow.TopBar);
+
+            EditorWindow.SetLeftTab(0);
+            yield return null;
+            ProbeWidgets(report, "LeftPanel tab 0 (Pieces)", EditorWindow.LeftPanel);
+
+            EditorWindow.SetLeftTab(1);
+            yield return null;
+            ProbeWidgets(report, "LeftPanel tab 1 (In blueprint)", EditorWindow.LeftPanel);
+
+            EditorWindow.SetLeftTab(0);
+            yield return null;
+            ProbeWidgets(report, "RightPanel", EditorWindow.RightPanel);
+        }
+
+        /// <summary>
+        /// Every Selectable in one region, in hierarchy order, with the ones a walk could land on
+        /// first. The canvas is screen space overlay, so a widget's position is already in pixels.
+        /// </summary>
+        private static void ProbeWidgets(StringBuilder report, string name, RectTransform region)
+        {
+            if (region == null)
+            {
+                report.AppendLine($"  {name}: <missing>");
+                return;
+            }
+
+            var all = region.GetComponentsInChildren<UnityEngine.UI.Selectable>(false);
+            var live = all.Where(s => s.interactable).ToList();
+            report.AppendLine($"  {name}: {live.Count} interactable of {all.Length} active");
+            for (var i = 0; i < live.Count; i++)
+            {
+                var at = live[i].transform.position;
+                report.AppendLine($"    {i}. {live[i].GetType().Name} '{live[i].name}' at ({at.x:0},{at.y:0})");
+            }
+        }
+
+        private static string Selection(UnityEngine.EventSystems.EventSystem events)
+        {
+            var go = events != null ? events.currentSelectedGameObject : null;
+            if (go == null)
+            {
+                return "null";
+            }
+
+            var parent = go.transform.parent;
+            return (parent != null ? parent.name + "/" : "") + go.name;
         }
 
         /// <summary>Layer names, and the free layer the editor will draw its own copies on.</summary>

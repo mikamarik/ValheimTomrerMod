@@ -88,7 +88,7 @@ namespace ValheimTomrer.Editor.Ui
             element.preferredHeight = height;
 
             var label = Label("Text", image.transform, text, 18f, TextAlignmentOptions.Center);
-            Stretch(label.rectTransform, 8f, 2f, 8f, 2f);
+            Stretch(label.rectTransform, 10f, 4f, 10f, 4f);
             return button;
         }
 

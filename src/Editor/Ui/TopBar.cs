@@ -179,7 +179,6 @@ namespace ValheimTomrer.Editor.Ui
             _dots = Add(row, "Snap dots", EditorCommands.ToggleSnapDots)
                 .GetComponentInChildren<TextMeshProUGUI>();
             Add(row, "?", EditorCommands.Help);
-            Add(row, "Settings", EditorCommands.Settings);
 
             // The pad walks the bar left and right, around the ends.
             UiBuild.LinkRow(Walk, true);
@@ -203,7 +202,7 @@ namespace ValheimTomrer.Editor.Ui
 
             // Measured, not guessed: the font is the game's and the words differ in length a lot.
             var wide = label.GetPreferredValues(text, 4000f, 0f).x;
-            var width = Mathf.Max(34f, (wide > 1f ? wide : text.Length * 8f) + 20f);
+            var width = Mathf.Max(40f, (wide > 1f ? wide : text.Length * 8f) + 28f);
             var element = button.GetComponent<LayoutElement>();
             element.minWidth = width;
             element.preferredWidth = width;
