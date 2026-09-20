@@ -9,6 +9,7 @@ using ValheimTomrer.Blueprints;
 using ValheimTomrer.Editor;
 using ValheimTomrer.Editor.Catalog;
 using ValheimTomrer.Editor.Doc;
+using ValheimTomrer.Editor.Placement;
 using ValheimTomrer.Editor.Ui;
 using ValheimTomrer.Editor.View;
 using BepInEx;
@@ -28,7 +29,8 @@ namespace ValheimTomrer.Dev
     /// "editor_open" opens the editor window with its key and checks the input takeover;
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
-    /// "editor_palette" builds the piece catalog and checks the palette's counts and filters.
+    /// "editor_palette" builds the piece catalog and checks the palette's counts and filters;
+    /// "editor_snap" runs the placing and snapping engine against a table of rays, with no UI.
     /// </summary>
     internal static class AutoTest
     {
@@ -175,6 +177,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_palette":
                     scenario = TestEditorPalette(player);
+                    break;
+                case "editor_snap":
+                    scenario = TestEditorSnap(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -1938,6 +1943,456 @@ namespace ValheimTomrer.Dev
 
             File.Delete(path);
             File.Delete(Path.Combine(folder, "without-sections.blueprint"));
+        }
+
+        // ---------- scenario: editor_snap ----------
+
+        /// <summary>
+        /// The placing and snapping engine, with no UI at all: a table of rays against small scenes
+        /// built straight from the catalog, each one asserting where the piece lands and whether it
+        /// snapped. The geometry every case leans on is written to snap.txt, so a case that breaks
+        /// after a game update can be told apart from a case that was aimed wrong.
+        /// </summary>
+        private static IEnumerator TestEditorSnap(Player player)
+        {
+            yield return new WaitForSeconds(1f);
+
+            PieceCatalog.Ensure();
+            Check(PieceCatalog.Ready, "piece catalog built");
+            if (!PieceCatalog.Ready)
+            {
+                yield break;
+            }
+
+            _snapLog = new StringBuilder();
+            DumpSnapPieces();
+            yield return null;
+
+            CheckShapes();
+            CheckMovingSets();
+            CheckSnapCases();
+
+            var path = Path.Combine(OutDir, "snap.txt");
+            File.WriteAllText(path, _snapLog.ToString());
+            Log("wrote " + path);
+        }
+
+        private static StringBuilder _snapLog;
+
+        /// <summary>Pieces every case leans on. Their numbers go in snap.txt.</summary>
+        private static readonly string[] SnapPieces =
+        {
+            "woodwall", "wood_floor", "wood_pole", "wood_roof", "piece_workbench",
+        };
+
+        private static void DumpSnapPieces()
+        {
+            var flagged = new List<string>();
+            foreach (var entry in PieceCatalog.All)
+            {
+                if (entry.GroundPiece || entry.ClipGround || entry.ClipEverything)
+                {
+                    flagged.Add($"{entry.PrefabName}(ground={entry.GroundPiece},clipGround={entry.ClipGround},"
+                        + $"clipAll={entry.ClipEverything})");
+                }
+            }
+
+            SnapLine($"hammer pieces that skip the touch rule: {flagged.Count} {string.Join(" ", flagged)}");
+            SnapLine("");
+
+            foreach (var name in SnapPieces)
+            {
+                var entry = PieceCatalog.Find(name);
+                if (entry == null)
+                {
+                    SnapLine(name + ": not in the hammer's table");
+                    continue;
+                }
+
+                SnapLine($"{entry.PrefabName} | bounds {Box(entry.Bounds)} | ground={entry.GroundPiece} "
+                    + $"clipGround={entry.ClipGround} clipAll={entry.ClipEverything} rotate={entry.CanRotate} "
+                    + $"water={entry.WaterPiece} rotatedOverlap={entry.AllowRotatedOverlap}");
+                for (var i = 0; i < entry.SnapPoints.Length; i++)
+                {
+                    SnapLine($"  snap {i} {V4(entry.SnapPoints[i])} \"{entry.SnapNames[i]}\"");
+                }
+
+                DumpColliders("  touch", entry.TouchColliders);
+                DumpColliders("  ray  ", entry.RayColliders);
+                DumpColliders("  snap ", entry.SnapSearchColliders);
+                SnapLine("");
+            }
+        }
+
+        private static void DumpColliders(string what, PieceCollider[] colliders)
+        {
+            foreach (var collider in colliders)
+            {
+                SnapLine($"{what} {collider.Kind} centre {V4(collider.Center)} size {V4(collider.Size)} "
+                    + $"euler {V4(collider.Rotation.eulerAngles)} r={collider.Radius:0.###} "
+                    + $"p0 {V4(collider.P0)} p1 {V4(collider.P1)} layer={collider.LayerName}");
+            }
+        }
+
+        /// <summary>The three shapes on their own, where the numbers can be worked out by hand.</summary>
+        private static void CheckShapes()
+        {
+            var box = new PlaceShape
+            {
+                Kind = ShapeKind.Box,
+                Center = new Vector3(0f, 1f, 0f),
+                Rotation = Quaternion.Euler(0f, 45f, 0f),
+                Half = new Vector3(1f, 1f, 1f),
+            };
+            var corner = Mathf.Sqrt(2f);
+            SnapNear(box.ClosestPoint(new Vector3(0f, 1f, 10f)), new Vector3(0f, 1f, corner), "box closest point, turned 45");
+            Check(Mathf.Abs(box.LowestY()) < 1e-4f, $"box lowest y {box.LowestY():0.####}, wanted 0");
+            Check(box.RayHit(new Vector3(0f, 10f, 0f), Vector3.down, out var boxHit)
+                && Vector3.Distance(boxHit.Point, new Vector3(0f, 2f, 0f)) < 1e-4f
+                && Vector3.Distance(boxHit.Normal, Vector3.up) < 1e-4f,
+                "ray hits the box top at y = 2, facing up");
+            Check(!box.RayHit(new Vector3(0f, 1f, 0f), Vector3.down, out _), "a ray that starts inside the box misses it");
+
+            var sphere = new PlaceShape
+            {
+                Kind = ShapeKind.Sphere,
+                Center = new Vector3(0f, 2f, 0f),
+                Rotation = Quaternion.identity,
+                Half = Vector3.one * 0.5f,
+                Radius = 0.5f,
+                P0 = new Vector3(0f, 2f, 0f),
+                P1 = new Vector3(0f, 2f, 0f),
+            };
+            SnapNear(sphere.ClosestPoint(new Vector3(0f, 9f, 0f)), new Vector3(0f, 2.5f, 0f), "sphere closest point");
+            Check(Mathf.Abs(sphere.LowestY() - 1.5f) < 1e-4f, $"sphere lowest y {sphere.LowestY():0.####}, wanted 1.5");
+            Check(sphere.RayHit(new Vector3(0f, 10f, 0f), Vector3.down, out var sphereHit)
+                && Mathf.Abs(sphereHit.Point.y - 2.5f) < 1e-4f, "ray hits the sphere top at y = 2.5");
+
+            var capsule = new PlaceShape
+            {
+                Kind = ShapeKind.Capsule,
+                Center = new Vector3(0f, 2f, 0f),
+                Rotation = Quaternion.identity,
+                Half = new Vector3(0.5f, 1.5f, 0.5f),
+                Radius = 0.5f,
+                P0 = new Vector3(0f, 1f, 0f),
+                P1 = new Vector3(0f, 3f, 0f),
+            };
+            SnapNear(capsule.ClosestPoint(new Vector3(9f, 2f, 0f)), new Vector3(0.5f, 2f, 0f), "capsule closest point");
+            Check(Mathf.Abs(capsule.LowestY() - 0.5f) < 1e-4f, $"capsule lowest y {capsule.LowestY():0.####}, wanted 0.5");
+            Check(capsule.RayHit(new Vector3(0f, 10f, 0f), Vector3.down, out var capsuleHit)
+                && Mathf.Abs(capsuleHit.Point.y - 3.5f) < 1e-4f, "ray hits the capsule cap at y = 3.5");
+        }
+
+        /// <summary>One piece pivots on itself, a group on the bottom centre of its union box.</summary>
+        private static void CheckMovingSets()
+        {
+            var wall = PieceCatalog.Find("woodwall");
+            var bench = PieceCatalog.Find("piece_workbench");
+            if (wall == null || bench == null)
+            {
+                Check(false, "woodwall and piece_workbench are in the catalog");
+                return;
+            }
+
+            var one = MovingSet.Of(new List<MovingPiece> { Moving(wall, new Vector3(7f, 3f, -2f), 0) });
+            Check(one.Count == 1 && one.Pivot == new Vector3(7f, 3f, -2f) && one.Pieces[0].Pos == Vector3.zero
+                && one.Single == wall && one.Snaps.Count == wall.SnapPoints.Length,
+                "one piece pivots on itself and keeps its own flags");
+
+            var group = MovingSet.Of(new List<MovingPiece>
+            {
+                Moving(wall, new Vector3(0f, 1f, 0f), 0),
+                Moving(wall, new Vector3(2f, 1f, 0f), 0),
+            });
+            var offset = group.Pieces[1].Pos - group.Pieces[0].Pos;
+            Check(group.Count == 2 && group.Single == null && group.Snaps.Count == 2 * wall.SnapPoints.Length
+                && Vector3.Distance(offset, new Vector3(2f, 0f, 0f)) < 1e-4f
+                && Mathf.Abs(group.Pivot.x - 1f) < 1e-4f,
+                $"a group pivots on the bottom centre of its box: pivot {V4(group.Pivot)}, offset {V4(offset)}");
+
+            var empty = MovingSet.One(bench);
+            Check(empty.Snaps.Count == 0 && empty.TouchCount > 0 && empty.Reach < 1e-4f,
+                $"a piece with no snap points is fine: {empty.Snaps.Count} snaps, reach {empty.Reach:0.###}");
+            SnapLine($"moving sets | one pivot {V4(one.Pivot)} | group pivot {V4(group.Pivot)} reach {group.Reach:0.###}"
+                + $" | wall reach {MovingSet.One(wall).Reach:0.###}");
+        }
+
+        /// <summary>
+        /// The table. Every case builds its own little scene, fires one ray straight down from 20 m
+        /// and checks where the pivot ends up. The wanted numbers are whole metres because the
+        /// pieces snap on a grid: a wall is 2 m wide and 2 m tall around its pivot.
+        /// </summary>
+        private static void CheckSnapCases()
+        {
+            var wall = PieceCatalog.Find("woodwall");
+            var floor = PieceCatalog.Find("wood_floor");
+            var pole = PieceCatalog.Find("wood_pole");
+            var roof = PieceCatalog.Find("wood_roof");
+            var bench = PieceCatalog.Find("piece_workbench");
+            if (wall == null || floor == null || pole == null || roof == null || bench == null)
+            {
+                Check(false, "every piece the snap table needs is in the catalog");
+                return;
+            }
+
+            // 1. open ground: the touch rule lifts the wall by half its height.
+            var r = Place("wall on ground", Scene(), MovingSet.One(wall), new Vector3(0f, 0f, 0f), Rule());
+            SnapCase("wall on ground", r, new Vector3(0f, 1f, 0f), false);
+            Check(r != null && r.Hit.Terrain && r.Hit.Piece < 0, "the wall's ray landed on the ground");
+
+            // 2. the aimed point carries the wall in x and z, and the wheel turns it.
+            var turned = Rule();
+            turned.Steps = 4; // 4 x 22.5 = 90 degrees
+            r = Place("wall on ground, turned", Scene(), MovingSet.One(wall), new Vector3(3.25f, 0f, -1.5f), turned);
+            SnapCase("wall on ground, turned", r, new Vector3(3.25f, 1f, -1.5f), false);
+            Check(r != null && Quaternion.Angle(r.Rot, Quaternion.Euler(0f, 90f, 0f)) < 1e-3f,
+                "four wheel steps turn the wall 90 degrees");
+
+            // 3. beside a standing wall: the side snap points pull it one wall over.
+            r = Place("wall beside a wall", Scene(Standing(1, wall, new Vector3(0f, 1f, 0f))),
+                MovingSet.One(wall), new Vector3(1.9f, 0f, 0f), Rule());
+            SnapCase("wall beside a wall", r, new Vector3(2f, 1f, 0f), true);
+            Check(r != null && r.SnapPiece == 1 && Vector3.Distance(r.SnapTo, new Vector3(1f, 2f, 0f)) < 1e-4f,
+                "it snapped to the standing wall's own top corner");
+
+            // 4. aimed at the wall's top face, so the ray lands on a piece, not the ground.
+            r = Place("wall on top of a wall", Scene(Standing(1, wall, new Vector3(0f, 1f, 0f))),
+                MovingSet.One(wall), new Vector3(0f, 0f, 0f), Rule());
+            SnapCase("wall on top of a wall", r, new Vector3(0f, 3f, 0f), true);
+            Check(r != null && !r.Hit.Terrain && r.Hit.Piece == 1, "that ray landed on the standing wall, not the ground");
+
+            // 5. floors snap edge to edge, flat on the ground.
+            r = Place("floor to floor", Scene(Standing(1, floor, Vector3.zero)),
+                MovingSet.One(floor), new Vector3(1.9f, 0f, 0f), Rule());
+            SnapCase("floor to floor", r, new Vector3(2f, 0f, 0f), true);
+
+            // 6. a roof on the wall's top: its low edge goes on the wall's top corner.
+            r = Place("roof to wall top", Scene(Standing(1, wall, new Vector3(0f, 1f, 0f))),
+                MovingSet.One(roof), new Vector3(0f, 0f, 0f), Rule());
+            SnapCase("roof to wall top", r, new Vector3(0f, 2f, -1f), true);
+
+            // 7. the snap is refused when it would put the pole on the standing pole.
+            r = Place("same kind refused", Scene(Standing(1, pole, new Vector3(0f, 0.5f, 0f))),
+                MovingSet.One(pole), new Vector3(0.3f, 0f, 0f), Rule());
+            SnapCase("same kind refused", r, new Vector3(0.3f, 0.5f, 0f), false);
+            Check(r != null && r.SnapSkipped && !r.Duplicate,
+                "the refused snap is reported, and where it stopped is not a duplicate");
+
+            // 8. the no-snap modifier leaves the wall where the touch rule put it.
+            var free = Rule();
+            free.Snapping = false;
+            r = Place("no-snap modifier", Scene(Standing(1, wall, new Vector3(0f, 1f, 0f))),
+                MovingSet.One(wall), new Vector3(1.9f, 0f, 0f), free);
+            SnapCase("no-snap modifier", r, new Vector3(1.9f, 1f, 0f), false);
+            Check(r != null && !r.SnapSkipped, "with snapping off no snap is even looked for");
+
+            // 9. a chosen snap point: the bottom left corner goes on the aimed point, then snaps.
+            var manual = Rule();
+            manual.Manual = SnapIndex(wall, new Vector3(-1f, -1f, 0f));
+            r = Place("chosen snap point", Scene(Standing(1, wall, new Vector3(0f, 1f, 0f))),
+                MovingSet.One(wall), new Vector3(1.4f, 0f, 0f), manual);
+            SnapCase("chosen snap point", r, new Vector3(2f, 1f, 0f), true);
+            Check(r != null && r.Manual == manual.Manual && !string.IsNullOrEmpty(r.ManualName),
+                $"the chosen snap point is kept and named: {(r != null ? r.ManualName : "-")}");
+
+            // 10. how Q and E walk the list.
+            Check(Placer.WrapManual(-2, 4) == 3 && Placer.WrapManual(4, 4) == -1 && Placer.WrapManual(2, 4) == 2
+                && Placer.WrapManual(0, 0) == -1,
+                "the chosen snap point wraps round the list, and stays automatic when there are none");
+
+            // 11. a group keeps the shape it was picked up with, and lands on the ground.
+            var group = MovingSet.Of(new List<MovingPiece>
+            {
+                Moving(wall, new Vector3(0f, 1f, 0f), 1),
+                Moving(wall, new Vector3(2f, 1f, 0f), 2),
+            });
+            r = Place("group on ground", Scene(), group, new Vector3(5f, 0f, -5f), Rule());
+            var kept = r != null && r.World.Length == 2
+                && Vector3.Distance(r.World[1].Pos - r.World[0].Pos, new Vector3(2f, 0f, 0f)) < 1e-4f;
+            Check(kept, "a group keeps the offset between its pieces");
+            Check(r != null && Mathf.Abs(Lowest(group, r)) < 1e-4f,
+                $"the group lands on the ground: lowest point {(r != null ? Lowest(group, r) : -1f):0.####}");
+            var turnedGroup = Rule();
+            turnedGroup.Steps = 4;
+            r = Place("group turned", Scene(), group, new Vector3(5f, 0f, -5f), turnedGroup);
+            Check(r != null && r.World.Length == 2
+                && Vector3.Distance(r.World[1].Pos - r.World[0].Pos, new Vector3(0f, 0f, -2f)) < 1e-4f
+                && Quaternion.Angle(r.World[0].Rot, Quaternion.Euler(0f, 90f, 0f)) < 1e-3f,
+                "turning the group turns the offset with it");
+
+            // 12. a ground piece ignores the touch rule: its pivot goes straight on the aimed point.
+            var ground = GroundPiece();
+            Check(ground != null, "a ground piece was found to test the touch bypass with");
+            if (ground != null)
+            {
+                r = Place("ground piece " + ground.PrefabName, Scene(), MovingSet.One(ground), new Vector3(4f, 0f, 4f), Rule());
+                SnapCase("ground piece " + ground.PrefabName, r, new Vector3(4f, 0f, 4f), false);
+            }
+
+            // 13. a piece with no snap points at all still goes through every step. The workbench is
+            // not a ground piece in 1.0, so the touch rule runs: its collider starts a little above
+            // the pivot, so the pivot ends up that far under the ground.
+            Check(bench.SnapPoints.Length == 0, "the workbench has no snap points at all");
+            var lift = bench.TouchColliders[0].Center.y - (bench.TouchColliders[0].Size.y * 0.5f);
+            r = Place("no snap points", Scene(), MovingSet.One(bench), new Vector3(4f, 0f, 4f), Rule());
+            SnapCase("no snap points", r, new Vector3(4f, -lift, 4f), false);
+
+            // 14. too far for the game's rule, close enough for the assist.
+            var assist = Rule();
+            assist.Assist = true;
+            r = Place("assist", Scene(Standing(1, wall, new Vector3(0f, 1f, 0f))),
+                MovingSet.One(wall), new Vector3(2.6f, 0f, 0f), assist);
+            SnapCase("assist", r, new Vector3(2f, 1f, 0f), true);
+            Check(r != null && r.Assisted, "that snap came from the assist, not from the game's rule");
+
+            // 15. the same aim without the assist: the wall stays where it was aimed.
+            r = Place("assist off", Scene(Standing(1, wall, new Vector3(0f, 1f, 0f))),
+                MovingSet.One(wall), new Vector3(2.6f, 0f, 0f), Rule());
+            SnapCase("assist off", r, new Vector3(2.6f, 1f, 0f), false);
+        }
+
+        // ---------- snap helpers ----------
+
+        /// <summary>The game's rule on its own: snapping on, automatic snap point, no assist.</summary>
+        private static PlaceOptions Rule()
+        {
+            return new PlaceOptions { Manual = -1, Snapping = true, Assist = false };
+        }
+
+        private static SceneIndex Scene(params ScenePiece[] pieces)
+        {
+            return new SceneIndex(pieces);
+        }
+
+        private static ScenePiece Standing(int id, PieceEntry entry, Vector3 pos)
+        {
+            return new ScenePiece { Id = id, Prefab = entry.PrefabName, Pos = pos, Rot = Quaternion.identity, Entry = entry };
+        }
+
+        private static MovingPiece Moving(PieceEntry entry, Vector3 pos, int id)
+        {
+            return new MovingPiece { Id = id, Prefab = entry.PrefabName, Pos = pos, Rot = Quaternion.identity, Entry = entry };
+        }
+
+        /// <summary>One ray, straight down from 20 m over the given spot.</summary>
+        private static PlaceResult Place(string what, SceneIndex index, MovingSet moving, Vector3 at, PlaceOptions opts)
+        {
+            var origin = at + new Vector3(0f, 20f, 0f);
+            if (!Placer.Place(index, moving, origin, Vector3.down, opts, out var result))
+            {
+                SnapLine($"{what}: the ray met nothing");
+                return null;
+            }
+
+            SnapLine($"{what}: pos {V4(result.Pos)} snapped={result.Snapped} assisted={result.Assisted} "
+                + $"skipped={result.SnapSkipped} duplicate={result.Duplicate} terrain={result.Hit.Terrain} "
+                + $"hit {V4(result.Hit.Point)} normal {V4(result.Hit.Normal)} from {V4(result.SnapFrom)} to {V4(result.SnapTo)}");
+            return result;
+        }
+
+        private static void SnapCase(string what, PlaceResult result, Vector3 want, bool snapped)
+        {
+            if (result == null)
+            {
+                Check(false, what + ": the ray met nothing");
+                return;
+            }
+
+            Check(Vector3.Distance(result.Pos, want) < 1e-4f && result.Snapped == snapped,
+                $"{what}: pos {V4(result.Pos)} snapped={result.Snapped}, wanted {V4(want)} snapped={snapped}");
+        }
+
+        private static void SnapNear(Vector3 got, Vector3 want, string what)
+        {
+            Check(Vector3.Distance(got, want) < 1e-4f, $"{what}: {V4(got)}, wanted {V4(want)}");
+        }
+
+        /// <summary>
+        /// A piece the touch rule skips. The hammer's table is looked at first; the other build
+        /// tools are the fallback, since in 1.0 the hammer may hold none.
+        /// </summary>
+        private static PieceEntry GroundPiece()
+        {
+            foreach (var entry in PieceCatalog.All)
+            {
+                if (entry.GroundPiece || entry.ClipGround || entry.ClipEverything)
+                {
+                    SnapLine($"ground piece from the hammer: {entry.PrefabName}");
+                    return entry;
+                }
+            }
+
+            var db = ObjectDB.instance;
+            if (db == null)
+            {
+                return null;
+            }
+
+            foreach (var item in db.m_items)
+            {
+                var drop = item != null ? item.GetComponent<ItemDrop>() : null;
+                var table = drop != null ? drop.m_itemData.m_shared.m_buildPieces : null;
+                if (table == null)
+                {
+                    continue;
+                }
+
+                foreach (var prefab in table.m_pieces)
+                {
+                    var entry = PieceEntry.Read(prefab, 0);
+                    if (entry != null && (entry.GroundPiece || entry.ClipGround || entry.ClipEverything))
+                    {
+                        SnapLine($"ground piece from {item.name}: {entry.PrefabName} ground={entry.GroundPiece} "
+                            + $"clipGround={entry.ClipGround} clipAll={entry.ClipEverything} "
+                            + $"snaps={entry.SnapPoints.Length} touch={entry.TouchColliders.Length}");
+                        return entry;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>The index of the snap point at a given spot on the piece, or -1.</summary>
+        private static int SnapIndex(PieceEntry entry, Vector3 local)
+        {
+            for (var i = 0; i < entry.SnapPoints.Length; i++)
+            {
+                if (Vector3.Distance(entry.SnapPoints[i], local) < 1e-4f)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>Height of the lowest point of everything the set carries, where it landed.</summary>
+        private static float Lowest(MovingSet moving, PlaceResult result)
+        {
+            var low = float.PositiveInfinity;
+            foreach (var shape in moving.Shapes(result.Pos, result.Rot))
+            {
+                low = Mathf.Min(low, shape.LowestY());
+            }
+
+            return low;
+        }
+
+        private static void SnapLine(string line)
+        {
+            _snapLog?.AppendLine(line);
+        }
+
+        private static string V4(Vector3 v)
+        {
+            return $"({v.x:0.####},{v.y:0.####},{v.z:0.####})";
+        }
+
+        private static string Box(Bounds b)
+        {
+            return $"min {V4(b.min)} max {V4(b.max)}";
         }
 
         // ---------- helpers ----------
