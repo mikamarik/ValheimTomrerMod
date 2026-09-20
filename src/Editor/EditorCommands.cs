@@ -1,5 +1,7 @@
 using System.IO;
+using System.Linq;
 using UnityEngine;
+using ValheimTomrer.Blueprints;
 using ValheimTomrer.Editor.Catalog;
 using ValheimTomrer.Editor.Doc;
 using ValheimTomrer.Editor.Ui;
@@ -8,8 +10,8 @@ namespace ValheimTomrer.Editor
 {
     /// <summary>
     /// The verbs behind the top bar, the dialogs and the shortcuts: new, open, save, save as,
-    /// centre the origin and the two view switches. Every one of them reports what happened
-    /// through a toast, so a button, a key and the test all take the same path.
+    /// build it in the world, centre the origin and the two view switches. Every one of them
+    /// reports what happened through a toast, so a button, a key and the test all take the same path.
     /// </summary>
     internal static class EditorCommands
     {
@@ -142,6 +144,68 @@ namespace ValheimTomrer.Editor
 
             Dialogs.Close();
             Toasts.Ok($"Saved {Path.GetFileName(document.SourcePath)}.");
+            return true;
+        }
+
+        /// <summary>
+        /// Hands the open blueprint to the build tool: saves it when it has changes, closes the
+        /// window, and leaves the vanilla preview in hand, ready for a click. It equips nothing,
+        /// so the build tool has to be out already.
+        /// </summary>
+        public static bool BuildThis()
+        {
+            var document = EditorState.Document;
+            if (document == null)
+            {
+                return false;
+            }
+
+            if (document.Pieces.Count == 0)
+            {
+                Toasts.Error("A blueprint needs at least one piece.");
+                return false;
+            }
+
+            var player = Player.m_localPlayer;
+            if (player == null)
+            {
+                Toasts.Error("No player to build with.");
+                return false;
+            }
+
+            // No hammer out means no build tool to put the preview in. Say so, do not equip one.
+            if (!player.InPlaceMode())
+            {
+                Toasts.Error("Take the hammer out first, then press Build this again.");
+                return false;
+            }
+
+            // Save first, so what stands in the world is what the file holds. A blueprint with no
+            // file of its own opens the Save as dialog instead, and the next press goes through.
+            if (document.Dirty && !Save())
+            {
+                return false;
+            }
+
+            if (!ResolvedBlueprint.TryResolve(document.ToBlueprint(), out var resolved, out var error))
+            {
+                Toasts.Error(error);
+                return false;
+            }
+
+            var locked = BlueprintRules.UnavailablePieces(player, resolved);
+            if (locked.Count > 0)
+            {
+                Toasts.Error("Not unlocked yet: "
+                    + string.Join(", ", locked.Select(p => Localization.instance.Localize(p.m_name))));
+                return false;
+            }
+
+            EditorSession.Close();
+            BlueprintMode.Select(player, resolved);
+            player.Message(MessageHud.MessageType.Center, $"{resolved.Name}: click to build");
+            ValheimTomrerPlugin.Log.LogInfo(
+                $"editor handed '{resolved.Name}' ({resolved.Parts.Count} pieces) to the build tool");
             return true;
         }
 

@@ -42,7 +42,15 @@ namespace ValheimTomrer.Editor
             {
                 if (CanOpen() && ZInput.GetKeyDown(EditorConfig.Key.Value))
                 {
-                    Open();
+                    // With a blueprint in hand the key edits that one, not the last kit. The
+                    // build tool lets go of it: the Build this button puts it back.
+                    var inHand = BlueprintMode.Current;
+                    Open(inHand);
+                    if (inHand != null && ModUi.Open)
+                    {
+                        BlueprintMode.Exit();
+                        ValheimTomrerPlugin.Log.LogInfo($"editor took '{inHand.Name}' out of the build tool's hand");
+                    }
                 }
 
                 return;

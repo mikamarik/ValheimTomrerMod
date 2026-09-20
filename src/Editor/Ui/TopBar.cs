@@ -8,9 +8,9 @@ using ValheimTomrer.Editor.Doc;
 namespace ValheimTomrer.Editor.Ui
 {
     /// <summary>
-    /// The row of buttons along the top: the file commands, undo and redo, the two view switches
-    /// and the help. Save says how many errors the blueprint has and turns red, but still saves,
-    /// the way the browser editor does.
+    /// The row of buttons along the top: Build this, the file commands, undo and redo, the two
+    /// view switches and the help. Save says how many errors the blueprint has and turns red, but
+    /// still saves, the way the browser editor does.
     /// </summary>
     internal static class TopBar
     {
@@ -27,6 +27,8 @@ namespace ValheimTomrer.Editor.Ui
         private static TextMeshProUGUI _busy;
         private static TextMeshProUGUI _saveLabel;
         private static Button _save;
+        private static Button _build;
+        private static TextMeshProUGUI _buildLabel;
         private static Button _undo;
         private static Button _redo;
         private static Button _center;
@@ -41,6 +43,21 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>True while Save is red because the blueprint would be skipped by the game.</summary>
         public static bool SaveIsRed => _saveLabel != null && _saveLabel.color == UiTheme.Warn;
+
+        /// <summary>What the Build button reads.</summary>
+        public static string BuildText => _buildLabel != null ? _buildLabel.text : "";
+
+        /// <summary>True while the Build button can be pressed.</summary>
+        public static bool BuildEnabled => _build != null && _build.interactable;
+
+        /// <summary>Presses the Build button, exactly as a click on it does.</summary>
+        public static void ClickBuild()
+        {
+            if (_build != null && _build.interactable)
+            {
+                _build.onClick.Invoke();
+            }
+        }
 
         /// <summary>The file line: the name, a dot when it has changes, and where it lives.</summary>
         public static string FileText => _file != null ? _file.text : "";
@@ -75,6 +92,9 @@ namespace ValheimTomrer.Editor.Ui
             _saveLabel.text = errors == 0 ? "Save" : $"Save ({errors} error{(errors == 1 ? "" : "s")})";
             _saveLabel.color = errors == 0 ? UiTheme.Text : UiTheme.Warn;
             _save.interactable = document != null;
+
+            _build.interactable = document != null && document.Pieces.Count > 0;
+            _buildLabel.color = _build.interactable ? UiTheme.Accent : UiTheme.TextDim;
 
             _undo.interactable = document != null && document.CanUndo;
             _redo.interactable = document != null && document.CanRedo;
@@ -136,6 +156,10 @@ namespace ValheimTomrer.Editor.Ui
             row.anchoredPosition = Vector2.zero;
             row.sizeDelta = new Vector2(1000f, Height);
             row.GetComponent<HorizontalLayoutGroup>().childAlignment = TextAnchor.MiddleRight;
+
+            _build = Add(row, "Build this", () => EditorCommands.BuildThis());
+            _buildLabel = _build.GetComponentInChildren<TextMeshProUGUI>();
+            Gap(row);
 
             Add(row, "New", EditorCommands.NewBlueprint);
             Add(row, "Open…", EditorCommands.OpenDialog);

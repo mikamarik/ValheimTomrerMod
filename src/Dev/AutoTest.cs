@@ -36,6 +36,7 @@ namespace ValheimTomrer.Dev
     /// "editor_panels" checks the right panel: the build card, the selection fields and the problem list;
     /// "editor_keys" drives every key, the wheel and the mouse, plus the top bar and the dialogs;
     /// "editor_pad" drives every controller button through a made-up pad, plus the piece menu.
+    /// "editor_build" builds a blueprint made in the editor, in the world, and edits it again.
     /// </summary>
     internal static class AutoTest
     {
@@ -197,6 +198,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_pad":
                     scenario = TestEditorPad(player);
+                    break;
+                case "editor_build":
+                    scenario = TestEditorBuild(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -3635,6 +3639,270 @@ namespace ValheimTomrer.Dev
             ViewportHost.MouseMoved(screen + new Vector2(9f, 0f));
             Check(wobble && !ViewportHost.PadAim,
                 "a 2 px wobble keeps the crosshair, a 7 px move gives the aim back to the mouse");
+        }
+
+        // ---------- scenario: editor_build ----------
+
+        /// <summary>
+        /// The editor and the build tool, joined up. Three walls are placed in the editor, saved
+        /// under a new name, then handed to the hammer with the top bar's Build this button. The
+        /// blueprint is built in the world and checked piece by piece, and the editor key takes it
+        /// back out of the hammer's hand.
+        /// </summary>
+        private static IEnumerator TestEditorBuild(Player player)
+        {
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+
+            PieceCatalog.Ensure();
+            var wall = PieceCatalog.Find("woodwall");
+            Check(PieceCatalog.Ready && wall != null, "the catalog is built and has woodwall");
+            if (wall == null)
+            {
+                yield break;
+            }
+
+            // An earlier scenario may have cleared the recipes, so unlock this one on purpose.
+            player.m_knownRecipes.Add(wall.Piece.m_name);
+            player.UpdateAvailablePiecesList();
+
+            // Its own blueprint folder: the player's files are never touched.
+            var folder = Path.Combine(OutDir, "build-test");
+            var wasFolder = BlueprintLibrary.UserFolder;
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, true);
+            }
+
+            Directory.CreateDirectory(folder);
+            BlueprintLibrary.UserFolder = folder;
+            BlueprintLibrary.Reload();
+
+            yield return EditorToHammer(player, wall);
+
+            BlueprintMode.Exit();
+            RemoveOldTestBuildings(player);
+            BlueprintLibrary.UserFolder = wasFolder;
+            BlueprintLibrary.Reload();
+        }
+
+        /// <summary>Place three walls, save them, hand them to the hammer, build them, edit them again.</summary>
+        private static IEnumerator EditorToHammer(Player player, PieceEntry wall)
+        {
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open, "the key opened the editor");
+            if (!ModUi.Open)
+            {
+                yield break;
+            }
+
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(ViewportHost.Ready, $"the 3D pane is ready after {waited:0.00} s");
+
+            // ---- three walls in a row ----
+            EditorSession.Replace(DocumentStore.New("Build test"));
+            yield return null;
+            var document = EditorSession.Document;
+            Check(document != null && document.Pieces.Count == 0, "the editor starts on an empty blueprint");
+            if (document == null)
+            {
+                yield break;
+            }
+
+            for (var i = 0; i < 3; i++)
+            {
+                EditorState.StartAdd(wall);
+                var spot = EditAim(new Vector3(i * 1.9f, 0f, 0f));
+                Check(spot != null && EditorState.CommitPlacement(spot), $"wall {i + 1} dropped");
+            }
+
+            EditorState.CancelMode();
+            Check(document.Pieces.Count == 3, $"three walls stand in the blueprint: {document.Pieces.Count}");
+            if (document.Pieces.Count != 3)
+            {
+                yield break;
+            }
+
+            Log("editor pieces: " + string.Join(", ", document.Pieces.Select(p => V4(p.Position))));
+            Check(Vector3.Distance(document.Pieces[0].Position, new Vector3(0f, 1f, 0f)) < 1e-4f,
+                $"the first one sits on the ground at {V4(document.Pieces[0].Position)}, wanted (0,1,0)");
+            Check(document.Pieces.Select(p => p.Position).Distinct().Count() == 3, "all three are in different spots");
+
+            // ---- no hammer out: it says so instead of doing nothing ----
+            var hammer = player.GetRightItem();
+            player.UnequipItem(hammer);
+            yield return new WaitForSeconds(0.3f);
+            Toasts.Clear();
+            Check(!EditorCommands.BuildThis() && ModUi.Open && !BlueprintMode.Active,
+                "with no hammer out Build this does nothing and the window stays");
+            Check(Toasts.Count == 1 && Toasts.LevelOf(0) == ToastLevel.Error,
+                $"and it says why: '{Toasts.TextOf(0)}'");
+            player.EquipItem(hammer);
+            yield return new WaitForSeconds(0.5f);
+            Check(player.InPlaceMode(), "the hammer is out again");
+
+            // ---- save as, and the library picks the file up on its own ----
+            Check(EditorCommands.SaveAs("Build test", true), "Save as wrote the blueprint");
+            var path = document.SourcePath;
+            Check(!string.IsNullOrEmpty(path) && File.Exists(path),
+                $"it has a file now: {Path.GetFileName(path ?? "none")}");
+            var listed = BlueprintLibrary.All.FirstOrDefault(b => b.SourcePath == path);
+            Check(listed != null && listed.Name == "Build test" && listed.Pieces.Count == 3,
+                $"the library reloaded and holds it: {(listed != null ? listed.Pieces.Count + " pieces" : "not there")}");
+
+            // ---- Build this: save the change, close, put the blueprint in the hammer ----
+            EditorState.Select(document.Pieces[0].Id);
+            EditorState.Nudge(new Vector3(0f, 0f, 0.5f));
+            Check(document.Dirty, "an edit made it dirty again");
+            var moved = document.Pieces[0].Position;
+
+            TopBar.Tick();
+            Check(TopBar.BuildEnabled && TopBar.BuildText == "Build this",
+                $"the top bar's Build button is ready: '{TopBar.BuildText}'");
+            TopBar.ClickBuild();
+            yield return new WaitForSeconds(0.5f);
+
+            Check(!document.Dirty, "Build this saved the change first");
+            Check(!ModUi.Open, "and closed the window");
+            var current = BlueprintMode.Current;
+            Check(current != null && current.Name == "Build test" && current.Parts.Count == 3,
+                $"the blueprint is in the hammer's hand: {(current != null ? current.Name + ", " + current.Parts.Count + " pieces" : "nothing")}");
+            Check(ReferenceEquals(player.GetRightItem(), hammer), "it equipped nothing: the same hammer is still in hand");
+            if (current == null)
+            {
+                yield break;
+            }
+
+            var reread = BlueprintLibrary.All.FirstOrDefault(b => b.SourcePath == path);
+            Check(reread != null && Vector3.Distance(reread.Pieces[0].Position, moved) < 1e-3f,
+                $"the file on disk holds the moved wall: {(reread != null ? V4(reread.Pieces[0].Position) : "not there")},"
+                + $" wanted {V4(moved)}");
+
+            yield return BuildInTheWorld(player, current);
+            yield return EditItAgain(player, path);
+            yield return LockedStillOpens(player, wall);
+        }
+
+        /// <summary>The blueprint the editor handed over, built where the player aims.</summary>
+        private static IEnumerator BuildInTheWorld(Player player, ResolvedBlueprint current)
+        {
+            ClearInventoryExceptHammer(player);
+            foreach (var cost in current.TotalCost)
+            {
+                player.GetInventory().AddItem(cost.m_resItem.gameObject.name, cost.m_amount, 1, 0, 0L, "", false);
+            }
+
+            // A wall needs a workbench in range. It is not what is tested, so it comes for free.
+            foreach (var station in current.Stations.Where(s => !current.OwnStations.Contains(s.m_name)))
+            {
+                if (CraftingStation.HaveBuildStationInRange(station.m_name, player.transform.position) == null)
+                {
+                    player.PlacePiece(
+                        station.GetComponent<Piece>(),
+                        player.transform.position - player.transform.forward * 3f,
+                        Quaternion.identity,
+                        false);
+                    yield return null;
+                }
+            }
+
+            yield return new WaitForSeconds(0.5f);
+            yield return AimAtGround(player);
+            Check(BlueprintMode.HasTarget && BlueprintMode.Blocked == null,
+                "the preview stands on a free spot: " + (BlueprintMode.Blocked ?? "ok"));
+
+            var root = BlueprintMode.PreviewRoot;
+            Check(root != null, "the preview is in the world");
+            if (root == null)
+            {
+                yield break;
+            }
+
+            var wanted = current.Parts.Select(p => root.TransformPoint(p.Source.Position)).ToList();
+            var center = root.position;
+            player.m_lastToolUseTime = 0f;
+            var existing = new HashSet<Piece>(PiecesAround(player, center));
+            if (!BlueprintMode.TryBuild(player))
+            {
+                Check(false, "the blueprint built: " + (BlueprintRules.CheckCanBuild(player, current) ?? "no reason given"));
+            }
+            else
+            {
+                Check(true, "the blueprint built");
+            }
+
+            var built = PiecesAround(player, center).Where(p => !existing.Contains(p)).ToList();
+            Check(built.Count == wanted.Count, $"three pieces exist: {built.Count} of {wanted.Count}");
+            if (built.Count == 0)
+            {
+                yield break;
+            }
+
+            var worst = wanted.Max(w => built.Min(p => Vector3.Distance(p.transform.position, w)));
+            Check(worst < 0.01f, $"every piece stands where the blueprint says, worst {worst:0.####} m off");
+
+            yield return new WaitForSeconds(2f);
+            player.m_lookPitch = 12f;
+            yield return Screenshot("editor-build-1-built");
+
+            // Support checks start at once; give them time to break it if they will.
+            yield return new WaitForSeconds(15f);
+            var standing = built.Count(p => p != null);
+            Check(standing == wanted.Count, $"still standing after 15 s: {standing} of {wanted.Count}");
+            yield return Screenshot("editor-build-2-after-15s");
+        }
+
+        /// <summary>The way back: the editor key edits the blueprint the hammer is holding.</summary>
+        private static IEnumerator EditItAgain(Player player, string path)
+        {
+            Check(BlueprintMode.Active, "the blueprint is still in hand after building");
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open, "the key opened the editor again");
+
+            var back = EditorSession.Document;
+            Check(back != null && back.Name == "Build test" && back.Pieces.Count == 3,
+                $"on the blueprint that was in hand, not the last kit: '{(back != null ? back.Name : "nothing")}'");
+            Check(back != null && back.SourcePath == path, "and on its own file, so Save writes it straight back");
+            Check(!BlueprintMode.Active, "the build tool let go of it");
+
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
+            Check(!ModUi.Open, "the editor closed");
+        }
+
+        /// <summary>A blueprint this character cannot build is out of the build cycle, not out of the editor.</summary>
+        private static IEnumerator LockedStillOpens(Player player, PieceEntry wall)
+        {
+            var notLearned = PieceCatalog.All.FirstOrDefault(e => !PieceCatalog.IsUnlocked(e));
+            Check(notLearned != null, "this character has not learned every piece");
+            if (notLearned == null)
+            {
+                yield break;
+            }
+
+            var mixed = BlueprintDocument.New("Locked test");
+            mixed.AddPiece(wall.PrefabName, Vector3.zero, Quaternion.identity);
+            mixed.AddPiece(notLearned.PrefabName, new Vector3(0f, 0f, 4f), Quaternion.identity);
+            Check(ResolvedBlueprint.TryResolve(mixed.ToBlueprint(), out var half, out var error)
+                    && !BlueprintRules.IsAvailable(player, half),
+                $"a blueprint holding a locked {notLearned.PrefabName} is kept out of the build cycle"
+                + (error != null ? ": " + error : ""));
+
+            EditorSession.OpenDocument(mixed);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open && EditorSession.Document == mixed && mixed.Pieces.Count == 2,
+                "but the editor opens it all the same");
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
         }
 
         // ---------- scenario: editor_snap ----------

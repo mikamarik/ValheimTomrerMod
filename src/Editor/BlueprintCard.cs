@@ -86,8 +86,10 @@ namespace ValheimTomrer.Editor
             var iconPiece = known.FirstOrDefault(e => e.PrefabName == document.IconPrefab) ?? known.FirstOrDefault();
             card.Icon = iconPiece != null ? iconPiece.Icon : null;
 
+            // The same line BlueprintInfoCard writes into the real card. Keep the two together.
+            var edit = EditorConfig.Key != null ? $" {EditorConfig.Key.Value}: edit it." : "";
             var help = $"{document.Pieces.Count} pieces. Wheel: rotate. "
-                + $"{ValheimTomrerPlugin.BlueprintKey.Value}: next blueprint.";
+                + $"{ValheimTomrerPlugin.BlueprintKey.Value}: next blueprint.{edit}";
             card.Description = string.IsNullOrEmpty(document.Description) ? help : document.Description + "\n" + help;
 
             var all = CostSlots(known);

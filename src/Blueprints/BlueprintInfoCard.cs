@@ -51,7 +51,11 @@ namespace ValheimTomrer.Blueprints
 
         private static string Description(ResolvedBlueprint blueprint)
         {
-            var text = $"{blueprint.Parts.Count} pieces. Wheel: rotate. {ValheimTomrerPlugin.BlueprintKey.Value}: next blueprint.";
+            var edit = Editor.EditorConfig.Key != null
+                ? $" {Editor.EditorConfig.Key.Value}: edit it."
+                : "";
+            var text = $"{blueprint.Parts.Count} pieces. Wheel: rotate. "
+                + $"{ValheimTomrerPlugin.BlueprintKey.Value}: next blueprint.{edit}";
             return string.IsNullOrEmpty(blueprint.Blueprint.Description)
                 ? text
                 : blueprint.Blueprint.Description + "\n" + text;

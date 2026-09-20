@@ -13,6 +13,7 @@
 #   ./scripts/autotest.sh editor_panels check the build card, the selection fields and the problem list
 #   ./scripts/autotest.sh editor_keys  drive every key, the wheel and the mouse, the top bar and the dialogs
 #   ./scripts/autotest.sh editor_pad   drive every controller button through a made-up pad, and the piece menu
+#   ./scripts/autotest.sh editor_build build a blueprint made in the editor, in the world, then edit it again
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
 set -euo pipefail
 
