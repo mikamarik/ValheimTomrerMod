@@ -232,6 +232,15 @@ namespace ValheimTomrer.Blueprints
 
         private GameObject CreateCopy(GameObject prefab)
         {
+            return Build(prefab, _root.transform, _style, _materials);
+        }
+
+        /// <summary>
+        /// One piece's visuals, stripped the way the vanilla placement ghost is. The caller owns the
+        /// object and, when <paramref name="owned"/> is given, the material copies put in it.
+        /// </summary>
+        public static GameObject Build(GameObject prefab, Transform parent, PreviewStyle style, List<Material> owned)
+        {
             // Same guards as the vanilla preview: no ZDO, no terrain edits while instantiating.
             var terrainModifier = prefab.GetComponentInChildren<TerrainModifier>();
             var terrainModifierEnabled = terrainModifier != null && terrainModifier.enabled;
@@ -245,7 +254,7 @@ namespace ValheimTomrer.Blueprints
             TerrainOp.m_forceDisableTerrainOps = true;
             try
             {
-                copy = Object.Instantiate(prefab, _root.transform, false);
+                copy = Object.Instantiate(prefab, parent, false);
             }
             finally
             {
@@ -258,22 +267,22 @@ namespace ValheimTomrer.Blueprints
             }
 
             copy.name = prefab.name;
-            StripToVisuals(copy);
-            if (_style.Colliders)
+            StripToVisuals(copy, style);
+            if (style.Colliders)
             {
                 AddFallbackCollider(copy);
             }
 
-            if (_style.Look == PreviewLook.Ghost)
+            if (style.Look == PreviewLook.Ghost)
             {
-                SetupMaterials<MeshRenderer>(copy);
-                SetupMaterials<SkinnedMeshRenderer>(copy);
+                SetupMaterials<MeshRenderer>(copy, owned);
+                SetupMaterials<SkinnedMeshRenderer>(copy, owned);
             }
 
             return copy;
         }
 
-        private void StripToVisuals(GameObject copy)
+        private static void StripToVisuals(GameObject copy, PreviewStyle style)
         {
             DestroyAll<Joint>(copy);
             DestroyAll<Rigidbody>(copy);
@@ -287,7 +296,7 @@ namespace ValheimTomrer.Blueprints
             DestroyAll<WispSpawner>(copy);
 
             // The aim preview never needs collisions; the editor keeps them so a piece can be clicked.
-            if (!_style.Colliders)
+            if (!style.Colliders)
             {
                 foreach (var collider in copy.GetComponentsInChildren<Collider>(true))
                 {
@@ -331,10 +340,10 @@ namespace ValheimTomrer.Blueprints
 
             foreach (var transform in copy.GetComponentsInChildren<Transform>(true))
             {
-                transform.gameObject.layer = _style.Layer;
+                transform.gameObject.layer = style.Layer;
             }
 
-            if (_style.Look == PreviewLook.Ghost)
+            if (style.Look == PreviewLook.Ghost)
             {
                 var ghostOnly = copy.transform.Find("_GhostOnly");
                 if (ghostOnly != null)
@@ -408,7 +417,7 @@ namespace ValheimTomrer.Blueprints
         }
 
         /// <summary>Copies of the materials with the vanilla preview settings, so textures do not slide.</summary>
-        private void SetupMaterials<T>(GameObject copy) where T : Renderer
+        private static void SetupMaterials<T>(GameObject copy, List<Material> owned) where T : Renderer
         {
             foreach (var renderer in copy.GetComponentsInChildren<T>(true))
             {
@@ -429,7 +438,7 @@ namespace ValheimTomrer.Blueprints
                     material.SetFloat("_ValueNoise", 0f);
                     material.SetFloat("_TriplanarLocalPos", 1f);
                     materials[i] = material;
-                    _materials.Add(material);
+                    owned?.Add(material);
                 }
 
                 renderer.sharedMaterials = materials;

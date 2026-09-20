@@ -9,6 +9,7 @@
 #   ./scripts/autotest.sh editor_files round-trip every blueprint and run the file commands
 #   ./scripts/autotest.sh editor_palette build the piece catalog and check the palette panel
 #   ./scripts/autotest.sh editor_snap  run the placing and snapping engine against a table of rays
+#   ./scripts/autotest.sh editor_edit  place, select, copy, turn, nudge and undo, then draw it
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
 set -euo pipefail
 

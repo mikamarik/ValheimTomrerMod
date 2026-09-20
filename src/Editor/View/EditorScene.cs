@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace ValheimTomrer.Editor.View
 {
@@ -301,6 +302,7 @@ namespace ValheimTomrer.Editor.View
     {
         private static Shader _lit;
         private static Shader _unlit;
+        private static Shader _onTop;
 
         public static Shader Lit()
         {
@@ -315,6 +317,41 @@ namespace ValheimTomrer.Editor.View
                 ? _unlit
                 : _unlit = Find("unlit", "Sprites/Default", "Unlit/Color", "Legacy Shaders/Particles/Alpha Blended",
                     "Hidden/Internal-Colored", "UI/Default");
+        }
+
+        /// <summary>
+        /// A shader whose depth test can be switched off. Sprites/Default has none, so a box behind
+        /// a wall would be hidden; these three all take the test from a property.
+        /// </summary>
+        public static Shader OnTop()
+        {
+            return _onTop != null
+                ? _onTop
+                : _onTop = Find("on top", "Hidden/Internal-Colored", "UI/Default", "Sprites/Default", "Unlit/Color");
+        }
+
+        /// <summary>
+        /// A flat colour with no lighting. With <paramref name="onTop"/> it also ignores the depth
+        /// buffer, so selection boxes and snap dots stay readable through the pieces. The caller
+        /// owns the material and has to destroy it.
+        /// </summary>
+        public static Material Overlay(Color color, bool onTop)
+        {
+            var material = new Material(onTop ? OnTop() : Unlit()) { name = "ValheimTomrer_Editor", color = color };
+            if (!onTop)
+            {
+                return material;
+            }
+
+            // Whichever of the three it landed on, one of these names is the one it reads.
+            material.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+            material.SetInt("unity_GUIZTestMode", (int)UnityEngine.Rendering.CompareFunction.Always);
+            material.SetInt("_ZWrite", 0);
+            material.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+            material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            material.renderQueue = 4000;
+            return material;
         }
 
         private static Shader Find(string what, params string[] names)
@@ -334,6 +371,71 @@ namespace ValheimTomrer.Editor.View
             ValheimTomrerPlugin.Log.LogWarning($"editor {what} shader: none of {string.Join(", ", names)} is loaded,"
                 + $" falling back to {(any != null ? any.name : "nothing")}");
             return any;
+        }
+    }
+
+    /// <summary>
+    /// A mesh the editor rebuilds in place whenever what it draws changes: one object, one
+    /// material, one draw call. The selection boxes and the snap dots are both made of these.
+    /// </summary>
+    internal sealed class OverlayMesh
+    {
+        private readonly GameObject _object;
+        private readonly Mesh _mesh;
+        private readonly Material _material;
+
+        public OverlayMesh(string name, Transform parent, int layer, Color color)
+        {
+            _object = new GameObject(name) { layer = layer };
+            _object.transform.SetParent(parent, false);
+            _mesh = new Mesh { name = "ValheimTomrer_" + name, indexFormat = IndexFormat.UInt32 };
+            _mesh.MarkDynamic();
+            _object.AddComponent<MeshFilter>().sharedMesh = _mesh;
+            _material = Shading.Overlay(color, true);
+            var renderer = _object.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = _material;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            _object.SetActive(false);
+        }
+
+        public void Set(List<Vector3> vertices, List<int> triangles)
+        {
+            _mesh.Clear();
+            _mesh.SetVertices(vertices);
+            _mesh.SetTriangles(triangles, 0);
+            _mesh.RecalculateBounds();
+            if (_object != null && !_object.activeSelf)
+            {
+                _object.SetActive(true);
+            }
+        }
+
+        public void Clear()
+        {
+            if (_object != null && _object.activeSelf)
+            {
+                _mesh.Clear();
+                _object.SetActive(false);
+            }
+        }
+
+        public void Destroy()
+        {
+            if (_object != null)
+            {
+                Object.Destroy(_object);
+            }
+
+            if (_mesh != null)
+            {
+                Object.Destroy(_mesh);
+            }
+
+            if (_material != null)
+            {
+                Object.Destroy(_material);
+            }
         }
     }
 }

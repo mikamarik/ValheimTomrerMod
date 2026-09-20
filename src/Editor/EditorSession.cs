@@ -19,8 +19,10 @@ namespace ValheimTomrer.Editor
     {
         public static bool IsOpen => ModUi.Open;
 
-        /// <summary>The blueprint being edited. Phase 6 takes this over with an EditorState.</summary>
-        public static BlueprintDocument Document { get; private set; }
+        /// <summary>The blueprint being edited. The editing state owns it.</summary>
+        public static BlueprintDocument Document => EditorState.Document;
+
+        private static int _syncedSelection = -1;
 
         public static void Tick()
         {
@@ -62,9 +64,16 @@ namespace ValheimTomrer.Editor
             ViewportHost.Tick();
             Palette.Tick();
             PieceListPanel.Tick();
+            SyncSelection();
 
-            // In free camera Esc only gives the cursor back; the window stays open.
+            // Esc walks back one step at a time: what is in hand, then the free camera, then the window.
             var cancel = EditorInput.Cancel;
+            if (cancel && EditorState.Mode != EditMode.Idle)
+            {
+                EditorState.CancelMode();
+                return;
+            }
+
             if (cancel && ViewportHost.LeaveFreeLook())
             {
                 return;
@@ -110,15 +119,20 @@ namespace ValheimTomrer.Editor
             UITooltip.HideTooltip();
             EditorWindow.Show(true);
             blueprint = blueprint ?? FirstKit();
-            Document = blueprint != null ? BlueprintDocument.FromBlueprint(blueprint.Blueprint) : BlueprintDocument.New();
+            PieceCatalog.Ensure();
+            EditorState.Open(blueprint != null
+                ? BlueprintDocument.FromBlueprint(blueprint.Blueprint)
+                : BlueprintDocument.New());
             ViewportHost.Ensure(EditorWindow.ViewportHost);
             ViewportHost.Show(blueprint);
 
-            PieceCatalog.Ensure();
             Palette.Ensure(EditorWindow.PalettePane);
             Palette.Show();
+            Palette.PieceChosen = StartAdd;
             PieceListPanel.Ensure(EditorWindow.PieceListPane);
             PieceListPanel.Show(Document);
+            PieceListPanel.PieceClicked = RowClicked;
+            _syncedSelection = -1;
             ModUi.Open = true;
             EditorInput.Reset();
             ValheimTomrerPlugin.Log.LogInfo("editor opened");
@@ -132,9 +146,12 @@ namespace ValheimTomrer.Editor
             }
 
             ViewportHost.Close();
+            Palette.PieceChosen = null;
+            Palette.Selected = null;
             Palette.Close();
+            PieceListPanel.PieceClicked = null;
             PieceListPanel.Close();
-            Document = null;
+            EditorState.Close();
             EditorWindow.Show(false);
             ModUi.MarkClosed();
             UITooltip.HideTooltip();
@@ -142,6 +159,34 @@ namespace ValheimTomrer.Editor
             ZInput.ResetAllButtonStates();
             EditorInput.Reset();
             ValheimTomrerPlugin.Log.LogInfo("editor closed");
+        }
+
+        /// <summary>A tile in the palette: that piece goes in hand.</summary>
+        private static void StartAdd(PieceEntry entry)
+        {
+            if (EditorState.StartAdd(entry))
+            {
+                Palette.Selected = entry;
+            }
+        }
+
+        /// <summary>A row in the blueprint's piece list: shift toggles, a plain click replaces.</summary>
+        private static void RowClicked(int id, bool additive)
+        {
+            EditorState.Select(id, additive ? SelectHow.Toggle : SelectHow.Set);
+        }
+
+        /// <summary>Pushes the selection into the piece list, and the piece in hand into the palette.</summary>
+        private static void SyncSelection()
+        {
+            if (_syncedSelection == EditorState.Version)
+            {
+                return;
+            }
+
+            _syncedSelection = EditorState.Version;
+            PieceListPanel.SetSelection(EditorState.Selection);
+            Palette.Selected = EditorState.Mode == EditMode.Place ? EditorState.Held : null;
         }
 
         /// <summary>Plugin OnDestroy: drop the canvas and the cached sprites for a hot reload.</summary>

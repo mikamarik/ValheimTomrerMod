@@ -44,6 +44,22 @@ namespace ValheimTomrer.Editor.Doc
         }
     }
 
+    /// <summary>A piece about to be added, for <see cref="BlueprintDocument.AddPieces"/>.</summary>
+    internal struct NewPiece
+    {
+        public string PrefabName;
+        public Vector3 Position;
+        public Quaternion Rotation;
+    }
+
+    /// <summary>One piece going somewhere else, for <see cref="BlueprintDocument.SetPieces"/>.</summary>
+    internal struct PieceMove
+    {
+        public int Id;
+        public Vector3 Position;
+        public Quaternion Rotation;
+    }
+
     /// <summary>
     /// A blueprint open in the editor. Nothing is changed in place: every edit builds a new snapshot
     /// and pushes the old one on the undo stack. A run of keystrokes in one field is one step.
@@ -200,6 +216,26 @@ namespace ValheimTomrer.Editor.Doc
             return id;
         }
 
+        /// <summary>Adds several pieces as one undo step, and gives back their ids in the same order.</summary>
+        public int[] AddPieces(IList<NewPiece> pieces)
+        {
+            if (pieces == null || pieces.Count == 0)
+            {
+                return Array.Empty<int>();
+            }
+
+            var ids = new int[pieces.Count];
+            var added = new List<DocPiece>(pieces.Count);
+            for (var i = 0; i < pieces.Count; i++)
+            {
+                ids[i] = ++_lastId;
+                added.Add(new DocPiece(ids[i], pieces[i].PrefabName, "", pieces[i].Position, pieces[i].Rotation, null));
+            }
+
+            Change(null, s => s.Pieces.AddRange(added));
+            return ids;
+        }
+
         public bool RemovePieces(ICollection<int> ids)
         {
             if (ids == null || ids.Count == 0)
@@ -242,6 +278,44 @@ namespace ValheimTomrer.Editor.Doc
                     {
                         s.Pieces[i] = s.Pieces[i].Placed(position, rotation);
                         return;
+                    }
+                }
+            });
+            return true;
+        }
+
+        /// <summary>
+        /// Puts several pieces somewhere else as one undo step. <paramref name="tag"/> coalesces a
+        /// run of nudges or a drag into one step.
+        /// </summary>
+        public bool SetPieces(IList<PieceMove> moves, string tag = null)
+        {
+            if (moves == null || moves.Count == 0)
+            {
+                return false;
+            }
+
+            var by = new Dictionary<int, PieceMove>(moves.Count);
+            foreach (var move in moves)
+            {
+                if (Find(move.Id) != null)
+                {
+                    by[move.Id] = move;
+                }
+            }
+
+            if (by.Count == 0)
+            {
+                return false;
+            }
+
+            Change(tag, s =>
+            {
+                for (var i = 0; i < s.Pieces.Count; i++)
+                {
+                    if (by.TryGetValue(s.Pieces[i].Id, out var move))
+                    {
+                        s.Pieces[i] = s.Pieces[i].Placed(move.Position, move.Rotation);
                     }
                 }
             });

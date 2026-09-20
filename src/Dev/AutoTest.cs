@@ -30,7 +30,8 @@ namespace ValheimTomrer.Dev
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
     /// "editor_palette" builds the piece catalog and checks the palette's counts and filters;
-    /// "editor_snap" runs the placing and snapping engine against a table of rays, with no UI.
+    /// "editor_snap" runs the placing and snapping engine against a table of rays, with no UI;
+    /// "editor_edit" drives placing, selecting, copying, turning, nudging and undo, then draws it.
     /// </summary>
     internal static class AutoTest
     {
@@ -180,6 +181,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_snap":
                     scenario = TestEditorSnap(player);
+                    break;
+                case "editor_edit":
+                    scenario = TestEditorEdit(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -1943,6 +1947,201 @@ namespace ValheimTomrer.Dev
 
             File.Delete(path);
             File.Delete(Path.Combine(folder, "without-sections.blueprint"));
+        }
+
+        // ---------- scenario: editor_edit ----------
+
+        /// <summary>
+        /// Editing. The first half drives the state API with no window at all: a wall is placed on
+        /// the ground, a second one snaps to it, both are selected, copied, turned and nudged, then
+        /// the whole session is undone and half of it redone. The second half opens the real window
+        /// and puts a ghost in hand with two pieces selected, for the screenshot.
+        /// </summary>
+        private static IEnumerator TestEditorEdit(Player player)
+        {
+            yield return new WaitForSeconds(1f);
+
+            PieceCatalog.Ensure();
+            var wall = PieceCatalog.Find("woodwall");
+            Check(PieceCatalog.Ready && wall != null, "the catalog is built and has woodwall");
+            if (wall == null)
+            {
+                yield break;
+            }
+
+            yield return EditWithoutUi(wall);
+            yield return EditInTheWindow(wall);
+        }
+
+        /// <summary>The store actions on their own, the way Tomrer's own tests drive them.</summary>
+        private static IEnumerator EditWithoutUi(PieceEntry wall)
+        {
+            var doc = BlueprintDocument.New("Edit test");
+            EditorState.Open(doc);
+            Check(EditorState.Document == doc && doc.Pieces.Count == 0 && EditorState.Mode == EditMode.Idle
+                && EditorState.SelectionCount == 0,
+                "the editor starts idle on an empty blueprint");
+
+            Check(EditorState.StartAdd(wall) && EditorState.Mode == EditMode.Place
+                && EditorState.Action == PlaceAction.Add && EditorState.Held == wall,
+                "a piece from the palette goes in hand");
+
+            var first = EditAim(Vector3.zero);
+            Check(first != null && EditorState.CommitPlacement(first), "the first wall dropped");
+            Check(doc.Pieces.Count == 1 && Vector3.Distance(doc.Pieces[0].Position, new Vector3(0f, 1f, 0f)) < 1e-4f,
+                $"one wall stands on the ground at {V4(doc.Pieces[0].Position)}, wanted (0,1,0)");
+            Check(EditorState.Mode == EditMode.Place, "adding stays in hand, so the next one comes straight after");
+            Check(EditorState.SelectionCount == 1, "the wall that was just dropped is selected");
+
+            var second = EditAim(new Vector3(1.9f, 0f, 0f));
+            Check(second != null && second.Snapped, "the second wall found the first wall's snap point");
+            Check(second != null && EditorState.CommitPlacement(second), "the second wall dropped");
+            Check(doc.Pieces.Count == 2 && Vector3.Distance(doc.Pieces[1].Position, new Vector3(2f, 1f, 0f)) < 1e-4f,
+                $"it snapped a whole wall over, to {V4(doc.Pieces[1].Position)}, wanted (2,1,0)");
+
+            EditorState.CancelMode();
+            Check(EditorState.Mode == EditMode.Idle && EditorState.Moving == null, "Esc empties the hand");
+
+            EditorState.SelectAll();
+            Check(EditorState.SelectionCount == 2, $"both walls are selected: {EditorState.SelectionCount}");
+
+            Check(EditorState.StartDuplicate() && EditorState.Action == PlaceAction.Duplicate
+                && EditorState.Moving != null && EditorState.Moving.Count == 2,
+                "the selection goes in hand as a copy");
+            var copies = EditAim(new Vector3(0f, 0f, 8f));
+            Check(copies != null && EditorState.CommitPlacement(copies), "the copies dropped");
+            Check(doc.Pieces.Count == 4, $"four pieces now: {doc.Pieces.Count}");
+            Check(EditorState.SelectionCount == 2 && EditorState.IsSelected(doc.Pieces[2].Id)
+                && EditorState.IsSelected(doc.Pieces[3].Id),
+                "the copies are what is selected, so the next action works on them");
+            Check(EditorState.Mode == EditMode.Place, "copying stays in hand too");
+            EditorState.CancelMode();
+
+            EditorState.RotateSelection(1);
+            var turned = EditorState.SelectedPieces();
+            Check(turned.Count == 2 && Mathf.Abs(Mathf.DeltaAngle(YawOf(turned[0].Rotation), Placer.RotateStep)) < 0.01f,
+                $"R turned the copies to {YawOf(turned[0].Rotation):0.##} degrees, wanted {Placer.RotateStep}");
+
+            var before = EditorState.SelectedPieces()[0].Position;
+            EditorState.Nudge(new Vector3(1f, 0f, 0f));
+            var after = EditorState.SelectedPieces()[0].Position;
+            Check(Vector3.Distance(after - before, new Vector3(1f, 0f, 0f)) < 1e-4f,
+                $"an arrow key moved it by {V4(after - before)}, wanted (1,0,0)");
+
+            Check(doc.UndoDepth == 5, $"the session made 5 undo steps: {doc.UndoDepth}");
+            for (var i = 0; i < 5; i++)
+            {
+                EditorState.Undo();
+            }
+
+            Check(doc.Pieces.Count == 0, $"five undos brought the blueprint back to empty: {doc.Pieces.Count} pieces");
+            Check(EditorState.SelectionCount == 0, "nothing is left selected either");
+
+            EditorState.Redo();
+            EditorState.Redo();
+            Check(doc.Pieces.Count == 2, $"two redos brought both walls back: {doc.Pieces.Count} pieces");
+
+            var was = doc.Pieces[0].Position;
+            Check(EditorState.CenterOrigin() && Vector3.Distance(doc.Pieces[0].Position, was) > 1e-4f,
+                $"centring the origin shifted the walls from {V4(was)} to {V4(doc.Pieces[0].Position)}");
+            Check(!EditorState.CenterOrigin(), "a second centring does nothing: the origin is already there");
+            EditorState.Undo();
+            Check(doc.Pieces.Count == 2 && Vector3.Distance(doc.Pieces[0].Position, was) < 1e-4f,
+                "undo put the walls back where they were");
+            EditorState.Close();
+            yield return null;
+        }
+
+        /// <summary>The window, with the ghost in hand and two pieces selected.</summary>
+        private static IEnumerator EditInTheWindow(PieceEntry wall)
+        {
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open, "the key opened the editor");
+
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            var document = EditorSession.Document;
+            Check(ViewportHost.Ready && document != null && document.Pieces.Count >= 2,
+                $"a kit stands in the pane after {waited:0.00} s: {(document != null ? document.Pieces.Count : 0)} pieces");
+            if (document == null || document.Pieces.Count < 2 || ViewportHost.Pieces == null)
+            {
+                yield break;
+            }
+
+            Check(ViewportHost.Pieces.Count == document.Pieces.Count,
+                $"the pane holds one copy per piece: {ViewportHost.Pieces.Count} of {document.Pieces.Count}");
+
+            var plain = SampleView("before editing");
+
+            EditorState.Select(new[] { document.Pieces[0].Id, document.Pieces[1].Id });
+            EditorState.StartAdd(wall);
+
+            // The aim follows the mouse, which the test cannot point. Give it a moment, then fall
+            // back to the free camera, where the aim is always the middle of the pane.
+            var tries = 0f;
+            while ((EditorState.Aimed == null || !ViewportHost.Ghost.Visible) && tries < 2f)
+            {
+                tries += Time.deltaTime;
+                if (tries > 0.6f && ViewportHost.Camera.Mode != CameraMode.Free)
+                {
+                    ViewportHost.SetMode(CameraMode.Free);
+                }
+
+                yield return null;
+            }
+
+            Check(EditorState.SelectionCount == 2, $"two pieces are selected: {EditorState.SelectionCount}");
+            Check(EditorState.Aimed != null, $"the aim found a spot at pane point {ViewportHost.AimAt}");
+            Check(ViewportHost.Ghost.PieceCount == 1 && ViewportHost.Ghost.Visible,
+                $"the ghost stands where a click would drop the wall ({ViewportHost.Ghost.RendererCount} parts)");
+            Check(ViewportHost.Boxes.BoxCount == 3,
+                $"three boxes: one per selected piece and one round the group ({ViewportHost.Boxes.BoxCount})");
+            Check(ViewportHost.Dots.Drawn > 0, $"snap dots drawn: {ViewportHost.Dots.Drawn}");
+            Check(PieceListPanel.Selection.Count == 2,
+                $"the blueprint's piece list shows the same selection: {PieceListPanel.Selection.Count}");
+
+            yield return null;
+            var edited = SampleView("with the ghost and the boxes");
+            Check(Difference(plain, edited) > 0.01f,
+                $"the ghost and the boxes changed the picture ({Difference(plain, edited) * 100f:0.0} % of the pixels)");
+            yield return Screenshot("editor-edit-1-ghost");
+
+            // And a click really builds: the piece lands in the document and stands in the pane.
+            var count = document.Pieces.Count;
+            Check(EditorState.CommitPlacement(EditorState.Aimed), "dropping the wall works");
+            yield return null;
+            yield return null;
+            Check(document.Pieces.Count == count + 1,
+                $"the blueprint grew by one: {document.Pieces.Count} pieces");
+            Check(ViewportHost.Pieces.Count == document.Pieces.Count,
+                $"the new wall stands in the pane too: {ViewportHost.Pieces.Count} copies");
+            yield return Screenshot("editor-edit-2-placed");
+
+            // And Ctrl+Z takes it back out again, copy and all.
+            EditorState.Undo();
+            yield return null;
+            yield return null;
+            Check(document.Pieces.Count == count && ViewportHost.Pieces.Count == count,
+                $"undo took it out of both: {document.Pieces.Count} pieces, {ViewportHost.Pieces.Count} copies");
+        }
+
+        /// <summary>One ray straight down on a spot, the way the mouse aims at the ground.</summary>
+        private static PlaceResult EditAim(Vector3 at)
+        {
+            EditorState.Aim(at + new Vector3(0f, 20f, 0f), Vector3.down, out var result);
+            return result;
+        }
+
+        private static float YawOf(Quaternion q)
+        {
+            var forward = q * Vector3.forward;
+            return Mathf.Atan2(forward.x, forward.z) * Mathf.Rad2Deg;
         }
 
         // ---------- scenario: editor_snap ----------
