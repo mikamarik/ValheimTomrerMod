@@ -18,8 +18,8 @@ namespace ValheimTomrer.Editor.Input
     /// table through a made-up pad (<see cref="PadReader.Fake"/>) with no controller at all.
     ///
     /// Circle is not read here. It goes through the one Esc ladder in <see cref="Bindings.Cancel"/>,
-    /// which already steps back the menu, the dialog, what is in hand, the free camera and the
-    /// selection, so the pad and Esc can never do two different things.
+    /// which already steps back the menu, the dialog, what is in hand, the mouse the pane took and
+    /// the selection, so the pad and Esc can never do two different things.
     /// </summary>
     internal static class PadBindings
     {
@@ -189,7 +189,7 @@ namespace ValheimTomrer.Editor.Input
                 }
             }
 
-            // 12. L3 and R3: the snap point while placing, else the camera and framing.
+            // 12. L3 and R3: the snap point while placing, else R3 frames the selection.
             var back = pad.Pressed(PadButton.L3);
             var next = pad.Pressed(PadButton.R3);
             if (back || next)
@@ -198,13 +198,13 @@ namespace ValheimTomrer.Editor.Input
                 {
                     EditorState.SetManualSnap(EditorState.Manual + (back ? -1 : 1));
                 }
-                else if (back)
+                else if (next)
                 {
-                    ViewportHost.ToggleCamera();
+                    ViewportHost.Frame();
                 }
                 else
                 {
-                    ViewportHost.Frame();
+                    // L3 with an empty hand does nothing yet. Phase 2 gives it panel focus.
                 }
             }
 
@@ -372,15 +372,14 @@ namespace ValheimTomrer.Editor.Input
             {
                 new HelpRow(g.Ls, "Fly forward (where the camera looks), back, left, right"),
                 new HelpRow($"{l1} + {g.Ls}", "Fly 3 times faster, like Shift on the keyboard"),
-                new HelpRow(g.Rs, "Look around (free camera), or circle the point in front (orbit camera)"),
+                new HelpRow(g.Rs, "Look around"),
                 new HelpRow(g.Dpad + " up, down", "Fly up, down"),
                 new HelpRow(r2, "Place (while placing), else select the piece in the middle of the view"),
                 new HelpRow($"{l1} + {r2}", "Add that piece to the selection, or take it out"),
                 new HelpRow($"{l2} + {g.Rs} left, right", "Turn 22.5 degrees: the piece being placed, else the selection"),
                 new HelpRow($"{l1} (hold)", "No snapping while held, like in the game"),
                 new HelpRow($"{l3}, {r3}",
-                    $"While placing: the snap point, like Q and E. Else: {l3} switches orbit or free camera, "
-                    + $"{r3} looks at the selection."),
+                    $"While placing: the snap point, like Q and E. Else: {r3} looks at the selection."),
                 new HelpRow(cross,
                     $"Pieces menu: {g.Dpad} to choose, {l1} {r1} for the tab, {cross} to place, {circle} to close"),
                 new HelpRow(circle, "Stop placing, or clear the selection, or close the editor"),

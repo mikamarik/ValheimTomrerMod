@@ -1,30 +1,18 @@
-using System;
 using UnityEngine;
 
 namespace ValheimTomrer.Editor.View
 {
-    internal enum CameraMode
-    {
-        /// <summary>Circles a point in front of the camera. The cursor stays free.</summary>
-        Orbit,
-
-        /// <summary>First person, like a flying player. The cursor is held and every move turns the view.</summary>
-        Free,
-    }
-
     /// <summary>
-    /// Where the pane looks from. Same two modes and the same numbers as the Tomrer editor
-    /// (src/view/CameraControl.ts), so both editors feel the same.
+    /// Where the pane looks from. One camera: it always flies free, like a player in fly mode.
+    /// Which region has the mouse is not a camera setting, it is <see cref="Ui.ViewportHost.Captured"/>.
     ///
     /// Everything here is in the editor scene's own space: the camera hangs under the scene root,
     /// so y = 0 is the grid and the ground, 8000 m under the player's world.
     /// </summary>
     internal sealed class EditorCamera
     {
-        private const float OrbitPitchMin = -89.5f;   // orbit keeps the camera above the point it circles
-        private const float OrbitPitchMax = -0.9f;
-        private const float FreePitchMin = -89f;      // never quite straight up or down
-        private const float FreePitchMax = 89f;
+        private const float PitchMin = -89f;          // never quite straight up or down
+        private const float PitchMax = 89f;
         private const float MinEye = 0.1f;            // keys and sticks stop this high above the ground
         private const float FlySpeed = 5f;            // m/s, Shift x3
         private const float FlyBoost = 3f;
@@ -32,27 +20,20 @@ namespace ValheimTomrer.Editor.View
         private const float PadTurn = 150f;           // degrees a second
         private const float LookStep = 0.14f;         // degrees per mouse pixel
         private const float LookJump = 300f;          // pixels in one move: more is a jump, not a hand
-        private const float DragSpeed = 0.6f;         // free turning by a drag, next to orbiting
+        private const float DragSpeed = 0.6f;         // a drag turns slower than the same pixels of mouse look
 
         private readonly PreviewCamera _camera;
-        private readonly Func<Vector2, float?> _surface;
 
         private Vector3 _pos = new Vector3(8f, 6f, 12f);
         private float _yaw;      // 0 looks along +Z, turning right makes it bigger
         private float _pitch;    // up is positive
         private float _dist = 10f;
 
-        public EditorCamera(PreviewCamera camera, Func<Vector2, float?> surface)
+        public EditorCamera(PreviewCamera camera)
         {
             _camera = camera;
-            _surface = surface;
             LookFrom(_pos, Vector3.zero);
         }
-
-        public CameraMode Mode { get; private set; } = CameraMode.Orbit;
-
-        /// <summary>Free mode holds the cursor, so the mouse can turn the view.</summary>
-        public bool WantsCursorLock => Mode == CameraMode.Free;
 
         /// <summary>Where the camera is, in the editor scene's space.</summary>
         public Vector3 Position => _pos;
@@ -61,7 +42,7 @@ namespace ValheimTomrer.Editor.View
 
         public float Yaw => _yaw;
 
-        /// <summary>How far ahead the orbit point is.</summary>
+        /// <summary>How far ahead the point the camera turns, pans and zooms around sits.</summary>
         public float Distance => _dist;
 
         public Vector3 Forward => Quaternion.Euler(-_pitch, _yaw, 0f) * Vector3.forward;
@@ -71,33 +52,10 @@ namespace ValheimTomrer.Editor.View
 
         public Vector3 Up => Vector3.Cross(Forward, Right);
 
-        /// <summary>The point orbiting circles around.</summary>
+        /// <summary>The point the camera looks at, <see cref="Distance"/> straight ahead.</summary>
         public Vector3 Pivot => _pos + Forward * _dist;
 
-        public void SetMode(CameraMode mode)
-        {
-            if (mode == Mode)
-            {
-                return;
-            }
-
-            Mode = mode;
-
-            // Back to orbit: the camera circles whatever the middle of the view shows.
-            if (mode == CameraMode.Orbit)
-            {
-                var depth = _surface?.Invoke(new Vector2(0.5f, 0.5f));
-                if (depth.HasValue && depth.Value > 0.3f && depth.Value < 200f)
-                {
-                    _dist = depth.Value;
-                }
-
-                _pitch = Limit(_pitch, 0f, OrbitPitchMin, OrbitPitchMax);
-                Apply();
-            }
-        }
-
-        /// <summary>Puts the camera at <paramref name="from"/>, looking at <paramref name="at"/>, which becomes the orbit point.</summary>
+        /// <summary>Puts the camera at <paramref name="from"/>, looking at <paramref name="at"/>, which becomes the point it turns around.</summary>
         public void LookFrom(Vector3 from, Vector3 at)
         {
             _pos = from;
@@ -120,7 +78,7 @@ namespace ValheimTomrer.Editor.View
             LookFrom(center + direction * distance, center);
         }
 
-        /// <summary>Moves the camera (and the orbit point with it). Keys and sticks stop just above the ground.</summary>
+        /// <summary>Moves the camera (and the point in front with it). Keys and sticks stop just above the ground.</summary>
         public void Move(Vector3 by)
         {
             if (by.sqrMagnitude == 0f)
@@ -138,49 +96,19 @@ namespace ValheimTomrer.Editor.View
             Apply();
         }
 
-        /// <summary>Free turning, in place. Right and up are positive, in degrees.</summary>
+        /// <summary>Turns in place. Right and up are positive, in degrees.</summary>
         public void Turn(float right, float up)
         {
             _yaw += right;
-            _pitch = Limit(_pitch, up, FreePitchMin, FreePitchMax);
+            _pitch = Limit(_pitch, up, PitchMin, PitchMax);
             Apply();
         }
 
-        /// <summary>Circles the orbit point. Right and up turn the view the same way as <see cref="Turn"/>.</summary>
-        public void Orbit(float right, float up)
-        {
-            var pivot = Pivot;
-            _yaw += right;
-            _pitch = Limit(_pitch, up, OrbitPitchMin, OrbitPitchMax);
-            _pos = pivot - Forward * _dist;
-            Apply();
-        }
-
-        /// <summary>Turns by the mode: orbit or free.</summary>
-        public void Rotate(float right, float up)
-        {
-            if (Mode == CameraMode.Orbit)
-            {
-                Orbit(right, up);
-            }
-            else
-            {
-                Turn(right, up);
-            }
-        }
-
-        /// <summary>A mouse drag across the pane. A drag over its whole height is a full circle.</summary>
+        /// <summary>A mouse drag across the pane turns it. A drag over its whole height is a full circle.</summary>
         public void Drag(Vector2 pixels, float viewHeight)
         {
             var k = 360f / Mathf.Max(1f, viewHeight);
-            if (Mode == CameraMode.Orbit)
-            {
-                Orbit(pixels.x * k, pixels.y * k);
-            }
-            else
-            {
-                Turn(pixels.x * k * DragSpeed, pixels.y * k * DragSpeed);
-            }
+            Turn(pixels.x * k * DragSpeed, pixels.y * k * DragSpeed);
         }
 
         /// <summary>First person: every mouse move turns the view. A jump bigger than a hand is clipped.</summary>
@@ -205,8 +133,11 @@ namespace ValheimTomrer.Editor.View
         }
 
         /// <summary>
-        /// Wheel zoom: 5% of the way per notch, toward the cursor while orbiting and toward the
-        /// middle of the view in free mode, where there is no cursor to aim with.
+        /// Wheel zoom: 5% of the way per notch, toward the pane point the caller gives. The caller
+        /// aims at the cursor, or at the middle of the view once the pane has the mouse.
+        ///
+        /// <see cref="Distance"/> follows the wheel, because <see cref="Pivot"/>, the pan depth and
+        /// the pad's framing all read it.
         /// </summary>
         public void Zoom(float delta, Vector2 viewport)
         {
@@ -216,15 +147,9 @@ namespace ValheimTomrer.Editor.View
             }
 
             var scale = Mathf.Pow(0.95f, Mathf.Abs(delta) * 0.01f);
-            var at = Mode == CameraMode.Free ? new Vector2(0.5f, 0.5f) : viewport;
-            var depth = Mode == CameraMode.Free ? _surface?.Invoke(at) ?? _dist : _dist;
-            var next = delta < 0f ? depth * scale : depth / scale;
-            _pos += LocalDirection(at) * (depth - next);
-            if (Mode == CameraMode.Orbit)
-            {
-                _dist = next;
-            }
-
+            var next = delta < 0f ? _dist * scale : _dist / scale;
+            _pos += LocalDirection(viewport) * (_dist - next);
+            _dist = next;
             Apply();
         }
 
@@ -248,7 +173,7 @@ namespace ValheimTomrer.Editor.View
             }
 
             var speed = PadTurn * (EditorConfig.PadLookSensitivity != null ? EditorConfig.PadLookSensitivity.Value : 1f);
-            Rotate(stick.x * speed * dt, stick.y * speed * dt);
+            Turn(stick.x * speed * dt, stick.y * speed * dt);
         }
 
         private void Fly(Vector3 wish, float speed, float dt)

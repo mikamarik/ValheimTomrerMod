@@ -14,7 +14,7 @@ namespace ValheimTomrer.Editor.Ui
 
         public static bool Open;
 
-        /// <summary>The free camera holds the cursor, so the mouse turns the view instead of pointing.</summary>
+        /// <summary>The 3D pane has the mouse, so it turns the view instead of pointing.</summary>
         public static bool LockCursor;
 
         public static bool Blocking => Open || Time.frameCount - _closedFrame <= 1;

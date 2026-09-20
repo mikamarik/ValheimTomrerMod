@@ -365,7 +365,6 @@ namespace ValheimTomrer.Dev
             Default(EditorConfig.ShowAllPieces);
             Default(EditorConfig.SnapDots);
             Default(EditorConfig.Boxes);
-            Default(EditorConfig.StartCamera);
             Default(EditorConfig.LookSensitivity);
             Default(EditorConfig.PadLookSensitivity);
         }
@@ -1468,11 +1467,11 @@ namespace ValheimTomrer.Dev
                 $"the middle of the pane picks a piece: {(picked ? hit.collider.transform.root.name + " at " + hit.distance.ToString("0.0") + " m" : "nothing")}");
             yield return Screenshot("editor-view-1-framed");
 
-            // Orbit a quarter turn and come closer.
+            // A quarter turn, then six wheel notches closer.
             var camera = ViewportHost.Camera;
             var before = camera.Position;
             var distance = camera.Distance;
-            camera.Orbit(90f, -8f);
+            camera.Turn(90f, -8f);
             for (var notch = 0; notch < 6; notch++)
             {
                 camera.Zoom(-100f, new Vector2(0.5f, 0.5f));
@@ -1481,17 +1480,18 @@ namespace ValheimTomrer.Dev
             yield return null;
             yield return null;
             Check(camera.Distance < distance * 0.9f, $"the wheel came closer: {distance:0.0} m -> {camera.Distance:0.0} m");
-            Check(Vector3.Distance(camera.Position, before) > 1f, "orbiting moved the camera");
-            var orbited = SampleView("orbited");
-            Check(Difference(framed, orbited) > 0.05f,
-                $"the view changed after orbiting ({Difference(framed, orbited) * 100f:0} % of the pixels)");
-            yield return Screenshot("editor-view-2-orbited");
+            Check(Vector3.Distance(camera.Position, before) > 1f,
+                $"turning and zooming moved the camera {Vector3.Distance(camera.Position, before):0.0} m");
+            var turned = SampleView("turned");
+            Check(Difference(framed, turned) > 0.05f,
+                $"the view changed after turning ({Difference(framed, turned) * 100f:0} % of the pixels)");
+            yield return Screenshot("editor-view-2-turned");
 
-            // Free camera: the cursor is held, the mouse turns the view, W flies forward.
-            ViewportHost.SetMode(CameraMode.Free);
+            // A click on the pane takes the mouse: the cursor is held, the mouse turns the view.
+            ViewportHost.Capture();
             ViewportHost.Frame();
             yield return new WaitForSeconds(0.3f);
-            Check(camera.Mode == CameraMode.Free, "the free camera is on");
+            Check(ViewportHost.Captured, "a click on the pane took the mouse");
             Check(Cursor.lockState == CursorLockMode.Locked, $"the cursor is held (is {Cursor.lockState})");
 
             var yaw = camera.Yaw;
@@ -1505,15 +1505,15 @@ namespace ValheimTomrer.Dev
             Check(flew > 1f, $"W flew the camera forward {flew:0.0} m");
             yield return null;
             var flown = SampleView("flown");
-            Check(Difference(orbited, flown) > 0.05f,
-                $"the view changed after flying ({Difference(orbited, flown) * 100f:0} % of the pixels)");
-            yield return Screenshot("editor-view-3-free");
+            Check(Difference(turned, flown) > 0.05f,
+                $"the view changed after flying ({Difference(turned, flown) * 100f:0} % of the pixels)");
+            yield return Screenshot("editor-view-3-captured");
 
             // Esc gives the cursor back without closing; the second one closes.
             yield return PressKey(UnityEngine.InputSystem.Key.Escape);
             yield return new WaitForSeconds(0.4f);
-            Check(ModUi.Open, "Esc in free camera keeps the window open");
-            Check(camera.Mode == CameraMode.Orbit, "Esc went back to the orbit camera");
+            Check(ModUi.Open, "Esc on the captured pane keeps the window open");
+            Check(!ViewportHost.Captured, "Esc gave the pane back");
             Check(Cursor.lockState == CursorLockMode.None, $"Esc gave the cursor back (is {Cursor.lockState})");
 
             yield return PressKey(UnityEngine.InputSystem.Key.Escape);
@@ -2478,15 +2478,15 @@ namespace ValheimTomrer.Dev
             EditorState.Select(new[] { document.Pieces[0].Id, document.Pieces[1].Id });
             EditorState.StartAdd(wall);
 
-            // The aim follows the mouse, which the test cannot point. Give it a moment, then fall
-            // back to the free camera, where the aim is always the middle of the pane.
+            // The aim follows the mouse, which the test cannot point. Give it a moment, then take
+            // the pane, where the aim is always the middle of the picture.
             var tries = 0f;
             while ((EditorState.Aimed == null || !ViewportHost.Ghost.Visible) && tries < 2f)
             {
                 tries += Time.deltaTime;
-                if (tries > 0.6f && ViewportHost.Camera.Mode != CameraMode.Free)
+                if (tries > 0.6f && !ViewportHost.Captured)
                 {
-                    ViewportHost.SetMode(CameraMode.Free);
+                    ViewportHost.Capture();
                 }
 
                 yield return null;
@@ -3016,7 +3016,6 @@ namespace ValheimTomrer.Dev
                 yield break;
             }
 
-            ViewportHost.SetMode(CameraMode.Orbit);
             yield return CameraKeys();
             yield return EditKeys(document, wall);
             yield return SaveKeys(document);
@@ -3030,17 +3029,18 @@ namespace ValheimTomrer.Dev
             Check(!ModUi.Open, "the editor closed");
         }
 
-        /// <summary>B, W A S D, Space, Ctrl, Shift and F.</summary>
+        /// <summary>Click to take the pane, Esc to give it back, W A S D, Space, Ctrl, Shift and F.</summary>
         private static IEnumerator CameraKeys()
         {
             var camera = ViewportHost.Camera;
 
-            var mode = camera.Mode;
-            Bindings.Press(KeyCode.B, KeyMods.None);
-            var flipped = camera.Mode;
-            Bindings.Press(KeyCode.B, KeyMods.None);
-            Check(flipped != mode && camera.Mode == mode,
-                $"B switches the camera: {mode} -> {flipped} -> {camera.Mode}");
+            Check(!ViewportHost.Captured, "the window opens with the mouse on the panels");
+            ViewportHost.Capture();
+            yield return null;
+            var took = ViewportHost.Captured && ModUi.LockCursor;
+            var gave = Bindings.Cancel();
+            Check(took && gave && !ViewportHost.Captured && !ModUi.LockCursor,
+                "a click takes the pane and Esc gives it back");
 
             var forward = Travel(KeyCode.W, KeyMods.None, 0.2f);
             Check(forward.magnitude > 0.5f && Vector3.Dot(forward.normalized, camera.Forward) > 0.8f,
@@ -3284,7 +3284,7 @@ namespace ValheimTomrer.Dev
 
             // Snap dots: only the dots go, snapping itself stays on.
             EditorState.StartAdd(wall);
-            ViewportHost.SetMode(CameraMode.Free);
+            ViewportHost.Capture();
             var tries = 0f;
             while (EditorState.Aimed == null && tries < 2f)
             {
@@ -3300,7 +3300,7 @@ namespace ValheimTomrer.Dev
                 $"Snap dots switches them off: {drawn} -> {ViewportHost.Dots.Drawn}");
             EditorCommands.ToggleSnapDots();
             EditorState.CancelMode();
-            ViewportHost.SetMode(CameraMode.Orbit);
+            ViewportHost.Release();
             yield return null;
 
             // Save says what is wrong and still saves: an empty blueprint is one error.
@@ -3529,7 +3529,6 @@ namespace ValheimTomrer.Dev
                 + $"{(document != null ? document.Pieces.Count : 0)} pieces");
             if (document != null && document.Pieces.Count >= 3)
             {
-                ViewportHost.SetMode(CameraMode.Orbit);
                 _pad = new PadState();
                 PadReader.Fake = _pad;
                 yield return null;
@@ -3734,7 +3733,6 @@ namespace ValheimTomrer.Dev
         private static IEnumerator PadCamera()
         {
             var camera = ViewportHost.Camera;
-            ViewportHost.SetMode(CameraMode.Orbit);
 
             var yaw = camera.Yaw;
             var from = Time.unscaledTime;
@@ -3799,7 +3797,6 @@ namespace ValheimTomrer.Dev
             Check(off && EditorState.Snapping, "L1 held turns snapping off, letting go turns it back on");
 
             // Open ground, well away from the blueprint, so a wall can land with nothing in the way.
-            ViewportHost.SetMode(CameraMode.Orbit);
             ViewportHost.Camera.LookFrom(new Vector3(30f, 9f, 24f), new Vector3(30f, 0f, 30f));
             EditorState.StartAdd(wall);
             var waited = 0f;
@@ -3868,14 +3865,6 @@ namespace ValheimTomrer.Dev
                 EditorState.Undo();
             }
 
-            var mode = ViewportHost.Camera.Mode;
-            yield return Tap(PadButton.L3);
-            var flipped = ViewportHost.Camera.Mode;
-            yield return Tap(PadButton.L3);
-            Check(flipped != mode && ViewportHost.Camera.Mode == mode,
-                $"with an empty hand L3 switches the camera: {mode} -> {flipped} -> {ViewportHost.Camera.Mode}");
-
-            ViewportHost.SetMode(CameraMode.Orbit);
             EditorState.Select(document.Pieces[0].Id);
             ViewportHost.Camera.LookFrom(new Vector3(40f, 20f, 40f), Vector3.zero);
             yield return Tap(PadButton.R3);
@@ -3888,7 +3877,6 @@ namespace ValheimTomrer.Dev
         /// <summary>Rows 7, 9, 10 and 11: what the crosshair is on.</summary>
         private static IEnumerator PadAimed(BlueprintDocument document)
         {
-            ViewportHost.SetMode(CameraMode.Orbit);
             DocPiece aimed = null;
             foreach (var piece in document.Pieces)
             {
@@ -3997,7 +3985,6 @@ namespace ValheimTomrer.Dev
         /// <summary>A real mouse move over the pane takes the aim back from the crosshair.</summary>
         private static IEnumerator PadMouse()
         {
-            ViewportHost.SetMode(CameraMode.Orbit);
             yield return null;
             var camera = ViewportHost.Camera;
             var ahead = ViewportHost.Scene.Root.TransformPoint(camera.Position + (camera.Forward * 5f));

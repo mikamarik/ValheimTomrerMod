@@ -52,7 +52,7 @@ namespace ValheimTomrer.Editor.Input
             KeyCode.W, KeyCode.A, KeyCode.S, KeyCode.D, KeyCode.Space,
             KeyCode.LeftControl, KeyCode.RightControl,
             KeyCode.Z, KeyCode.Y, KeyCode.G, KeyCode.R, KeyCode.Q, KeyCode.E,
-            KeyCode.F, KeyCode.B, KeyCode.H, KeyCode.Slash, KeyCode.Question,
+            KeyCode.F, KeyCode.H, KeyCode.Slash, KeyCode.Question,
             KeyCode.UpArrow, KeyCode.DownArrow, KeyCode.LeftArrow, KeyCode.RightArrow,
             KeyCode.PageUp, KeyCode.PageDown, KeyCode.Delete, KeyCode.Backspace,
         };
@@ -261,9 +261,9 @@ namespace ValheimTomrer.Editor.Input
         }
 
         /// <summary>
-        /// Esc (and the pad's circle), one step back at a time: a dialog, the piece menu, then
-        /// what is in hand, then the free camera, then the selection. False means there was
-        /// nothing left, so the window closes.
+        /// Esc (and the pad's circle), one step back at a time: a dialog, the piece menu, what is
+        /// in hand, the mouse the pane took, then the selection. False means there was nothing
+        /// left, so the window closes.
         /// </summary>
         public static bool Cancel()
         {
@@ -283,10 +283,12 @@ namespace ValheimTomrer.Editor.Input
                 return true;
             }
 
-            if (ViewportHost.LeaveFreeLook())
+            if (ViewportHost.Release())
             {
                 return true;
             }
+
+            // Phase 2 puts leaving panel focus here, between the pane and the selection.
 
             if (EditorState.SelectionCount > 0)
             {
@@ -380,9 +382,6 @@ namespace ValheimTomrer.Editor.Input
                     return true;
                 case KeyCode.F:
                     ViewportHost.Frame();
-                    return true;
-                case KeyCode.B:
-                    ViewportHost.ToggleCamera();
                     return true;
                 case KeyCode.R:
                     var direction = Shift ? -1 : 1;
@@ -495,14 +494,14 @@ namespace ValheimTomrer.Editor.Input
         /// <summary>The mouse and keyboard half of the help, in the same order as Tomrer's.</summary>
         public static readonly HelpRow[] Keys =
         {
-            new HelpRow("B", "Orbit camera or free camera. Free looks around with the mouse, like flying in the game."),
+            new HelpRow("Click the view", "The pane takes the mouse: it looks around, like flying in the game. Esc gives it back."),
             new HelpRow("W, A, S, D", "Fly forward (where the camera looks), back, left, right"),
             new HelpRow("Space, Ctrl", "Fly up, down. Hold Shift to fly 3 times faster."),
-            new HelpRow("Right drag", "Turn around the point in front (orbit), or look around (free)"),
+            new HelpRow("Right drag", "Look around, without taking the mouse"),
             new HelpRow("Middle drag, or Shift + right drag", "Pan"),
             new HelpRow("Wheel", "Zoom toward the cursor. While placing it turns the piece 22.5 degrees."),
             new HelpRow("Click", "Select a piece, or drop what is in hand. Shift+click adds or removes."),
-            new HelpRow("Drag on the view", "Select everything in the box (orbit camera)"),
+            new HelpRow("Drag on the view", "Select everything in the box. Only before the pane has the mouse."),
             new HelpRow("Ctrl+A", "Select all"),
             new HelpRow("Pieces tab, click a piece", "Place it: it follows the mouse, click to place, Esc to stop"),
             new HelpRow("G", "Move the selection: it follows the mouse, click to drop, Esc to cancel"),
@@ -517,7 +516,7 @@ namespace ValheimTomrer.Editor.Input
             new HelpRow("F", "Look at the selection, or at everything"),
             new HelpRow("Ctrl+S", "Save"),
             new HelpRow("H, ?", "This help"),
-            new HelpRow("Esc", "Stop placing, else clear the selection, else close the editor"),
+            new HelpRow("Esc", "Stop placing, else give the mouse back, else clear the selection, else close the editor"),
         };
 
         /// <summary>The controller half, in the wording of the pad in hand (<see cref="PadBindings"/>).</summary>

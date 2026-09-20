@@ -15,9 +15,12 @@ namespace ValheimTomrer.Editor.Ui
 {
     /// <summary>
     /// The 3D pane in the middle of the window: a RawImage showing what the preview camera draws,
-    /// the camera-mode buttons, the crosshair and the text over the picture, plus the once-a-frame
-    /// work behind it (keep the model and the document in step, aim, draw the ghost, the snap dots
-    /// and the selection boxes, read input, render).
+    /// the crosshair and the text over the picture, plus the once-a-frame work behind it (keep the
+    /// model and the document in step, aim, draw the ghost, the snap dots and the selection boxes,
+    /// read input, render).
+    ///
+    /// <see cref="Captured"/> says who has the mouse. The window opens with the mouse on the
+    /// panels; a click on the picture gives it to the pane, and Esc gives it back.
     ///
     /// The scene, the camera and the texture live only while the editor is open. Closing it
     /// destroys all three.
@@ -25,8 +28,6 @@ namespace ValheimTomrer.Editor.Ui
     internal static class ViewportHost
     {
         private const float Inset = 6f;          // lets the sunken frame show around the picture
-        private const float ButtonWidth = 74f;
-        private const float ButtonHeight = 26f;
         private const float BoxSelectThreshold = 4f;
         private const float MessageSeconds = 6f;
 
@@ -36,8 +37,6 @@ namespace ValheimTomrer.Editor.Ui
         private static RectTransform _host;
         private static RawImage _image;
         private static GameObject _crosshair;
-        private static TextMeshProUGUI _orbitLabel;
-        private static TextMeshProUGUI _freeLabel;
         private static TextMeshProUGUI _hint;
         private static TextMeshProUGUI _placeLine;
         private static TextMeshProUGUI _stateLine;
@@ -107,6 +106,39 @@ namespace ValheimTomrer.Editor.Ui
         /// </summary>
         public static bool PadAim { get; private set; }
 
+        /// <summary>
+        /// True while the pane has the mouse: the cursor is held, the mouse turns the view and the
+        /// crosshair aims. A click on the picture takes it, Esc gives it back. It is not a camera
+        /// setting, the camera always flies free.
+        /// </summary>
+        public static bool Captured { get; private set; }
+
+        /// <summary>A click on the picture: the pane takes the mouse, and the crosshair aims.</summary>
+        public static void Capture()
+        {
+            if (_camera == null)
+            {
+                return;
+            }
+
+            Captured = true;
+            ModUi.LockCursor = true;
+            GiveAimBack();
+        }
+
+        /// <summary>Esc: the cursor goes back to the window. False means the pane did not have it.</summary>
+        public static bool Release()
+        {
+            if (!Captured)
+            {
+                return false;
+            }
+
+            Captured = false;
+            ModUi.LockCursor = false;
+            return true;
+        }
+
         /// <summary>The pad woke: the crosshair takes the aim and the UI lets go of its button.</summary>
         public static void TakeAim()
         {
@@ -126,8 +158,9 @@ namespace ValheimTomrer.Editor.Ui
         /// </summary>
         public static void MouseMoved(Vector2 screen)
         {
-            if (_raycast == null || _camera == null || _camera.Mode == CameraMode.Free)
+            if (_raycast == null || Captured)
             {
+                // The pane has the mouse: the cursor is held, so there is no real move to read.
                 return;
             }
 
@@ -180,7 +213,7 @@ namespace ValheimTomrer.Editor.Ui
             _scene = new EditorScene(EditorConfig.Layer);
             _preview = new PreviewCamera(_scene.Root, EditorConfig.Layer);
             _raycast = new ViewportRaycast(_preview, _image.rectTransform, _scene);
-            _camera = new EditorCamera(_preview, _raycast.SurfaceDistance);
+            _camera = new EditorCamera(_preview);
             _ghost = new GhostRenderer(_scene.Root, EditorConfig.Layer);
             _dots = new SnapDots(_scene.Root, EditorConfig.Layer);
             _boxes = new SelectionBoxes(_scene.Root, EditorConfig.Layer);
@@ -202,7 +235,7 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             Fit();
-            SetMode(EditorConfig.StartCamera != null ? EditorConfig.StartCamera.Value : CameraMode.Orbit);
+            Release();   // the window opens with the mouse on the panels, not trapped in the pane
             ValheimTomrerPlugin.Log.LogInfo(blueprint != null
                 ? $"editor view opened on '{blueprint.Name}' ({_model.Total} pieces)"
                 : "editor view opened on an empty blueprint");
@@ -221,10 +254,10 @@ namespace ValheimTomrer.Editor.Ui
             Bindings.Tick();
             PadBindings.Tick();
             ReadInput();
-            ModUi.LockCursor = _camera.WantsCursorLock;
+            ModUi.LockCursor = Captured;
             if (_crosshair != null)
             {
-                _crosshair.SetActive(_camera.Mode == CameraMode.Free || PadAim);
+                _crosshair.SetActive(Captured || PadAim);
             }
 
             UpdateModel();
@@ -270,49 +303,6 @@ namespace ValheimTomrer.Editor.Ui
             _camera.Frame(EditorState.BoxOf(pieces) ?? new Bounds(Vector3.zero, Vector3.one * 4f));
         }
 
-        public static void SetMode(CameraMode mode)
-        {
-            if (_camera == null)
-            {
-                return;
-            }
-
-            _camera.SetMode(mode);
-            ModUi.LockCursor = _camera.WantsCursorLock;
-            if (_orbitLabel != null)
-            {
-                _orbitLabel.color = mode == CameraMode.Orbit ? UiTheme.Accent : UiTheme.Text;
-                _freeLabel.color = mode == CameraMode.Free ? UiTheme.Accent : UiTheme.Text;
-            }
-        }
-
-        /// <summary>B: orbit becomes free and free becomes orbit.</summary>
-        public static void ToggleCamera()
-        {
-            if (_camera == null)
-            {
-                return;
-            }
-
-            var free = _camera.Mode == CameraMode.Orbit;
-            SetMode(free ? CameraMode.Free : CameraMode.Orbit);
-            Toasts.Info(free
-                ? "Free camera: the mouse looks around, W A S D fly. Esc gives the cursor back."
-                : "Orbit camera: the cursor is back, and a right drag circles the point in front.");
-        }
-
-        /// <summary>Esc in free mode gives the cursor back instead of closing the window.</summary>
-        public static bool LeaveFreeLook()
-        {
-            if (_camera == null || _camera.Mode != CameraMode.Free)
-            {
-                return false;
-            }
-
-            SetMode(CameraMode.Orbit);
-            return true;
-        }
-
         public static void Close()
         {
             ModUi.LockCursor = false;
@@ -352,6 +342,7 @@ namespace ValheimTomrer.Editor.Ui
             _boxSignature = -1;
             _aimPiece = -1;
             _boxSelecting = false;
+            Captured = false;
             PadAim = false;
             _hasLastMouse = false;
             _fill = null;
@@ -540,7 +531,7 @@ namespace ValheimTomrer.Editor.Ui
             if (_hint != null)
             {
                 _hint.gameObject.SetActive(!placing);
-                _hint.text = PadAim ? PadHint() : MouseHint;
+                _hint.text = PadAim ? PadHint() : Captured ? CapturedHint : MouseHint;
             }
 
             if (_placeLine != null)
@@ -561,7 +552,7 @@ namespace ValheimTomrer.Editor.Ui
                 var entry = piece != null ? Catalog.PieceCatalog.Find(piece.PrefabName) : null;
                 _aimName.text = piece == null ? "" : entry != null ? entry.DisplayName : piece.PrefabName;
                 _aimName.rectTransform.anchoredPosition =
-                    new Vector2(0f, _camera.Mode == CameraMode.Free || PadAim ? -18f : -80f);
+                    new Vector2(0f, Captured || PadAim ? -18f : -80f);
             }
 
             if (_fill == null)
@@ -570,10 +561,15 @@ namespace ValheimTomrer.Editor.Ui
             }
         }
 
-        /// <summary>The line along the bottom of the pane, in the words of whatever is in hand.</summary>
+        /// <summary>The line along the bottom of the pane, before the pane has the mouse.</summary>
         private const string MouseHint =
-            "Pick a piece on the left to place it.   Click to select, shift adds, drag a box to select many."
-            + "   G moves, Ctrl+D copies, R turns, arrows nudge, Del removes.";
+            "Click the view to look around with the mouse.   Drag a box to select many pieces."
+            + "   Pick a piece on the left to place it.";
+
+        /// <summary>And once it has it.</summary>
+        private const string CapturedHint =
+            "The mouse looks around, W A S D fly, the wheel zooms.   Click to select a piece, or to drop "
+            + "what is in hand.   G moves, Ctrl+D copies, R turns, Del removes.   Esc gives the cursor back.";
 
         private static string PadHint()
         {
@@ -673,8 +669,8 @@ namespace ValheimTomrer.Editor.Ui
         }
 
         /// <summary>
-        /// The free camera's mouse. The keys are in <see cref="Bindings"/> and the pad is in
-        /// <see cref="PadBindings"/>, both already run this frame.
+        /// The mouse, while the pane has it. The keys are in <see cref="Bindings"/> and the pad is
+        /// in <see cref="PadBindings"/>, both already run this frame.
         /// </summary>
         private static void ReadInput()
         {
@@ -683,8 +679,8 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
-            // First person: the cursor is held, so there are no drag events left to read.
-            if (_camera.Mode == CameraMode.Free && Mouse.current != null)
+            // The cursor is held, so there are no drag events left to read.
+            if (Captured && Mouse.current != null)
             {
                 _camera.MouseLook(Mouse.current.delta.ReadValue());
             }
@@ -712,8 +708,8 @@ namespace ValheimTomrer.Editor.Ui
 
         private static Vector2 AimPoint()
         {
-            // The crosshair aims in free look and while the controller is in charge.
-            if (_camera.Mode == CameraMode.Free || PadAim)
+            // The crosshair aims once the pane has the mouse, and while the controller is in charge.
+            if (Captured || PadAim)
             {
                 return new Vector2(0.5f, 0.5f);
             }
@@ -762,6 +758,13 @@ namespace ValheimTomrer.Editor.Ui
             if (_boxSelecting)
             {
                 _boxSelecting = false;
+                return;
+            }
+
+            // The first click hands the mouse to the pane. After that a click selects or places.
+            if (!Captured)
+            {
+                Capture();
                 return;
             }
 
@@ -829,9 +832,9 @@ namespace ValheimTomrer.Editor.Ui
 
         private static void OnDragStart(PointerEventData data)
         {
-            // Orbit pans around its orbit point; free grabs whatever is under the mouse.
+            // Pan grabs whatever is under the cursor, and the point in front when nothing is.
             var depth = _camera != null ? _camera.Distance : 10f;
-            if (_camera != null && _camera.Mode == CameraMode.Free && _raycast.ScreenToViewport(data.position, out var at))
+            if (_raycast != null && _raycast.ScreenToViewport(data.position, out var at))
             {
                 depth = _raycast.SurfaceDistance(at) ?? depth;
             }
@@ -849,7 +852,7 @@ namespace ValheimTomrer.Editor.Ui
             // Left drag is the selection rectangle, not a camera move.
             if (data.button == PointerEventData.InputButton.Left)
             {
-                if (_camera.Mode != CameraMode.Orbit)
+                if (Captured)
                 {
                     return;
                 }
@@ -887,8 +890,9 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
-            if (!_raycast.ScreenToViewport(data.position, out var at))
+            if (Captured || !_raycast.ScreenToViewport(data.position, out var at))
             {
+                // With the cursor held there is nothing to aim with, so the middle it is.
                 at = new Vector2(0.5f, 0.5f);
             }
 
@@ -965,16 +969,6 @@ namespace ValheimTomrer.Editor.Ui
             _selectRect.rectTransform.anchorMin = _selectRect.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
             _selectRect.rectTransform.pivot = Vector2.zero;
             _selectRect.gameObject.SetActive(false);
-
-            var modes = UiBuild.Row("Modes", host, 6f);
-            modes.anchorMin = new Vector2(1f, 1f);
-            modes.anchorMax = new Vector2(1f, 1f);
-            modes.pivot = new Vector2(1f, 1f);
-            modes.anchoredPosition = new Vector2(-Inset - 8f, -Inset - 8f);
-            modes.sizeDelta = new Vector2(ButtonWidth * 2f + 6f, ButtonHeight);
-            _orbitLabel = ModeButton(modes, "Orbit", CameraMode.Orbit);
-            _freeLabel = ModeButton(modes, "Free", CameraMode.Free);
-            _orbitLabel.color = UiTheme.Accent;
         }
 
         /// <summary>A label pinned to the middle of the pane.</summary>
@@ -1003,17 +997,6 @@ namespace ValheimTomrer.Editor.Ui
                 rect.offsetMin = new Vector2(12f, distance);
                 rect.offsetMax = new Vector2(-12f, distance + height);
             }
-        }
-
-        private static TextMeshProUGUI ModeButton(Transform parent, string text, CameraMode mode)
-        {
-            var button = UiBuild.Button(text, parent, text, () => SetMode(mode), ButtonHeight);
-            var element = button.GetComponent<LayoutElement>();
-            element.preferredWidth = ButtonWidth;
-            element.minWidth = ButtonWidth;
-            var label = button.GetComponentInChildren<TextMeshProUGUI>();
-            label.fontSize = 15f;
-            return label;
         }
 
         private static void Bar(string name, Transform parent, Vector2 size)

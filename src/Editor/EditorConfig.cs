@@ -24,9 +24,6 @@ namespace ValheimTomrer.Editor
         /// <summary>Off: the palette only lists what this character has unlocked.</summary>
         public static ConfigEntry<bool> ShowAllPieces;
 
-        /// <summary>The camera the pane starts in. The B key and the Orbit/Free buttons switch it.</summary>
-        public static ConfigEntry<View.CameraMode> StartCamera;
-
         /// <summary>Snap dots while placing. The top bar's Dots button writes this.</summary>
         public static ConfigEntry<bool> SnapDots;
 
@@ -58,13 +55,6 @@ namespace ValheimTomrer.Editor
                 false,
                 "Show every building piece in the editor. Off means only the ones this character has unlocked.");
 
-            StartCamera = config.Bind(
-                "Editor",
-                "CameraMode",
-                View.CameraMode.Orbit,
-                "Which camera the editor starts in. Orbit circles the blueprint and keeps the cursor. "
-                + "Free flies with W A S D and looks with the mouse.");
-
             SnapDots = config.Bind(
                 "Editor",
                 "SnapDots",
@@ -82,7 +72,7 @@ namespace ValheimTomrer.Editor
                 "LookSensitivity",
                 1f,
                 new ConfigDescription(
-                    "Mouse look speed in the free camera. 2 is twice as fast.",
+                    "Mouse look speed in the 3D view. 2 is twice as fast.",
                     new AcceptableValueRange<float>(0.1f, 5f)));
 
             PadLookSensitivity = config.Bind(

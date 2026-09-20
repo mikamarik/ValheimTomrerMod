@@ -99,8 +99,8 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
-            // Esc walks back one step at a time: a dialog, then what is in hand, then the free
-            // camera, then the selection. Nothing left to step back from and the window closes.
+            // Esc walks back one step at a time: a dialog, then what is in hand, then the mouse
+            // the pane took, then the selection. Nothing left to step back from and it closes.
             var cancel = EditorInput.Cancel;
             if (cancel && Bindings.Cancel())
             {
