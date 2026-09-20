@@ -295,6 +295,11 @@ namespace ValheimTomrer.Blueprints
             DestroyAll<Light>(copy);
             DestroyAll<WispSpawner>(copy);
 
+            // A workbench draws its build area with a CircleProjector, which spawns its 80 ring
+            // pieces in Update, after this strip has run. They would keep layer Default and cast
+            // shadows in the world. Kill the projector and they are never made.
+            DestroyAll<CircleProjector>(copy);
+
             // The aim preview never needs collisions; the editor keeps them so a piece can be clicked.
             if (!style.Colliders)
             {
