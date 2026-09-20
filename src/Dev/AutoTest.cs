@@ -36,12 +36,22 @@ namespace ValheimTomrer.Dev
     /// "editor_panels" checks the right panel: the build card, the selection fields and the problem list;
     /// "editor_keys" drives every key, the wheel and the mouse, plus the top bar and the dialogs;
     /// "editor_pad" drives every controller button through a made-up pad, plus the piece menu.
-    /// "editor_build" builds a blueprint made in the editor, in the world, and edits it again.
+    /// "editor_build" builds a blueprint made in the editor, in the world, and edits it again;
+    /// "editor_all" runs every scenario above in one game, then checks the mod wrote no art.
     /// </summary>
     internal static class AutoTest
     {
         private const string TestName = "aclab";
         private const string WorldSeed = "ACTEST01";
+
+        /// <summary>The flat spot the world-building scenarios share, found once a run.</summary>
+        private static readonly Quaternion BuildFacing = Quaternion.identity;
+
+        /// <summary>Good enough to stop looking. The hoe pass after it does the real flattening.</summary>
+        private const float FlatEnough = 0.4f;
+
+        private static Vector3 _buildSpot;
+        private static bool _haveBuildSpot;
 
         private static int _pass;
         private static int _fail;
@@ -156,6 +166,7 @@ namespace ValheimTomrer.Dev
             yield return new WaitForSeconds(3f);
             Log($"spawned at {player.transform.position}");
             player.SetGodMode(true);
+            Log($"world set to quiet, {AutoTestPeace.Apply()} creatures removed");
             EnvMan.instance.m_debugTimeOfDay = true;
             EnvMan.instance.m_debugTime = 0.5f;
             EnvMan.instance.SetForceEnvironment("Clear");
@@ -201,6 +212,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_build":
                     scenario = TestEditorBuild(player);
+                    break;
+                case "editor_all":
+                    scenario = TestEverything(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -254,6 +268,207 @@ namespace ValheimTomrer.Dev
                 }
 
                 yield return current;
+            }
+        }
+
+        // ---------- scenario: editor_all ----------
+
+        /// <summary>
+        /// Every scenario, one after the other, in one game. A chained run is the only thing that
+        /// catches a scenario leaving something behind for the next one, so this is the run that
+        /// has to be green before shipping. It ends with the art guard.
+        /// </summary>
+        private static IEnumerator TestEverything(Player player)
+        {
+            // VT_CHAIN cuts the list down while hunting for the scenario that left something behind.
+            var names = (Environment.GetEnvironmentVariable("VT_CHAIN")
+                ?? "dump,probe,editor_open,editor_view,editor_files,editor_palette,editor_snap,"
+                + "editor_edit,editor_panels,editor_keys,editor_pad,editor_build,blueprints")
+                .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var name in names)
+            {
+                var wasPass = _pass;
+                var wasFail = _fail;
+                Log($"===== {name}");
+                var step = Step(name.Trim(), player);
+                if (step == null)
+                {
+                    Check(false, "no such scenario: " + name);
+                    continue;
+                }
+
+                // Its own Guard, so a scenario that throws costs one FAIL and the chain runs on.
+                yield return ValheimTomrerPlugin.Instance.StartCoroutine(Guard(step));
+                Log($"===== {name}: pass={_pass - wasPass} fail={_fail - wasFail}");
+                yield return Reset(player);
+            }
+
+            CheckNoArtWritten();
+        }
+
+        private static IEnumerator Step(string name, Player player)
+        {
+            switch (name)
+            {
+                case "dump": return DumpPieces(player);
+                case "probe": return Probe(player);
+                case "blueprints": return TestBlueprints(player);
+                case "editor_open": return TestEditorOpen(player);
+                case "editor_view": return TestEditorView(player);
+                case "editor_files": return TestEditorFiles(player);
+                case "editor_palette": return TestEditorPalette(player);
+                case "editor_snap": return TestEditorSnap(player);
+                case "editor_edit": return TestEditorEdit(player);
+                case "editor_panels": return TestEditorPanels(player);
+                case "editor_keys": return TestEditorKeys(player);
+                case "editor_pad": return TestEditorPad(player);
+                case "editor_build": return TestEditorBuild(player);
+                default: return null;
+            }
+        }
+
+        /// <summary>Back to a known state between two scenarios, whatever the last one left open.</summary>
+        private static IEnumerator Reset(Player player)
+        {
+            EditorSession.Close();
+            BlueprintMode.Exit();
+            PadReader.Fake = null;
+            BlueprintLibrary.UserFolder = null;
+            BlueprintLibrary.Reload();
+            PieceCatalog.Clear();
+            if (player != null)
+            {
+                player.SetGodMode(true);
+                player.m_lastToolUseTime = 0f;
+            }
+
+            yield return new WaitForSeconds(0.5f);
+        }
+
+        /// <summary>
+        /// The one rule the whole mod hangs on: it writes blueprints and nothing else. Walks every
+        /// folder the mod can write to and fails on anything that is not a .blueprint text file or
+        /// the autotest's own output (screenshots, .txt reports, the log, the test worlds).
+        /// </summary>
+        private static void CheckNoArtWritten()
+        {
+            var art = new[]
+            {
+                ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".gif", ".psd", ".tif", ".tiff", ".dds",
+                ".exr", ".hdr", ".webp", ".svg", ".ico", ".mat", ".fbx", ".obj", ".glb", ".gltf",
+                ".dae", ".blend", ".mesh", ".asset", ".prefab", ".unity", ".bundle", ".assetbundle",
+                ".shader", ".shadergraph", ".spriteatlas", ".ttf", ".otf", ".anim", ".controller",
+            };
+
+            var strays = new List<string>();
+            var blueprints = 0;
+
+            // 1. The mod's own folder under BepInEx/config: blueprints only, and they must be text.
+            var mine = Path.Combine(Paths.ConfigPath, "ValheimTomrer");
+            foreach (var file in Files(mine))
+            {
+                if (!Ext(file).Equals(".blueprint"))
+                {
+                    strays.Add(file);
+                }
+                else if (!IsText(file))
+                {
+                    strays.Add(file + " (not text)");
+                }
+                else
+                {
+                    blueprints++;
+                }
+            }
+
+            // 2. The deployed plugin folder: the build's DLL and symbols, nothing the mod made.
+            foreach (var file in Files(Path.Combine(Paths.PluginPath, "ValheimTomrer")))
+            {
+                var ext = Ext(file);
+                if (ext != ".dll" && ext != ".pdb")
+                {
+                    strays.Add(file);
+                }
+            }
+
+            // 3. The test's own output folder. Screenshots are the test's, so .png is allowed in
+            //    its root; the saved test worlds are the game's, so that folder is skipped.
+            var saves = Path.Combine(OutDir, "saves") + Path.DirectorySeparatorChar;
+            foreach (var file in Files(OutDir))
+            {
+                if (file.StartsWith(saves, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var ext = Ext(file);
+                var inRoot = Path.GetDirectoryName(file) == OutDir.TrimEnd(Path.DirectorySeparatorChar);
+                if (ext == ".blueprint")
+                {
+                    blueprints++;
+                    if (!IsText(file))
+                    {
+                        strays.Add(file + " (not text)");
+                    }
+                }
+                else if (ext == ".png" && inRoot)
+                {
+                    continue; // the autotest's own screenshots
+                }
+                else if (ext != ".txt" && ext != ".log")
+                {
+                    strays.Add(file);
+                }
+            }
+
+            var artFound = strays.Where(f => art.Contains(Ext(f))).ToList();
+            Check(blueprints > 0, $"the mod wrote {blueprints} blueprint files");
+            Check(artFound.Count == 0, artFound.Count == 0
+                ? "no image, mesh, material or bundle file anywhere the mod writes"
+                : "the mod wrote game art: " + string.Join(", ", artFound.ToArray()));
+            Check(strays.Count == 0, strays.Count == 0
+                ? "nothing but blueprints and test output on disk"
+                : $"{strays.Count} unexpected files: " + string.Join(", ", strays.Take(10).ToArray()));
+        }
+
+        private static string[] Files(string folder)
+        {
+            if (!Directory.Exists(folder))
+            {
+                return Array.Empty<string>();
+            }
+
+            return Directory.GetFiles(folder, "*", SearchOption.AllDirectories)
+                .Where(f => !Path.GetFileName(f).StartsWith(".", StringComparison.Ordinal))
+                .ToArray();
+        }
+
+        private static string Ext(string path)
+        {
+            return Path.GetExtension(path).ToLowerInvariant();
+        }
+
+        /// <summary>Text, not a file with an innocent name: no zero bytes in the first kilobyte.</summary>
+        private static bool IsText(string path)
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(path);
+                for (var i = 0; i < Math.Min(bytes.Length, 1024); i++)
+                {
+                    if (bytes[i] == 0)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception e)
+            {
+                Log($"cannot read {path}: {e.Message}");
+                return false;
             }
         }
 
@@ -407,6 +622,13 @@ namespace ValheimTomrer.Dev
             yield return new WaitForSeconds(0.5f);
             player.m_lastToolUseTime = 0f;
             var existing = new HashSet<Piece>(PiecesAround(player, center));
+            var tool = player.GetRightItem();
+            Log($"before the build: target={BlueprintMode.HasTarget}"
+                + $" blocked={BlueprintMode.Blocked ?? "none"}"
+                + $" rule={BlueprintRules.CheckCanBuild(player, resolved) ?? "ok"}"
+                + $" tool={(tool != null ? tool.m_shared.m_name : "none")}"
+                + $" stamina={player.GetStamina():0}/{player.GetMaxStamina():0}"
+                + $" need={(tool != null ? tool.m_shared.m_attack.m_attackStamina : 0f):0}");
             Check(BlueprintMode.TryBuild(player), "built with exact materials");
             var built = PiecesAround(player, center).Where(p => !existing.Contains(p)).ToList();
             Check(built.Count == resolved.Parts.Count, $"all pieces exist: {built.Count}/{resolved.Parts.Count}");
@@ -4372,43 +4594,64 @@ namespace ValheimTomrer.Dev
         }
 
         /// <summary>
-        /// The spawn stones are a no-build zone, so go to the flattest dry meadow nearby. Heights come
-        /// from the world generator, which needs no loaded area; the teleport then waits for it.
+        /// The spawn stones are a no-build zone, so go to the flattest dry meadow near the middle of
+        /// the world. The search starts from a fixed point and the player lands facing a fixed way,
+        /// so every scenario in a run, and every run, builds on the same ground. Without that a
+        /// chained run shifts the spot by a metre each time and a piece can lose its support.
+        /// Heights come from the world generator, which needs no loaded area; the teleport waits for it.
         /// </summary>
         private static IEnumerator MoveToBuildSpot(Player player)
         {
-            var from = player.transform.position;
-            var best = from;
-            var bestBumps = float.MaxValue;
-            for (var distance = 60f; distance <= 400f && bestBumps > 0.3f; distance += 20f)
+            if (!_haveBuildSpot)
             {
-                for (var angle = 0; angle < 360; angle += 15)
+                var best = Vector3.zero;
+                var bestBumps = float.MaxValue;
+                for (var distance = 60f; distance <= 400f && bestBumps > FlatEnough; distance += 20f)
                 {
-                    var spot = from + Quaternion.Euler(0f, angle, 0f) * Vector3.forward * distance;
-                    var bumps = Bumpiness(spot, out var height);
-                    if (bumps < bestBumps)
+                    for (var angle = 0; angle < 360 && bestBumps > FlatEnough; angle += 15)
                     {
-                        bestBumps = bumps;
-                        best = new Vector3(spot.x, height, spot.z);
+                        // Polar sweep from the middle of the world, where the spawn stones stand.
+                        var spot = Quaternion.Euler(0f, angle, 0f) * Vector3.forward * distance;
+                        var bumps = Bumpiness(spot, out var height);
+                        if (bumps < bestBumps)
+                        {
+                            bestBumps = bumps;
+                            best = new Vector3(spot.x, height, spot.z);
+                        }
                     }
                 }
+
+                _buildSpot = best;
+                _haveBuildSpot = true;
+                Log($"build spot {best}, {best.magnitude:0} m from the middle, ground varies {bestBumps:0.00} m");
             }
 
-            Log($"build spot {best}, {Vector3.Distance(from, best):0} m from spawn, ground varies {bestBumps:0.00} m");
             yield return new WaitForSeconds(2.5f); // teleport cooldown after spawning
-            Check(player.TeleportTo(best + Vector3.up, player.transform.rotation, true), "teleport to the build spot");
+            Check(player.TeleportTo(_buildSpot + Vector3.up, BuildFacing, true), "teleport to the build spot");
             while (player.IsTeleporting())
             {
                 yield return null;
             }
 
+            // The same facing every time: the aim, and so the spot the blueprint lands on, follows it.
+            player.m_lookYaw = BuildFacing;
+            player.m_lookPitch = 0f;
             yield return new WaitForSeconds(3f);
             ClearVegetation(player.transform.position, 20f);
             yield return new WaitForSeconds(1f);
+            var before = Standing(player.transform.position, 8f);
+            yield return LevelGround(player.transform.position, 14f);
+            Check(Standing(player.transform.position, 8f) < 0.1f,
+                $"the ground is flat: it varied {before:0.00} m, now {Standing(player.transform.position, 8f):0.00} m");
             Check(!Location.IsInsideNoBuildLocation(player.transform.position), $"moved to {player.transform.position}");
         }
 
-        /// <summary>Height spread of the ground in a 14 m square; MaxValue for water or another biome.</summary>
+        /// <summary>
+        /// Height spread of the ground in a 16 m square, sampled every 2 m; MaxValue for water or
+        /// another biome. A coarse pass throws away the hills first, so the dense one runs rarely.
+        /// The blueprint is built inside this square, so the number is what decides whether a piece
+        /// ends up with nothing under it.
+        /// </summary>
         private static float Bumpiness(Vector3 spot, out float height)
         {
             var world = WorldGenerator.instance;
@@ -4419,11 +4662,21 @@ namespace ValheimTomrer.Dev
                 return float.MaxValue;
             }
 
+            if (Spread(world, spot, water, 8f, 8f, height) > 1f)
+            {
+                return float.MaxValue;   // a hill: not worth the dense sweep
+            }
+
+            return Spread(world, spot, water, 8f, 2f, height);
+        }
+
+        private static float Spread(WorldGenerator world, Vector3 spot, float water, float reach, float step, float height)
+        {
             var min = height;
             var max = height;
-            for (var x = -7f; x <= 7f; x += 3.5f)
+            for (var x = -reach; x <= reach; x += step)
             {
-                for (var z = -7f; z <= 7f; z += 3.5f)
+                for (var z = -reach; z <= reach; z += step)
                 {
                     var h = world.GetHeight(spot.x + x, spot.z + z);
                     if (h < water + 1f)
@@ -4437,6 +4690,69 @@ namespace ValheimTomrer.Dev
             }
 
             return max - min;
+        }
+
+        /// <summary>
+        /// Levels the ground, the way a player levels a site with the hoe before building. Valheim's
+        /// meadows roll by a metre or more over a 16 m square, and no seed has a square flat enough
+        /// for a kit to stand on everywhere, so without this the support check is a coin flip.
+        ///
+        /// A TerrainOp applies itself to every heightmap in range in its own Awake and then deletes
+        /// itself, so the object is built switched off and switched on once its settings are in.
+        /// </summary>
+        private static IEnumerator LevelGround(Vector3 center, float radius)
+        {
+            var settings = new TerrainOp.Settings
+            {
+                m_level = true,
+                m_levelRadius = radius,
+                m_square = true,
+                m_smooth = false,
+                m_paintCleared = false,
+            };
+
+            // The operation travels as a routed RPC that carries only the op's prefab name, and the
+            // far end reads the settings out of ObjectDB. A made-up op has to be registered there
+            // or it arrives as an error and nothing happens. The keeper is switched off, so its own
+            // Awake never fires; only the live object below applies itself.
+            const string name = "ValheimTomrer_LevelGround";
+            var hash = name.GetStableHashCode();
+            var keeper = new GameObject(name);
+            keeper.SetActive(false);
+            keeper.AddComponent<TerrainOp>().m_settings = settings;
+            ObjectDB.instance.m_terrainOpsByHash[hash] = keeper.GetComponent<TerrainOp>();
+
+            var go = new GameObject(name);
+            go.SetActive(false);
+            go.transform.position = center;
+            go.AddComponent<TerrainOp>().m_settings = settings;
+            go.SetActive(true);   // Awake applies it to every heightmap in range, then deletes it
+
+            yield return new WaitForSeconds(1.5f);
+            ObjectDB.instance.m_terrainOpsByHash.Remove(hash);
+            UnityEngine.Object.Destroy(keeper);
+            Log($"levelled the ground {radius:0} m around {V(center)}");
+        }
+
+        /// <summary>The height spread of the loaded ground, which is what a piece actually stands on.</summary>
+        private static float Standing(Vector3 center, float reach)
+        {
+            var min = float.MaxValue;
+            var max = float.MinValue;
+            for (var x = -reach; x <= reach; x += 2f)
+            {
+                for (var z = -reach; z <= reach; z += 2f)
+                {
+                    var at = new Vector3(center.x + x, center.y + 50f, center.z + z);
+                    if (Physics.Raycast(at, Vector3.down, out var hit, 200f, LayerMask.GetMask("terrain")))
+                    {
+                        min = Mathf.Min(min, hit.point.y);
+                        max = Mathf.Max(max, hit.point.y);
+                    }
+                }
+            }
+
+            return max > min ? max - min : 0f;
         }
 
         /// <summary>Trees and rocks would catch the aim and block the view in screenshots.</summary>
