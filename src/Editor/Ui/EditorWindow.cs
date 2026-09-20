@@ -114,8 +114,8 @@ namespace ValheimTomrer.Editor.Ui
         }
 
         /// <summary>
-        /// Five empty regions at their real sizes: 300 | rest | 340 between a 44 px top bar and
-        /// a 26 px status bar. Phase 2 fills the middle one with the 3D pane.
+        /// Five regions at their real sizes: 300 | rest | 340 between a 44 px top bar and a 26 px
+        /// status bar. The middle one holds the 3D pane (ViewportHost).
         /// </summary>
         private static void Build(RectTransform root)
         {
@@ -166,7 +166,6 @@ namespace ValheimTomrer.Editor.Ui
 
             Caption(TopBar, "Valheim T\u00f8mrer", 26f, TextAlignmentOptions.Left, UiTheme.Accent);
             Caption(LeftPanel, "Pieces", 18f, TextAlignmentOptions.Top, UiTheme.TextDim);
-            Caption(ViewportHost, "3D view", 20f, TextAlignmentOptions.Center, UiTheme.TextDim);
             Caption(RightPanel, "Properties", 18f, TextAlignmentOptions.Top, UiTheme.TextDim);
             StatusText = Caption(StatusBar, "F7 or Esc closes", 16f, TextAlignmentOptions.Left, UiTheme.TextDim);
         }

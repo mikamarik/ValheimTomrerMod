@@ -5,6 +5,7 @@
 #   ./scripts/autotest.sh dump         write every hammer piece's size to .devtest/pieces.txt
 #   ./scripts/autotest.sh probe        measure layers, UI, input and pieces to .devtest/probe.txt
 #   ./scripts/autotest.sh editor_open  open the editor window with its key, check the input takeover
+#   ./scripts/autotest.sh editor_view  fill the 3D pane with a kit and drive the camera
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
 set -euo pipefail
 

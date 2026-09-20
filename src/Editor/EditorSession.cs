@@ -1,4 +1,5 @@
 using UnityEngine;
+using ValheimTomrer.Blueprints;
 using ValheimTomrer.Editor.Input;
 using ValheimTomrer.Editor.Ui;
 
@@ -53,13 +54,23 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
-            if (ZInput.GetKeyDown(EditorConfig.Key.Value) || EditorInput.Cancel)
+            ViewportHost.Tick();
+
+            // In free camera Esc only gives the cursor back; the window stays open.
+            var cancel = EditorInput.Cancel;
+            if (cancel && ViewportHost.LeaveFreeLook())
+            {
+                return;
+            }
+
+            if (ZInput.GetKeyDown(EditorConfig.Key.Value) || cancel)
             {
                 Close();
             }
         }
 
-        public static void Open()
+        /// <summary>Opens the window. Without a blueprint it shows the first kit it can build.</summary>
+        public static void Open(ResolvedBlueprint blueprint = null)
         {
             if (ModUi.Open)
             {
@@ -91,6 +102,8 @@ namespace ValheimTomrer.Editor
 
             UITooltip.HideTooltip();
             EditorWindow.Show(true);
+            ViewportHost.Ensure(EditorWindow.ViewportHost);
+            ViewportHost.Show(blueprint ?? FirstKit());
             ModUi.Open = true;
             EditorInput.Reset();
             ValheimTomrerPlugin.Log.LogInfo("editor opened");
@@ -103,6 +116,7 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
+            ViewportHost.Close();
             EditorWindow.Show(false);
             ModUi.MarkClosed();
             UITooltip.HideTooltip();
@@ -118,6 +132,22 @@ namespace ValheimTomrer.Editor
             Close();
             EditorWindow.Destroy();
             UiTheme.Clear();
+        }
+
+        /// <summary>The first kit whose pieces all exist in this game. Phase 3 lets the player pick.</summary>
+        private static ResolvedBlueprint FirstKit()
+        {
+            foreach (var blueprint in BlueprintLibrary.All)
+            {
+                if (ResolvedBlueprint.TryResolve(blueprint, out var resolved, out var error))
+                {
+                    return resolved;
+                }
+
+                ValheimTomrerPlugin.Log.LogWarning(error);
+            }
+
+            return null;
         }
 
         private static bool CanOpen()

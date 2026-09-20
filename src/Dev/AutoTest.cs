@@ -6,6 +6,9 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using ValheimTomrer.Blueprints;
+using ValheimTomrer.Editor;
+using ValheimTomrer.Editor.Ui;
+using ValheimTomrer.Editor.View;
 using BepInEx;
 using HarmonyLib;
 using UnityEngine;
@@ -20,7 +23,8 @@ namespace ValheimTomrer.Dev
     /// Scenarios: "dump" writes every hammer piece's size and snap points to pieces.txt;
     /// "blueprints" builds every shipped kit and checks unlocks, cost and support;
     /// "probe" measures what the in-game editor will be built on and writes probe.txt;
-    /// "editor_open" opens the editor window with its key and checks the input takeover.
+    /// "editor_open" opens the editor window with its key and checks the input takeover;
+    /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes.
     /// </summary>
     internal static class AutoTest
     {
@@ -158,6 +162,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_open":
                     scenario = TestEditorOpen(player);
+                    break;
+                case "editor_view":
+                    scenario = TestEditorView(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -333,6 +340,7 @@ namespace ValheimTomrer.Dev
             yield return AimAtGround(player);
             Check(BlueprintMode.HasTarget, "preview follows the aim");
             Check(BlueprintMode.Blocked == null, "spot is free: " + (BlueprintMode.Blocked ?? "ok"));
+            CheckGhostLook(resolved);
             yield return Screenshot(Slug(kit.Name) + "-1-preview");
 
             var root = BlueprintMode.PreviewRoot;
@@ -383,6 +391,73 @@ namespace ValheimTomrer.Dev
 
             RemoveOldTestBuildings(player);
             yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>
+        /// The see-through preview is set up the way the vanilla one is. Pinned here because the
+        /// editor shares the same builder: the editor's own model is solid, on its own layer and
+        /// clickable, and none of that may leak back into blueprint mode.
+        /// </summary>
+        private static void CheckGhostLook(ResolvedBlueprint kit)
+        {
+            var root = BlueprintMode.PreviewRoot;
+            if (root == null)
+            {
+                Check(false, "no preview to look at");
+                return;
+            }
+
+            var ghost = LayerMask.NameToLayer("ghost");
+            var strayLayer = root.GetComponentsInChildren<Transform>(true).Count(t => t.gameObject.layer != ghost);
+            var liveCollider = root.GetComponentsInChildren<Collider>(true).Count(c => c.enabled);
+            var casting = root.GetComponentsInChildren<MeshRenderer>(true)
+                .Count(r => r.shadowCastingMode != UnityEngine.Rendering.ShadowCastingMode.Off);
+
+            var fromPrefabs = new HashSet<Material>();
+            foreach (var part in kit.Parts)
+            {
+                foreach (var renderer in part.Prefab.GetComponentsInChildren<Renderer>(true))
+                {
+                    foreach (var material in renderer.sharedMaterials)
+                    {
+                        if (material != null)
+                        {
+                            fromPrefabs.Add(material);
+                        }
+                    }
+                }
+            }
+
+            int shared = 0, copies = 0;
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (!(renderer is MeshRenderer) && !(renderer is SkinnedMeshRenderer))
+                {
+                    continue;
+                }
+
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    if (material == null)
+                    {
+                        continue;
+                    }
+
+                    if (fromPrefabs.Contains(material))
+                    {
+                        shared++;
+                    }
+                    else
+                    {
+                        copies++;
+                    }
+                }
+            }
+
+            Check(strayLayer == 0, $"the whole preview is on the ghost layer ({strayLayer} objects are not)");
+            Check(liveCollider == 0, $"no collider is on in the preview ({liveCollider} are)");
+            Check(casting == 0, $"the preview casts no shadows ({casting} renderers do)");
+            Check(shared == 0 && copies > 0, $"the preview paints with its own material copies ({copies} copies, {shared} shared)");
         }
 
         /// <summary>
@@ -919,11 +994,242 @@ namespace ValheimTomrer.Dev
             yield return Screenshot("editor-2-closed");
         }
 
+        // ---------- scenario: editor_view ----------
+
+        /// <summary>
+        /// The 3D pane: a kit standing on the grid, the camera framing it, orbiting, zooming and
+        /// flying, and nothing left behind when the window closes. Three screenshots, and the
+        /// picture itself is read back out of the render texture so a black pane cannot pass.
+        /// </summary>
+        private static IEnumerator TestEditorView(Player player)
+        {
+            yield return new WaitForSeconds(1f);
+            Check(!ModUi.Open, "the editor starts closed");
+
+            var mainMask = GameCamera.instance.m_camera.cullingMask;
+            Check((mainMask & (1 << EditorConfig.Layer)) == 0,
+                $"the player's camera does not draw layer {EditorConfig.Layer} (mask 0x{mainMask:X8})");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open, "the key opened the editor");
+
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            var model = ViewportHost.Model;
+            Check(ViewportHost.Ready, $"the kit stands in the pane after {waited:0.00} s");
+            if (model == null || !ViewportHost.Ready)
+            {
+                yield break;
+            }
+
+            Check(model.Built == model.Total && model.Total > 0, $"every piece built: {model.Built}/{model.Total}");
+            Check(ViewportHost.Scene != null && ViewportHost.Scene.IsAlive, "the editor scene is alive");
+            Check(ViewportHost.Preview.Unity.cullingMask == 1 << EditorConfig.Layer,
+                $"the pane's camera only draws layer {EditorConfig.Layer}");
+            Log($"pane texture {ViewportHost.Preview.Width}x{ViewportHost.Preview.Height}"
+                + $" | model bounds {model.LocalBounds} | pieces {model.Total}");
+
+            var sceneRoot = ViewportHost.Scene.Root;
+            Check(Mathf.Approximately(sceneRoot.position.y, EditorScene.Depth),
+                $"the scene hangs at y={sceneRoot.position.y:0} , far under the world");
+
+            CheckOddPieces();
+
+            ViewportHost.Frame();
+            yield return null;
+            yield return null;
+            var framed = SampleView("framed");
+            Check(Painted(framed) > 0.2f, $"the pane is not empty: {Painted(framed) * 100f:0} % of it is not background");
+
+            // The same ray the next phase will select with: masked to the editor layer, ground excluded.
+            var picked = ViewportHost.Raycast.Pick(new Vector2(0.5f, 0.5f), out var hit);
+            Check(picked && hit.collider.GetComponentInParent<Piece>() != null,
+                $"the middle of the pane picks a piece: {(picked ? hit.collider.transform.root.name + " at " + hit.distance.ToString("0.0") + " m" : "nothing")}");
+            yield return Screenshot("editor-view-1-framed");
+
+            // Orbit a quarter turn and come closer.
+            var camera = ViewportHost.Camera;
+            var before = camera.Position;
+            var distance = camera.Distance;
+            camera.Orbit(90f, -8f);
+            for (var notch = 0; notch < 6; notch++)
+            {
+                camera.Zoom(-100f, new Vector2(0.5f, 0.5f));
+            }
+
+            yield return null;
+            yield return null;
+            Check(camera.Distance < distance * 0.9f, $"the wheel came closer: {distance:0.0} m -> {camera.Distance:0.0} m");
+            Check(Vector3.Distance(camera.Position, before) > 1f, "orbiting moved the camera");
+            var orbited = SampleView("orbited");
+            Check(Difference(framed, orbited) > 0.05f,
+                $"the view changed after orbiting ({Difference(framed, orbited) * 100f:0} % of the pixels)");
+            yield return Screenshot("editor-view-2-orbited");
+
+            // Free camera: the cursor is held, the mouse turns the view, W flies forward.
+            ViewportHost.SetMode(CameraMode.Free);
+            ViewportHost.Frame();
+            yield return new WaitForSeconds(0.3f);
+            Check(camera.Mode == CameraMode.Free, "the free camera is on");
+            Check(Cursor.lockState == CursorLockMode.Locked, $"the cursor is held (is {Cursor.lockState})");
+
+            var yaw = camera.Yaw;
+            camera.MouseLook(new Vector2(100f, 0f));
+            Check(Mathf.Abs(Mathf.DeltaAngle(yaw, camera.Yaw) - 14f) < 0.5f,
+                $"100 mouse pixels turned the view {Mathf.DeltaAngle(yaw, camera.Yaw):0.0} degrees (0.14 each)");
+
+            var flyFrom = camera.Position;
+            yield return HoldKey(UnityEngine.InputSystem.Key.W, 0.8f);
+            var flew = Vector3.Distance(camera.Position, flyFrom);
+            Check(flew > 1f, $"W flew the camera forward {flew:0.0} m");
+            yield return null;
+            var flown = SampleView("flown");
+            Check(Difference(orbited, flown) > 0.05f,
+                $"the view changed after flying ({Difference(orbited, flown) * 100f:0} % of the pixels)");
+            yield return Screenshot("editor-view-3-free");
+
+            // Esc gives the cursor back without closing; the second one closes.
+            yield return PressKey(UnityEngine.InputSystem.Key.Escape);
+            yield return new WaitForSeconds(0.4f);
+            Check(ModUi.Open, "Esc in free camera keeps the window open");
+            Check(camera.Mode == CameraMode.Orbit, "Esc went back to the orbit camera");
+            Check(Cursor.lockState == CursorLockMode.None, $"Esc gave the cursor back (is {Cursor.lockState})");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.Escape);
+            yield return new WaitForSeconds(0.5f);
+            Check(!ModUi.Open, "the second Esc closed the editor");
+            Check(ViewportHost.Scene == null && ViewportHost.Preview == null, "the pane let go of its scene and camera");
+            Check(GameObject.Find("ValheimTomrer_EditorScene") == null, "the editor scene object is gone");
+            Check(ViewportHost.Leaked() == 0, $"nothing left behind: {ViewportHost.Leaked()} objects still alive");
+        }
+
+        /// <summary>
+        /// The odd pieces Phase 0 flagged. The artisan station is drawn by skinned meshes, which a
+        /// mesh-only copy would lose, so it is built solid here the way the pane builds it.
+        /// piece_repair (no mesh, no collider) turns out not to be a world prefab at all, so no
+        /// blueprint can ever hold it; the box-collider fallback stays as cover for modded pieces.
+        /// </summary>
+        private static void CheckOddPieces()
+        {
+            Check(ZNetScene.instance.GetPrefab("piece_repair") == null,
+                "piece_repair is not a world prefab, so the pane is never asked to draw it");
+
+            var style = PreviewStyle.Solid(EditorConfig.Layer);
+            foreach (var name in new[] { "piece_artisanstation" })
+            {
+                var single = new Blueprint { Name = "probe_" + name };
+                single.Pieces.Add(new BlueprintPiece { PrefabName = name, Rotation = Quaternion.identity });
+                if (!ResolvedBlueprint.TryResolve(single, out var resolved, out var error))
+                {
+                    Check(false, error);
+                    continue;
+                }
+
+                var preview = BlueprintPreview.Create(resolved, style);
+                var root = preview.Root;
+                var skinned = root.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+                var meshes = root.GetComponentsInChildren<MeshRenderer>(true).Length;
+                var colliders = root.GetComponentsInChildren<Collider>(true);
+                var stray = root.GetComponentsInChildren<Transform>(true).Count(t => t.gameObject.layer != EditorConfig.Layer);
+                Log($"{name}: {meshes} mesh renderers, {skinned.Length} skinned, {colliders.Length} colliders,"
+                    + $" bounds {preview.LocalBounds.size}");
+
+                Check(stray == 0, $"{name} is wholly on layer {EditorConfig.Layer} ({stray} objects are not)");
+                Check(colliders.Any(c => c.enabled), $"{name} can be clicked: {colliders.Length} colliders, on");
+                if (name == "piece_artisanstation")
+                {
+                    Check(skinned.Length > 0 && skinned.All(r => r.enabled && r.sharedMesh != null),
+                        $"{name} keeps its skinned parts ({skinned.Length})");
+                }
+
+                preview.Destroy();
+            }
+        }
+
+        /// <summary>The pane's picture, shrunk to 64x64, so two views can be compared.</summary>
+        private static Color[] SampleView(string what)
+        {
+            var source = ViewportHost.Preview != null ? ViewportHost.Preview.Texture : null;
+            if (source == null)
+            {
+                Check(false, "no pane texture to read for " + what);
+                return new Color[0];
+            }
+
+            var small = RenderTexture.GetTemporary(64, 64, 0);
+            Graphics.Blit(source, small);
+            var shot = new Texture2D(64, 64, TextureFormat.RGB24, false);
+            var previous = RenderTexture.active;
+            RenderTexture.active = small;
+            shot.ReadPixels(new Rect(0f, 0f, 64f, 64f), 0, 0);
+            shot.Apply();
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(small);
+
+            var pixels = shot.GetPixels();
+            UnityEngine.Object.Destroy(shot);
+            Log($"pane '{what}': {Painted(pixels) * 100f:0} % not background, mean {Mean(pixels)}");
+            return pixels;
+        }
+
+        /// <summary>How much of the pane is something other than the flat background colour.</summary>
+        private static float Painted(Color[] pixels)
+        {
+            var background = new Color32(0xB9, 0xC7, 0xD2, 0xFF);
+            var painted = pixels.Count(p => Math.Abs(p.r - background.r / 255f) + Math.Abs(p.g - background.g / 255f)
+                + Math.Abs(p.b - background.b / 255f) > 0.06f);
+            return pixels.Length == 0 ? 0f : (float)painted / pixels.Length;
+        }
+
+        /// <summary>How many pixels two pane pictures differ in.</summary>
+        private static float Difference(Color[] a, Color[] b)
+        {
+            if (a.Length == 0 || a.Length != b.Length)
+            {
+                return 0f;
+            }
+
+            var changed = 0;
+            for (var i = 0; i < a.Length; i++)
+            {
+                if (Math.Abs(a[i].r - b[i].r) + Math.Abs(a[i].g - b[i].g) + Math.Abs(a[i].b - b[i].b) > 0.06f)
+                {
+                    changed++;
+                }
+            }
+
+            return (float)changed / a.Length;
+        }
+
+        private static Color Mean(Color[] pixels)
+        {
+            var sum = new Vector3();
+            foreach (var pixel in pixels)
+            {
+                sum += new Vector3(pixel.r, pixel.g, pixel.b);
+            }
+
+            sum /= Mathf.Max(1, pixels.Length);
+            return new Color(sum.x, sum.y, sum.z);
+        }
+
         /// <summary>
         /// Presses a key the way a person would: a state event into the input system, held for a
         /// few frames so the "went down this frame" edge cannot fall between two updates.
         /// </summary>
         private static IEnumerator PressKey(UnityEngine.InputSystem.Key key)
+        {
+            return HoldKey(key, 0f);
+        }
+
+        /// <summary>The same, held down for a while, for keys that are read every frame.</summary>
+        private static IEnumerator HoldKey(UnityEngine.InputSystem.Key key, float seconds)
         {
             var keyboard = UnityEngine.InputSystem.Keyboard.current;
             if (keyboard == null)
@@ -936,6 +1242,14 @@ namespace ValheimTomrer.Dev
                 keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState(key));
             for (var frame = 0; frame < 4; frame++)
             {
+                yield return null;
+            }
+
+            var until = Time.time + seconds;
+            while (Time.time < until)
+            {
+                UnityEngine.InputSystem.InputSystem.QueueStateEvent(
+                    keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState(key));
                 yield return null;
             }
 

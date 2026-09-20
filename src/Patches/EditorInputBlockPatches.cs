@@ -87,7 +87,8 @@ namespace ValheimTomrer.Patches
 
         /// <summary>
         /// The cursor is locked again every LateUpdate, so freeing it once does not hold.
-        /// This runs after the game decided, and frees it back.
+        /// This runs after the game decided, and sets what the editor wants: free to point at the
+        /// window, held and hidden while the free camera is flying.
         /// </summary>
         [HarmonyPatch(typeof(GameCamera), nameof(GameCamera.UpdateMouseCapture))]
         private static class GameCameraUpdateMouseCapture
@@ -96,6 +97,13 @@ namespace ValheimTomrer.Patches
             {
                 if (!ModUi.Blocking)
                 {
+                    return;
+                }
+
+                if (ModUi.LockCursor)
+                {
+                    ZCursor.LockState = CursorLockMode.Locked;
+                    ZCursor.Hide();
                     return;
                 }
 

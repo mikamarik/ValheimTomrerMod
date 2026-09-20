@@ -9,6 +9,13 @@ namespace ValheimTomrer.Editor
     /// </summary>
     internal static class EditorConfig
     {
+        /// <summary>
+        /// The layer the editor draws its own copies on. Free in Valheim 1.0 (Phase 0 measured
+        /// 3, 6, 7 and 30 free). The main camera drops it in GameCameraAwakePatch, and every
+        /// physics query the editor makes is masked to it, so the two worlds never mix.
+        /// </summary>
+        public const int Layer = 30;
+
         public static ConfigEntry<KeyCode> Key;
 
         public static void Bind(ConfigFile config)
