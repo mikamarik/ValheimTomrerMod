@@ -14,6 +14,7 @@
 #   ./scripts/autotest.sh editor_keys  drive every key, the wheel and the mouse, the top bar and the dialogs
 #   ./scripts/autotest.sh editor_pad   drive every controller button through a made-up pad, and the piece menu
 #   ./scripts/autotest.sh editor_build build a blueprint made in the editor, in the world, then edit it again
+#   ./scripts/autotest.sh editor_capture build a kit in the world, capture it back, compare it to the file
 #   ./scripts/autotest.sh editor_all   every scenario above in one game, then the "no game art" guard
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
 # VT_CHAIN="editor_build,blueprints" ./scripts/autotest.sh editor_all  runs only those, in that order.

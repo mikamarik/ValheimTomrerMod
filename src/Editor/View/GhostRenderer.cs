@@ -50,6 +50,15 @@ namespace ValheimTomrer.Editor.View
         /// <summary>It is showing the "same piece is already there" colour.</summary>
         public bool ShowingBad => _showingBad;
 
+        /// <summary>
+        /// A new copy of the see-through green the ghost is painted with. The world capture draws
+        /// its box with it, so the two read as the same thing. The caller owns it and destroys it.
+        /// </summary>
+        public static Material NewMaterial()
+        {
+            return Shading.Overlay(WithAlpha(Valid), false);
+        }
+
         /// <summary>Builds the copies for a new set in hand. Null or empty clears them.</summary>
         public void Show(MovingSet set)
         {
@@ -84,7 +93,7 @@ namespace ValheimTomrer.Editor.View
                 _pieces++;
             }
 
-            _valid = Shading.Overlay(WithAlpha(Valid), false);
+            _valid = NewMaterial();
             _bad = Shading.Overlay(WithAlpha(Bad), false);
             Paint(_valid);
         }

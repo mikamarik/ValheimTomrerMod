@@ -28,6 +28,7 @@ namespace ValheimTomrer.Editor
         {
             if (!ValheimTomrerPlugin.ModEnabled.Value)
             {
+                WorldCapture.Cancel();
                 if (ModUi.Open)
                 {
                     Close();
@@ -40,7 +41,15 @@ namespace ValheimTomrer.Editor
 
             if (!ModUi.Open)
             {
-                if (CanOpen() && ZInput.GetKeyDown(EditorConfig.Key.Value))
+                // The window is closed, so the capture can have the world: it aims with the
+                // player's own view and takes no input away from the game.
+                if (!CanOpen())
+                {
+                    WorldCapture.Cancel();
+                    return;
+                }
+
+                if (ZInput.GetKeyDown(EditorConfig.Key.Value))
                 {
                     // With a blueprint in hand the key edits that one, not the last kit. The
                     // build tool lets go of it: the Build this button puts it back.
@@ -51,8 +60,11 @@ namespace ValheimTomrer.Editor
                         BlueprintMode.Exit();
                         ValheimTomrerPlugin.Log.LogInfo($"editor took '{inHand.Name}' out of the build tool's hand");
                     }
+
+                    return;
                 }
 
+                WorldCapture.Tick();
                 return;
             }
 
@@ -155,6 +167,8 @@ namespace ValheimTomrer.Editor
 
         private static void Begin(BlueprintDocument document, ResolvedBlueprint blueprint)
         {
+            // The window is about to cover the world, so a half-picked capture box goes.
+            WorldCapture.Cancel();
             if (!EditorWindow.Ensure())
             {
                 ValheimTomrerPlugin.Log.LogWarning("editor could not open: the HUD is not ready yet.");
@@ -274,6 +288,7 @@ namespace ValheimTomrer.Editor
         public static void Shutdown()
         {
             Close();
+            WorldCapture.Shutdown();
             EditorWindow.Destroy();
             PieceCatalog.Clear();
             UiTheme.Clear();

@@ -8,6 +8,8 @@ Make blueprints in the game, then build them with the hammer. **Valheim 1.0**, s
   the game's own snapping. No second program, no alt-tab.
 - **Build a whole blueprint with the hammer.** B cycles your blueprints, the preview follows your
   aim, one click puts every piece down.
+- **Copy what you already built.** F8 picks a box in the world and everything in it becomes a
+  blueprint.
 - **The game's rules still apply.** Real materials, a workbench in range, and only pieces this
   character has unlocked.
 - **Mouse and controller.** Placing, moving, turning and deleting all have a pad button. The
@@ -48,6 +50,17 @@ Valheim/BepInEx/plugins/
    closes the window. Aim at the ground and click, like any other piece.
 
 The kits that ship with the mod are read only. Edit one and Save as makes your own copy.
+
+## Copy a building you already have
+
+1. Stand where you can see the whole thing. No hammer needed.
+2. **Press F8** and aim at one corner of the ground under it. A green box shows up.
+3. **Press F8 again** at the opposite corner. The box goes 16 m up, so a roof is inside it.
+4. The editor opens on what stood in the box, ready to name and save. `Esc` stops a box you
+   started by mistake.
+
+Only pieces the hammer can build come along. Anything else (a planted turnip, a piece of another
+mod) is left out, and the message says how many.
 
 ## Build a blueprint
 
@@ -131,6 +144,7 @@ Valheim/BepInEx/config/com.mikamarik.valheimtomrer.cfg
 | General | `Enabled` | `true` | Master switch. Turn off to neutralise the mod without uninstalling it. |
 | Blueprints | `Key` | `B` | With a hammer in hand: the next blueprint. After the last one, back to normal building. |
 | Editor | `Key` | `F7` | Opens and closes the editor window. |
+| Editor | `CaptureKey` | `F8` | Picks two corners in the world and makes a blueprint of what is in the box. |
 | Editor | `ShowAllPieces` | `false` | Every piece in the editor, instead of only the ones this character has unlocked. |
 | Editor | `CameraMode` | `Orbit` | Which camera the editor starts in: `Orbit` or `Free`. |
 | Editor | `SnapDots` | `true` | Show the snap dots while placing. Snapping itself is always on. |

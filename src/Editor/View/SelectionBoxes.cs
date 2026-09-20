@@ -143,14 +143,17 @@ namespace ValheimTomrer.Editor.View
             var count = Mathf.Min(boxes.Count, BoxCap);
             for (var i = 0; i < count; i++)
             {
-                AddBox(boxes[i], bar);
+                WireBox(boxes[i], bar, _vertices, _triangles);
             }
 
             wire.Set(_vertices, _triangles);
         }
 
-        /// <summary>Twelve bars round one box, each a thin cuboid so it stays visible at any size.</summary>
-        private void AddBox(Bounds box, float bar)
+        /// <summary>
+        /// Twelve bars round one box, each a thin cuboid so it stays visible at any size. Static,
+        /// because the world capture draws its box with the same twelve bars.
+        /// </summary>
+        public static void WireBox(Bounds box, float bar, List<Vector3> vertices, List<int> triangles)
         {
             var min = box.min;
             var max = box.max;
@@ -168,19 +171,19 @@ namespace ValheimTomrer.Editor.View
                     size[u] = bar;
                     centre[v] = (corner & 2) == 0 ? min[v] : max[v];
                     size[v] = bar;
-                    AddBar(new Bounds(centre, size));
+                    AddBar(new Bounds(centre, size), vertices, triangles);
                 }
             }
         }
 
-        private void AddBar(Bounds bar)
+        private static void AddBar(Bounds bar, List<Vector3> vertices, List<int> triangles)
         {
-            var start = _vertices.Count;
+            var start = vertices.Count;
             var c = bar.center;
             var e = bar.extents;
             for (var i = 0; i < 8; i++)
             {
-                _vertices.Add(new Vector3(
+                vertices.Add(new Vector3(
                     c.x + ((i & 1) == 0 ? -e.x : e.x),
                     c.y + ((i & 2) == 0 ? -e.y : e.y),
                     c.z + ((i & 4) == 0 ? -e.z : e.z)));
@@ -188,7 +191,7 @@ namespace ValheimTomrer.Editor.View
 
             foreach (var index in CubeTriangles)
             {
-                _triangles.Add(start + index);
+                triangles.Add(start + index);
             }
         }
 

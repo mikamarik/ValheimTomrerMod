@@ -37,6 +37,7 @@ namespace ValheimTomrer.Dev
     /// "editor_keys" drives every key, the wheel and the mouse, plus the top bar and the dialogs;
     /// "editor_pad" drives every controller button through a made-up pad, plus the piece menu.
     /// "editor_build" builds a blueprint made in the editor, in the world, and edits it again;
+    /// "editor_capture" builds a kit in the world, captures it back, and compares it to the file;
     /// "editor_all" runs every scenario above in one game, then checks the mod wrote no art.
     /// </summary>
     internal static class AutoTest
@@ -213,6 +214,9 @@ namespace ValheimTomrer.Dev
                 case "editor_build":
                     scenario = TestEditorBuild(player);
                     break;
+                case "editor_capture":
+                    scenario = TestEditorCapture(player);
+                    break;
                 case "editor_all":
                     scenario = TestEverything(player);
                     break;
@@ -286,7 +290,7 @@ namespace ValheimTomrer.Dev
             // VT_CHAIN cuts the list down while hunting for the scenario that left something behind.
             var names = (Environment.GetEnvironmentVariable("VT_CHAIN")
                 ?? "dump,probe,editor_open,editor_view,editor_files,editor_palette,editor_snap,"
-                + "editor_edit,editor_panels,editor_keys,editor_pad,editor_build,blueprints")
+                + "editor_edit,editor_panels,editor_keys,editor_pad,editor_build,editor_capture,blueprints")
                 .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
 
             foreach (var name in names)
@@ -327,6 +331,7 @@ namespace ValheimTomrer.Dev
                 case "editor_keys": return TestEditorKeys(player);
                 case "editor_pad": return TestEditorPad(player);
                 case "editor_build": return TestEditorBuild(player);
+                case "editor_capture": return TestEditorCapture(player);
                 default: return null;
             }
         }
@@ -356,6 +361,7 @@ namespace ValheimTomrer.Dev
         /// </summary>
         private static void ResetSettings()
         {
+            Default(EditorConfig.CaptureKey);
             Default(EditorConfig.ShowAllPieces);
             Default(EditorConfig.SnapDots);
             Default(EditorConfig.Boxes);
@@ -4151,6 +4157,282 @@ namespace ValheimTomrer.Dev
                 "but the editor opens it all the same");
             EditorSession.Close();
             yield return new WaitForSeconds(0.3f);
+        }
+
+        // ---------- scenario: editor_capture ----------
+
+        /// <summary>
+        /// Capture: the workshop kit is built in the world, a box is picked round it, and what
+        /// comes back has to be that same blueprint. The kit file is the wanted answer, turned the
+        /// way the hammer turned it, so the check is name for name and spot for spot. A piece of
+        /// another build tool stands in the box too: it has to be left out and counted.
+        /// </summary>
+        private static IEnumerator TestEditorCapture(Player player)
+        {
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            PieceCatalog.Ensure();
+            Check(PieceCatalog.Ready, "the piece catalog is built");
+
+            yield return CaptureEmptyBox(player);
+
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Pieces.Count > 2);
+            if (kit == null)
+            {
+                Check(false, "no kit to stand in the world");
+                yield break;
+            }
+
+            if (!ResolvedBlueprint.TryResolve(kit, out var resolved, out var error))
+            {
+                Check(false, error);
+                yield break;
+            }
+
+            Check(true, $"kit to capture: '{kit.Name}', {kit.Pieces.Count} pieces");
+            foreach (var part in resolved.Parts)
+            {
+                player.m_knownRecipes.Add(part.Piece.m_name);
+            }
+
+            player.UpdateAvailablePiecesList();
+            ClearInventoryExceptHammer(player);
+            yield return EquipHammer(player);
+            foreach (var cost in resolved.TotalCost)
+            {
+                player.GetInventory().AddItem(cost.m_resItem.gameObject.name, cost.m_amount, 1, 0, 0L, "", false);
+            }
+
+            BlueprintMode.Select(player, resolved);
+            yield return AimAtGround(player);
+            var root = BlueprintMode.PreviewRoot;
+            Check(root != null && BlueprintMode.HasTarget && BlueprintMode.Blocked == null,
+                "the kit's preview stands on a free spot: " + (BlueprintMode.Blocked ?? "ok"));
+            if (root == null)
+            {
+                yield break;
+            }
+
+            // How the hammer turned it. The capture reads the world as it stands, so this is the
+            // turn the captured pieces have to carry.
+            var turn = root.rotation;
+            var centre = root.position;
+            player.m_lastToolUseTime = 0f;
+            var existing = new HashSet<Piece>(PiecesAround(player, centre));
+            Check(BlueprintMode.TryBuild(player), "the kit is built in the world");
+            BlueprintMode.Exit();
+            var built = PiecesAround(player, centre).Where(p => !existing.Contains(p)).ToList();
+            Check(built.Count == resolved.Parts.Count,
+                $"every piece of it stands: {built.Count} of {resolved.Parts.Count}");
+            if (built.Count != resolved.Parts.Count)
+            {
+                yield break;
+            }
+
+            yield return new WaitForSeconds(2f);
+            yield return CaptureTheKit(player, kit, built, turn);
+
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(0.5f);
+        }
+
+        /// <summary>The key itself, on ground with nothing on it: it starts a box, and it is empty.</summary>
+        private static IEnumerator CaptureEmptyBox(Player player)
+        {
+            player.m_lookPitch = 35f;
+            yield return new WaitForSeconds(0.5f);
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            yield return new WaitForSeconds(0.3f);
+            Check(WorldCapture.Active, "the capture key started a box selection");
+            Check(WorldCapture.Drawn, "and the box stands in the world");
+            if (!WorldCapture.Active)
+            {
+                yield break;
+            }
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            yield return new WaitForSeconds(0.3f);
+            Check(!WorldCapture.Active && !WorldCapture.Drawn, "the second press ended the box");
+            Check(WorldCapture.LastCount == 0 && !ModUi.Open,
+                "an empty box captures nothing and opens no window");
+        }
+
+        /// <summary>Picks a box round what was built, captures it, and holds it against the kit file.</summary>
+        private static IEnumerator CaptureTheKit(Player player, Blueprint kit, List<Piece> built, Quaternion turn)
+        {
+            var min = built[0].transform.position;
+            var max = min;
+            foreach (var piece in built)
+            {
+                min = Vector3.Min(min, piece.transform.position);
+                max = Vector3.Max(max, piece.transform.position);
+            }
+
+            var first = new Vector3(min.x - 2f, min.y, min.z - 2f);
+            var second = new Vector3(max.x + 2f, max.y, max.z + 2f);
+
+            // A piece the hammer cannot build, standing in the middle of the box.
+            var stray = OtherToolPrefab();
+            Check(stray != null && PieceCatalog.OtherTool(stray.gameObject.name) != null,
+                $"a piece of another tool to leave out: {(stray != null ? stray.gameObject.name : "none")}");
+            if (stray != null)
+            {
+                player.PlacePiece(
+                    stray,
+                    new Vector3((min.x + max.x) * 0.5f, min.y, (min.z + max.z) * 0.5f),
+                    Quaternion.identity,
+                    false,
+                    true);
+                yield return null;
+            }
+
+            WorldCapture.Begin(first);
+            yield return new WaitForSeconds(0.3f);
+            Check(WorldCapture.Active && WorldCapture.Drawn, "the first corner is in and the box is drawn");
+            yield return Screenshot("editor-capture-1-box");
+
+            var captured = WorldCapture.Corner(second);
+            yield return new WaitForSeconds(0.5f);
+            Check(captured && !WorldCapture.Active && !WorldCapture.Drawn, "the second corner captured the box");
+            Check(ModUi.Open, "the editor opened on what came back");
+            var document = EditorSession.Document;
+            Check(document != null && document.Pieces.Count == kit.Pieces.Count,
+                $"it holds the kit's pieces: {(document != null ? document.Pieces.Count : 0)} of {kit.Pieces.Count}");
+            Check(WorldCapture.LastSkipped == 1,
+                $"and left the other tool's piece out, counted: {WorldCapture.LastSkipped}");
+            if (document == null || document.Pieces.Count == 0)
+            {
+                yield break;
+            }
+
+            Check(string.IsNullOrEmpty(document.SourcePath) && document.Dirty && !document.ReadOnly,
+                "it opened as a blueprint with no file of its own");
+            CompareToKit(kit, document, turn);
+
+            var bottom = EditorState.BottomCentre(new List<DocPiece>(document.Pieces));
+            Check(bottom.magnitude < 1e-3f, $"its origin is the bottom centre, {V4(bottom)} off");
+
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            yield return new WaitForSeconds(1f);
+            yield return Screenshot("editor-capture-2-in-editor");
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
+            Check(!ModUi.Open, "the editor closed");
+        }
+
+        /// <summary>
+        /// Name for name and spot for spot against the kit file. Both sets are measured from their
+        /// own middle, so this is about the shape that came back, not about where the origin went.
+        /// </summary>
+        private static void CompareToKit(Blueprint kit, BlueprintDocument document, Quaternion turn)
+        {
+            var want = kit.Pieces.Select(p => turn * p.Position).ToList();
+            var got = document.Pieces.Select(p => p.Position).ToList();
+            var wantMid = Middle(want);
+            var gotMid = Middle(got);
+            var taken = new bool[got.Count];
+            var missing = new List<string>();
+            var worst = 0f;
+            var worstTurn = 0f;
+
+            for (var i = 0; i < kit.Pieces.Count; i++)
+            {
+                var wanted = want[i] - wantMid;
+                var best = -1;
+                var bestOff = float.MaxValue;
+                for (var j = 0; j < got.Count; j++)
+                {
+                    if (taken[j] || document.Pieces[j].PrefabName != kit.Pieces[i].PrefabName)
+                    {
+                        continue;
+                    }
+
+                    var off = Vector3.Distance(got[j] - gotMid, wanted);
+                    if (off < bestOff)
+                    {
+                        bestOff = off;
+                        best = j;
+                    }
+                }
+
+                if (best < 0)
+                {
+                    missing.Add(kit.Pieces[i].PrefabName);
+                    continue;
+                }
+
+                taken[best] = true;
+                worst = Mathf.Max(worst, bestOff);
+                worstTurn = Mathf.Max(
+                    worstTurn, Quaternion.Angle(turn * kit.Pieces[i].Rotation, document.Pieces[best].Rotation));
+            }
+
+            Check(missing.Count == 0, missing.Count == 0
+                ? $"every one of the {kit.Pieces.Count} pieces came back by name"
+                : "pieces that did not come back: " + string.Join(", ", missing));
+            Check(worst < 1e-3f, $"and in the same spot, worst {worst:0.######} m off");
+            Check(worstTurn < 0.5f, $"and turned the same way, worst {worstTurn:0.###} degrees off");
+        }
+
+        private static Vector3 Middle(List<Vector3> points)
+        {
+            var sum = Vector3.zero;
+            foreach (var point in points)
+            {
+                sum += point;
+            }
+
+            return points.Count > 0 ? sum / points.Count : Vector3.zero;
+        }
+
+        /// <summary>A piece of another build tool, which a capture has to leave out. Terrain ops skipped.</summary>
+        private static Piece OtherToolPrefab()
+        {
+            var db = ObjectDB.instance;
+            if (db == null)
+            {
+                return null;
+            }
+
+            foreach (var item in db.m_items)
+            {
+                var drop = item != null ? item.GetComponent<ItemDrop>() : null;
+                var table = drop != null ? drop.m_itemData.m_shared.m_buildPieces : null;
+                if (table == null || table == PieceCatalog.Table)
+                {
+                    continue;
+                }
+
+                foreach (var prefab in table.m_pieces)
+                {
+                    if (prefab == null || PieceCatalog.Find(prefab.name) != null)
+                    {
+                        continue;
+                    }
+
+                    if (prefab.GetComponent<ZNetView>() == null
+                        || prefab.GetComponent<TerrainOp>() != null
+                        || prefab.GetComponent<TerrainModifier>() != null)
+                    {
+                        continue;
+                    }
+
+                    var piece = prefab.GetComponent<Piece>();
+                    if (piece != null)
+                    {
+                        return piece;
+                    }
+                }
+            }
+
+            return null;
         }
 
         // ---------- scenario: editor_snap ----------

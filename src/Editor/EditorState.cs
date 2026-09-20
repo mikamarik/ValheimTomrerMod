@@ -632,6 +632,17 @@ namespace ValheimTomrer.Editor
             return box;
         }
 
+        /// <summary>
+        /// The bottom centre of a set of pieces: the middle of their box in x and z, the lowest
+        /// point in y. Center origin and the world capture both put the origin here, so a captured
+        /// blueprint is centred the way the button would centre it.
+        /// </summary>
+        public static Vector3 BottomCentre(IList<DocPiece> pieces)
+        {
+            var box = BoxOf(pieces) ?? new Bounds();
+            return new Vector3(box.center.x, box.min.y, box.center.z);
+        }
+
         // ---------- messages ----------
 
         public static void Say(string text)
@@ -711,12 +722,6 @@ namespace ValheimTomrer.Editor
             }
 
             Version++;
-        }
-
-        private static Vector3 BottomCentre(IList<DocPiece> pieces)
-        {
-            var box = BoxOf(pieces) ?? new Bounds();
-            return new Vector3(box.center.x, box.min.y, box.center.z);
         }
 
         private static float YawOf(Quaternion q)

@@ -18,6 +18,9 @@ namespace ValheimTomrer.Editor
 
         public static ConfigEntry<KeyCode> Key;
 
+        /// <summary>Starts the two-corner box that turns a standing building into a blueprint.</summary>
+        public static ConfigEntry<KeyCode> CaptureKey;
+
         /// <summary>Off: the palette only lists what this character has unlocked.</summary>
         public static ConfigEntry<bool> ShowAllPieces;
 
@@ -41,6 +44,13 @@ namespace ValheimTomrer.Editor
                 "Key",
                 KeyCode.F7,
                 "Opens and closes the blueprint editor. Esc and the pad's circle close it too.");
+
+            CaptureKey = config.Bind(
+                "Editor",
+                "CaptureKey",
+                KeyCode.F8,
+                "With the editor closed: pick two corners in the world, and what stands in the box "
+                + "opens in the editor as a new blueprint. Esc stops it.");
 
             ShowAllPieces = config.Bind(
                 "Editor",
