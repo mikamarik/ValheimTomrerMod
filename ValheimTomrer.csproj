@@ -114,6 +114,11 @@
     <EmbeddedResource Include="blueprints/*.blueprint" LogicalName="ValheimTomrer.Kits.%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- What the writer has to produce, written by Tomrer. Debug only: the autotest reads it in game. -->
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <EmbeddedResource Include="tests/fixtures/*.blueprint" LogicalName="ValheimTomrer.Fixtures.%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- Build straight into the game so the loop is: dotnet build -> launch. -->
   <Target Name="DeployToBepInEx" AfterTargets="Build" Condition="Exists('$(BepInExDir)')">
     <PropertyGroup>

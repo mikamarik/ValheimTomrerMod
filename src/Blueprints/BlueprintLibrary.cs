@@ -15,7 +15,16 @@ namespace ValheimTomrer.Blueprints
     {
         private const string KitResourcePrefix = "ValheimTomrer.Kits.";
 
-        public static string UserFolder => Path.Combine(Paths.ConfigPath, "ValheimTomrer", "blueprints");
+        private static string _userFolder;
+
+        /// <summary>
+        /// Where the player's own blueprints live. Settable so a test can point it at a temp folder.
+        /// </summary>
+        public static string UserFolder
+        {
+            get => _userFolder ?? Path.Combine(Paths.ConfigPath, "ValheimTomrer", "blueprints");
+            set => _userFolder = value;
+        }
 
         public static List<Blueprint> All { get; private set; } = new List<Blueprint>();
 
@@ -37,7 +46,7 @@ namespace ValheimTomrer.Blueprints
                 using (var reader = new StreamReader(stream))
                 {
                     var name = Path.GetFileNameWithoutExtension(resource.Substring(KitResourcePrefix.Length));
-                    TryAdd(result, resource, () => Parse(name, resource, ReadLines(reader)));
+                    TryAdd(result, resource, () => AsKit(Parse(name, resource, ReadLines(reader))));
                 }
             }
         }
@@ -61,7 +70,7 @@ namespace ValheimTomrer.Blueprints
 
             foreach (var file in files)
             {
-                TryAdd(result, file, () => Parse(Path.GetFileNameWithoutExtension(file), file, File.ReadAllLines(file)));
+                TryAdd(result, file, () => FromFile(Parse(Path.GetFileNameWithoutExtension(file), file, File.ReadAllLines(file)), file));
             }
         }
 
@@ -70,6 +79,22 @@ namespace ValheimTomrer.Blueprints
             return source.EndsWith(".vbuild", StringComparison.OrdinalIgnoreCase)
                 ? BlueprintFormat.ParseVBuild(name, lines)
                 : BlueprintFormat.ParseBlueprint(name, lines);
+        }
+
+        /// <summary>A kit lives inside the DLL, so it can only ever be saved under a new name.</summary>
+        private static Blueprint AsKit(Blueprint blueprint)
+        {
+            blueprint.ReadOnly = true;
+            return blueprint;
+        }
+
+        /// <summary>A .vbuild or a file with sections we cannot write back is read-only too.</summary>
+        private static Blueprint FromFile(Blueprint blueprint, string path)
+        {
+            blueprint.SourcePath = path;
+            blueprint.ReadOnly = blueprint.HasSections
+                || path.EndsWith(".vbuild", StringComparison.OrdinalIgnoreCase);
+            return blueprint;
         }
 
         private static void TryAdd(List<Blueprint> result, string source, Func<Blueprint> load)

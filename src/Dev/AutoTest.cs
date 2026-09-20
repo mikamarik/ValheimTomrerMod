@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using ValheimTomrer.Blueprints;
 using ValheimTomrer.Editor;
+using ValheimTomrer.Editor.Doc;
 using ValheimTomrer.Editor.Ui;
 using ValheimTomrer.Editor.View;
 using BepInEx;
@@ -24,7 +25,8 @@ namespace ValheimTomrer.Dev
     /// "blueprints" builds every shipped kit and checks unlocks, cost and support;
     /// "probe" measures what the in-game editor will be built on and writes probe.txt;
     /// "editor_open" opens the editor window with its key and checks the input takeover;
-    /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes.
+    /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
+    /// "editor_files" round-trips every blueprint through the writer and runs the file commands.
     /// </summary>
     internal static class AutoTest
     {
@@ -165,6 +167,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_view":
                     scenario = TestEditorView(player);
+                    break;
+                case "editor_files":
+                    scenario = TestEditorFiles(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -1257,6 +1262,404 @@ namespace ValheimTomrer.Dev
                 keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState());
             yield return null;
             yield return null;
+        }
+
+        // ---------- scenario: editor_files ----------
+
+        /// <summary>
+        /// The document, the writer and the file commands. Every kit and every file the player has
+        /// is read, written and read again; the writer's output for the workshop kit is compared
+        /// with a fixture Tomrer wrote; a file is then made, saved, reopened, renamed and deleted in
+        /// a temp folder, so the player's own blueprints are never touched.
+        /// </summary>
+        private static IEnumerator TestEditorFiles(Player player)
+        {
+            yield return new WaitForSeconds(1f);
+
+            CheckNumbers();
+            CheckFileNames();
+            CheckRoundTrips();
+            CheckFixture();
+            CheckUndo();
+            yield return null;
+            CheckFileCommands();
+        }
+
+        /// <summary>The number cases the format hangs on. Everything else is rounding noise.</summary>
+        private static void CheckNumbers()
+        {
+            Number(1f, 4, "1");
+            Number(1.50f, 4, "1.5");
+            Number(-0f, 4, "0");
+            Number(-0.00001f, 4, "0");
+            Number(1e-7f, 7, "0.0000001");
+            Number(1e-7f, 4, "0");
+            Number(-2.0313f, 4, "-2.0313");
+            Number(0.7071068f, 7, "0.7071068");
+
+            // Away from zero, not to the even digit: .NET would write 0.0002 for a float formatted
+            // straight, because it rounds the shortest text that reads back as that float.
+            Number(0.00025f, 4, "0.0003");
+
+            // The float nearest 0.00005 is 0.000049999999, just under half, so it rounds to nothing.
+            Number(0.00005f, 4, "0");
+        }
+
+        private static void Number(float value, int decimals, string want)
+        {
+            var got = BlueprintFormat.FormatNumber(value, decimals);
+            Check(got == want, $"FormatNumber({value:R}, {decimals}) = {got}, wanted {want}");
+        }
+
+        private static void CheckFileNames()
+        {
+            Name("Camp hut", "camp-hut.blueprint");
+            Name("  Tomrer 2!  ", "tomrer-2.blueprint");
+            Name("***", "blueprint.blueprint");
+            Name("", "blueprint.blueprint");
+            Name(null, "blueprint.blueprint");
+        }
+
+        private static void Name(string name, string want)
+        {
+            var got = BlueprintFormat.FileNameFor(name);
+            Check(got == want, $"FileNameFor('{name}') = {got}, wanted {want}");
+        }
+
+        /// <summary>Read, write, read again: the same pieces, and the text settles at once.</summary>
+        private static void CheckRoundTrips()
+        {
+            var kits = DocumentStore.ListKits();
+            var files = DocumentStore.ListUserFiles();
+            Check(kits.Count > 0, $"kits inside the DLL: {kits.Count}");
+            Log($"user files in {BlueprintLibrary.UserFolder}: {files.Count}");
+
+            foreach (var kit in kits)
+            {
+                if (!DocumentStore.OpenKit(kit, out var document, out var error))
+                {
+                    Check(false, error);
+                    continue;
+                }
+
+                Check(kit.ReadOnly && document.ReadOnly, $"kit '{kit.Name}' is read-only");
+                RoundTrip("kit " + kit.Name, document.ToBlueprint());
+            }
+
+            foreach (var file in files)
+            {
+                if (file.Error != null)
+                {
+                    Check(false, $"{Path.GetFileName(file.Path)}: {file.Error}");
+                    continue;
+                }
+
+                if (!DocumentStore.Open(file.Path, out var document, out var error))
+                {
+                    Check(false, error);
+                    continue;
+                }
+
+                RoundTrip("file " + Path.GetFileName(file.Path), document.ToBlueprint());
+            }
+        }
+
+        private static void RoundTrip(string what, Blueprint blueprint)
+        {
+            var first = BlueprintFormat.Write(blueprint);
+            var again = BlueprintFormat.ParseBlueprint(blueprint.Name, first.Split('\n'));
+            var second = BlueprintFormat.Write(again);
+
+            Check(first == second, $"{what}: the text settles after one write ({first.Length} bytes)");
+            Check(SamePieces(blueprint, again, out var why), $"{what}: {why}");
+            Check(again.Name == blueprint.Name && again.Description == blueprint.Description
+                && again.IconPrefab == blueprint.IconPrefab,
+                $"{what}: headers survive ('{again.Name}' / '{again.Description}' / {again.IconPrefab ?? "-"})");
+        }
+
+        private static bool SamePieces(Blueprint a, Blueprint b, out string why)
+        {
+            if (a.Pieces.Count != b.Pieces.Count)
+            {
+                why = $"{a.Pieces.Count} pieces became {b.Pieces.Count}";
+                return false;
+            }
+
+            var worstPosition = 0f;
+            var worstRotation = 0f;
+            for (var i = 0; i < a.Pieces.Count; i++)
+            {
+                var one = a.Pieces[i];
+                var other = b.Pieces[i];
+                if (one.PrefabName != other.PrefabName || one.Category != other.Category || one.Rest != other.Rest)
+                {
+                    why = $"piece {i} changed: {one.PrefabName};{one.Category};{one.Rest ?? "-"}"
+                        + $" -> {other.PrefabName};{other.Category};{other.Rest ?? "-"}";
+                    return false;
+                }
+
+                worstPosition = Mathf.Max(worstPosition, Vector3.Distance(one.Position, other.Position));
+                worstRotation = Mathf.Max(worstRotation, Quaternion.Angle(one.Rotation, other.Rotation));
+            }
+
+            // Positions are written to a tenth of a millimetre, rotations to seven decimals.
+            var ok = worstPosition <= 0.0001f && worstRotation <= 0.001f;
+            why = $"{a.Pieces.Count} pieces come back the same"
+                + $" (worst {worstPosition * 1000f:0.###} mm, {worstRotation:0.####} degrees)";
+            return ok;
+        }
+
+        /// <summary>The workshop kit, written by us, has to be byte for byte what Tomrer writes.</summary>
+        private static void CheckFixture()
+        {
+            var want = ReadFixture("ValheimTomrer.Fixtures.workshop.canonical.blueprint");
+            var kit = DocumentStore.ListKits().FirstOrDefault(k => k.Name == "Workshop");
+            if (want == null || kit == null)
+            {
+                Check(false, $"fixture or Workshop kit missing (fixture={(want == null ? "no" : "yes")})");
+                return;
+            }
+
+            if (!DocumentStore.OpenKit(kit, out var document, out var error))
+            {
+                Check(false, error);
+                return;
+            }
+
+            var got = BlueprintFormat.Write(document.ToBlueprint());
+            Check(got == want, got == want
+                ? "the workshop kit is written exactly like Tomrer writes it"
+                : "the workshop kit differs from Tomrer's text:\n" + FirstDifference(want, got));
+        }
+
+        private static string ReadFixture(string resource)
+        {
+            using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(resource))
+            {
+                if (stream == null)
+                {
+                    return null;
+                }
+
+                using (var reader = new StreamReader(stream))
+                {
+                    return reader.ReadToEnd();
+                }
+            }
+        }
+
+        private static string FirstDifference(string want, string got)
+        {
+            var wantLines = want.Split('\n');
+            var gotLines = got.Split('\n');
+            for (var i = 0; i < Math.Max(wantLines.Length, gotLines.Length); i++)
+            {
+                var a = i < wantLines.Length ? wantLines[i] : "<end>";
+                var b = i < gotLines.Length ? gotLines[i] : "<end>";
+                if (a != b)
+                {
+                    return $"  line {i + 1} want: {a}\n  line {i + 1} got : {b}";
+                }
+            }
+
+            return "  same lines, different length";
+        }
+
+        /// <summary>Edits make snapshots, typing in one field makes one step, and the limit holds.</summary>
+        private static void CheckUndo()
+        {
+            var document = DocumentStore.New("Undo test");
+            Check(!document.Dirty && !document.CanUndo, "a new document is clean with nothing to undo");
+
+            var id = document.AddPiece("woodwall", new Vector3(1f, 0f, 0f), Quaternion.identity);
+            Check(document.Dirty && document.UndoDepth == 1, $"adding a piece made one step ({document.UndoDepth})");
+
+            var before = document.Pieces[0];
+            document.SetPiece(id, new Vector3(2f, 0f, 0f), Quaternion.identity);
+            Check(before.Position.x == 1f && document.Pieces[0].Position.x == 2f,
+                "the old snapshot still holds the old position");
+
+            // Typing "Hut" into the name field: three keystrokes, one step.
+            var depth = document.UndoDepth;
+            document.SetName("H");
+            document.SetName("Hu");
+            document.SetName("Hut");
+            Check(document.UndoDepth == depth + 1, $"typing in one field is one step ({document.UndoDepth - depth})");
+
+            document.SetIcon("piece_workbench");
+            Check(document.UndoDepth == depth + 2, "a different field starts a new step");
+
+            document.Undo();
+            Check(document.IconPrefab == null, "undo took the icon back");
+            document.Undo();
+            Check(document.Name == "Undo test", "undo took the whole typed name back at once");
+            document.Redo();
+            Check(document.Name == "Hut", "redo put it back");
+
+            for (var i = 0; i < BlueprintDocument.UndoLimit + 50; i++)
+            {
+                document.AddPiece("woodwall", new Vector3(i, 0f, 0f), Quaternion.identity);
+            }
+
+            Check(document.UndoDepth == BlueprintDocument.UndoLimit,
+                $"the undo stack stops at {BlueprintDocument.UndoLimit} ({document.UndoDepth})");
+        }
+
+        /// <summary>Make, save, reopen, rename, duplicate and delete, all inside a temp folder.</summary>
+        private static void CheckFileCommands()
+        {
+            var real = BlueprintLibrary.UserFolder;
+            var temp = Path.Combine(OutDir, "files-test");
+            try
+            {
+                if (Directory.Exists(temp))
+                {
+                    Directory.Delete(temp, true);
+                }
+
+                Directory.CreateDirectory(temp);
+                BlueprintLibrary.UserFolder = temp;
+
+                var document = DocumentStore.New("Camp hut");
+                Check(!DocumentStore.SaveAs(document, "Camp hut", false, out var error),
+                    $"a blueprint with no pieces is not saved: {error}");
+                Check(!DocumentStore.Save(document, out error),
+                    $"a blueprint with no file of its own needs a new name: {error}");
+
+                document.AddPiece("woodwall", new Vector3(0f, 0.5f, 0f), Quaternion.Euler(0f, 90f, 0f));
+                document.AddPiece("woodwall", new Vector3(2f, 0.5f, 0f), Quaternion.identity);
+
+                Check(DocumentStore.SaveAs(document, "Camp hut", false, out error), "save as 'Camp hut': " + error);
+                var path = Path.Combine(temp, "camp-hut.blueprint");
+                Check(File.Exists(path), "camp-hut.blueprint is on disk");
+                Check(!document.Dirty && document.SourcePath == path, "the document is clean and knows its file");
+                Check(!DocumentStore.SaveAs(document, "Camp hut", false, out error),
+                    $"a second save as the same name is refused: {error}");
+                Check(DocumentStore.SaveAs(document, "Camp hut", true, out error), "overwrite is allowed when asked");
+
+                var text = File.ReadAllText(path);
+                Check(text.StartsWith("#Name:Camp hut\n") && text.EndsWith("\n") && !text.Contains("\r"),
+                    "the file starts with the name, ends with a line break and has LF line ends");
+                Check(text.Contains("\nwoodwall;;2;0.5;0;0;0;0;1\n"),
+                    "a piece with no turn and nothing kept is written with nine fields");
+
+                var half = BlueprintFormat.PieceLine(new BlueprintPiece
+                {
+                    PrefabName = "woodwall",
+                    Rotation = new Quaternion(0f, -1f, 0f, 0f),
+                });
+                Check(half == "woodwall;;0;0;0;0;1;0;0", $"a half turn is written 0;1;0;0 (got {half})");
+
+                document.SetDescription("A small hut");
+                Check(document.Dirty, "editing makes the document dirty again");
+                Check(DocumentStore.Save(document, out error), "save over the same file: " + error);
+                Check(!document.Dirty, "saving makes it clean");
+
+                Check(DocumentStore.Open(path, out var reopened, out error), "reopen: " + error);
+                Check(reopened.Pieces.Count == 2 && reopened.Name == "Camp hut"
+                    && reopened.Description == "A small hut" && !reopened.ReadOnly,
+                    $"what was saved comes back: {reopened.Pieces.Count} pieces, '{reopened.Name}', '{reopened.Description}'");
+                Check(BlueprintLibrary.All.Any(b => b.Name == "Camp hut"),
+                    "the build-mode list saw the new blueprint without a restart");
+
+                Check(DocumentStore.Duplicate(path, out var copy, out error), "duplicate: " + error);
+                Check(copy == Path.Combine(temp, "camp-hut-copy.blueprint") && File.Exists(copy),
+                    $"the copy is next to it: {Path.GetFileName(copy ?? "-")}");
+
+                Check(DocumentStore.Rename(path, "Long house", out var renamed, out error), "rename: " + error);
+                Check(!File.Exists(path), "the old file is gone");
+                Check(renamed == Path.Combine(temp, "long-house.blueprint") && File.Exists(renamed),
+                    $"the new file is there: {Path.GetFileName(renamed ?? "-")}");
+                Check(File.ReadAllText(renamed).StartsWith("#Name:Long house\n"), "the name inside changed too");
+
+                var listed = DocumentStore.ListUserFiles();
+                Check(listed.Count == 2, $"the folder lists both files ({listed.Count})");
+
+                Check(DocumentStore.Delete(renamed, out error), "delete: " + error);
+                Check(DocumentStore.Delete(copy, out error), "delete the copy: " + error);
+                Check(DocumentStore.ListUserFiles().Count == 0, "the folder is empty again");
+                Check(!BlueprintLibrary.All.Any(b => b.Name == "Long house"),
+                    "the build-mode list dropped the deleted blueprint");
+
+                CheckSectionsAreReadOnly(temp);
+                CheckKeptFields(temp);
+            }
+            finally
+            {
+                BlueprintLibrary.UserFolder = real;
+                BlueprintLibrary.Reload();
+            }
+        }
+
+        /// <summary>
+        /// A file as other mods write it: a "(Clone)" suffix, a category, decimals with a comma and
+        /// scale fields after the rotation. Only the prefab name and the numbers are ours to change;
+        /// everything else has to come back untouched. It sits in a subfolder, which the list walks.
+        /// </summary>
+        private static void CheckKeptFields(string folder)
+        {
+            var sub = Path.Combine(folder, "from-elsewhere");
+            Directory.CreateDirectory(sub);
+            var path = Path.Combine(sub, "kept.blueprint");
+            File.WriteAllText(path, string.Join("\n", new[]
+            {
+                "#Name:Kept",
+                "#Pieces",
+                "woodwall(Clone);Building;1,5;0;-2;0;0;0;1;something;1;1;1",
+                "",
+            }));
+
+            Check(DocumentStore.ListUserFiles().Any(f => f.Path == path), "the list walks subfolders");
+            if (!DocumentStore.Open(path, out var document, out var error))
+            {
+                Check(false, error);
+                return;
+            }
+
+            var piece = document.Pieces[0];
+            Check(piece.PrefabName == "woodwall" && piece.Category == "Building" && piece.Rest == "something;1;1;1",
+                $"the kept fields are read: prefab={piece.PrefabName} category={piece.Category} rest={piece.Rest}");
+
+            var line = BlueprintFormat.PieceLine(document.ToBlueprint().Pieces[0]);
+            Check(line == "woodwall;Building;1.5;0;-2;0;0;0;1;something;1;1;1",
+                $"and written back with a dot and no (Clone): {line}");
+
+            RoundTrip("file kept.blueprint", document.ToBlueprint());
+            Directory.Delete(sub, true);
+        }
+
+        /// <summary>A file with snap points or terrain is opened, but only saved under a new name.</summary>
+        private static void CheckSectionsAreReadOnly(string folder)
+        {
+            var path = Path.Combine(folder, "with-sections.blueprint");
+            File.WriteAllText(path, string.Join("\n", new[]
+            {
+                "#Name:With sections",
+                "#Keep:whatever",
+                "#Pieces",
+                "woodwall;;0;0;0;0;0;0;1;",
+                "#SnapPoints",
+                "0;0;0",
+                "",
+            }));
+
+            Check(DocumentStore.Open(path, out var document, out var error), "open a file with sections: " + error);
+            if (document == null)
+            {
+                return;
+            }
+
+            Check(document.HasSections && document.ReadOnly, "a file with sections is read-only");
+            Check(!DocumentStore.Save(document, out error), $"it cannot be saved over: {error}");
+            Check(BlueprintFormat.Write(document.ToBlueprint()).Contains("#Keep:whatever"),
+                "an unknown header is written back");
+
+            Check(DocumentStore.SaveAs(document, "Without sections", false, out error),
+                "it can be saved under a new name: " + error);
+            Check(!document.ReadOnly && !document.HasSections, "the new file is editable");
+
+            File.Delete(path);
+            File.Delete(Path.Combine(folder, "without-sections.blueprint"));
         }
 
         // ---------- helpers ----------
