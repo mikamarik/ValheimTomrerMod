@@ -19,7 +19,8 @@ namespace ValheimTomrer.Dev
     ///
     /// Scenarios: "dump" writes every hammer piece's size and snap points to pieces.txt;
     /// "blueprints" builds every shipped kit and checks unlocks, cost and support;
-    /// "probe" measures what the in-game editor will be built on and writes probe.txt.
+    /// "probe" measures what the in-game editor will be built on and writes probe.txt;
+    /// "editor_open" opens the editor window with its key and checks the input takeover.
     /// </summary>
     internal static class AutoTest
     {
@@ -50,6 +51,11 @@ namespace ValheimTomrer.Dev
             Directory.CreateDirectory(saves);
             Utils.SetSaveDataPath(saves);
             Application.runInBackground = true;
+
+            // The test drives the game with real key events. Without this the input system
+            // disables the keyboard the moment the window loses focus and swallows them.
+            UnityEngine.InputSystem.InputSystem.settings.backgroundBehavior =
+                UnityEngine.InputSystem.InputSettings.BackgroundBehavior.IgnoreFocus;
             Log($"scenario={Scenario} out={OutDir}");
         }
 
@@ -149,6 +155,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "probe":
                     scenario = Probe(player);
+                    break;
+                case "editor_open":
+                    scenario = TestEditorOpen(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -869,6 +878,71 @@ namespace ValheimTomrer.Dev
             report.AppendLine("  on-demand asset loading triggered by reading the prefabs: "
                 + (meshesAfter > meshesBefore || texturesAfter > texturesBefore ? "YES" : "no"));
             Check(seen == tool.m_pieces.Count, $"walked all {seen} piece prefabs in {total:0} ms");
+        }
+
+        // ---------- scenario: editor_open ----------
+
+        /// <summary>
+        /// The editor window opens on its key, the game stops listening, Esc closes it and the
+        /// game listens again. Keys are pressed for real, through the input system, so the whole
+        /// path is covered: plugin Update -> ZInput -> EditorSession -> the Harmony patch set.
+        /// </summary>
+        private static IEnumerator TestEditorOpen(Player player)
+        {
+            // Build mode on: opening the editor has to close the build menu too.
+            yield return EquipHammer(player);
+            yield return new WaitForSeconds(1f);
+
+            Log($"focus={Application.isFocused} keyboard={UnityEngine.InputSystem.Keyboard.current != null}"
+                + $" cursor={Cursor.lockState}");
+            Check(player.TakeInput(), "the player takes input before the editor opens");
+            Check(!ValheimTomrer.Editor.Ui.ModUi.Open, "the editor starts closed");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+
+            Check(ValheimTomrer.Editor.Ui.ModUi.Open, "the key opened the editor");
+            Check(ValheimTomrer.Editor.Ui.EditorWindow.Visible, "the window is on screen");
+            Check(!player.TakeInput(), "Player.TakeInput is false while the editor is open");
+            Check(Cursor.lockState == CursorLockMode.None, $"the cursor is unlocked (is {Cursor.lockState})");
+            Check(!Hud.IsPieceSelectionVisible(), "the build menu is hidden");
+            yield return Screenshot("editor-1-open");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.Escape);
+            yield return new WaitForSeconds(0.5f);
+
+            Check(!ValheimTomrer.Editor.Ui.ModUi.Open, "Esc closed the editor");
+            Check(!ValheimTomrer.Editor.Ui.ModUi.Blocking, "the one-frame grace is over");
+            Check(!ValheimTomrer.Editor.Ui.EditorWindow.Visible, "the window is gone");
+            Check(player.TakeInput(), "the player takes input again");
+            Check(!Menu.IsVisible(), "the closing Esc did not open the pause menu");
+            yield return Screenshot("editor-2-closed");
+        }
+
+        /// <summary>
+        /// Presses a key the way a person would: a state event into the input system, held for a
+        /// few frames so the "went down this frame" edge cannot fall between two updates.
+        /// </summary>
+        private static IEnumerator PressKey(UnityEngine.InputSystem.Key key)
+        {
+            var keyboard = UnityEngine.InputSystem.Keyboard.current;
+            if (keyboard == null)
+            {
+                Check(false, "no keyboard device to press " + key);
+                yield break;
+            }
+
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(
+                keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState(key));
+            for (var frame = 0; frame < 4; frame++)
+            {
+                yield return null;
+            }
+
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(
+                keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState());
+            yield return null;
+            yield return null;
         }
 
         // ---------- helpers ----------

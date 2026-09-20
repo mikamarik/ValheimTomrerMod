@@ -1,5 +1,6 @@
 using System.Reflection;
 using ValheimTomrer.Blueprints;
+using ValheimTomrer.Editor;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
@@ -39,6 +40,8 @@ namespace ValheimTomrer
                 KeyCode.B,
                 "With a hammer in hand: selects the next blueprint. After the last one, back to normal building.");
 
+            EditorConfig.Bind(Config);
+
 #if DEBUG
             Dev.AutoTest.Init();
 #endif
@@ -52,12 +55,21 @@ namespace ValheimTomrer
         }
 
         /// <summary>
+        /// The editor key is read here, not in a build patch, so it works without a hammer.
+        /// </summary>
+        private void Update()
+        {
+            EditorSession.Tick();
+        }
+
+        /// <summary>
         /// Harmony patches outlive the plugin object, so an unpatch here keeps
         /// ScriptEngine hot-reloads from stacking duplicates.
         /// </summary>
         private void OnDestroy()
         {
             BlueprintMode.Exit();
+            EditorSession.Shutdown();
             _harmony?.UnpatchSelf();
             Log?.LogInfo($"{PluginName} unloaded.");
         }

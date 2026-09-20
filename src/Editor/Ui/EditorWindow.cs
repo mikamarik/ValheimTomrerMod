@@ -1,0 +1,186 @@
+using TMPro;
+using UnityEngine;
+using UnityEngine.UI;
+
+namespace ValheimTomrer.Editor.Ui
+{
+    /// <summary>
+    /// The editor's canvas and its five empty regions. Built the first time it is opened and
+    /// again after a world load, because the canvas dies with the scene.
+    ///
+    /// The recipe is the vanilla one: own Canvas with overrideSorting, CanvasScaler (reference
+    /// pixels per unit 50) before GuiScaler, CanvasGroup before UIGroupHandler. Sort order 950
+    /// puts it over the inventory and the store, under the centre messages and the pause menu.
+    /// </summary>
+    internal static class EditorWindow
+    {
+        public const int SortOrder = 950;
+        public const int GroupPriority = 5;
+
+        private const float Margin = 24f;   // window to screen edge
+        private const float Pad = 12f;      // window frame to regions
+        private const float Gap = 8f;       // region to region
+        private const float TopBarHeight = 44f;
+        private const float StatusBarHeight = 26f;
+        private const float LeftWidth = 300f;
+        private const float RightWidth = 340f;
+
+        private static GameObject _root;
+        private static int _generation = -1;
+
+        public static RectTransform TopBar { get; private set; }
+        public static RectTransform LeftPanel { get; private set; }
+        public static RectTransform ViewportHost { get; private set; }
+        public static RectTransform RightPanel { get; private set; }
+        public static RectTransform StatusBar { get; private set; }
+        public static TextMeshProUGUI StatusText { get; private set; }
+
+        public static bool Visible => _root != null && _root.activeSelf;
+
+        /// <summary>Builds the window if it is missing. False when the game is not ready for it.</summary>
+        public static bool Ensure()
+        {
+            if (!UiTheme.Ensure())
+            {
+                return false;
+            }
+
+            if (_root != null && _generation == UiTheme.Generation)
+            {
+                return true;
+            }
+
+            Destroy();
+
+            var parent = Hud.instance != null ? Hud.instance.transform.parent : null;
+            if (parent == null)
+            {
+                return false;
+            }
+
+            _root = CreateRoot("ValheimTomrerEditor", SortOrder, parent);
+            _generation = UiTheme.Generation;
+            Build((RectTransform)_root.transform);
+            ValheimTomrerPlugin.Log.LogInfo("editor window built");
+            return true;
+        }
+
+        public static void Show(bool visible)
+        {
+            if (_root != null)
+            {
+                _root.SetActive(visible);
+            }
+        }
+
+        public static void Destroy()
+        {
+            if (_root != null)
+            {
+                Object.Destroy(_root);
+            }
+
+            _root = null;
+            _generation = -1;
+            TopBar = LeftPanel = ViewportHost = RightPanel = StatusBar = null;
+            StatusText = null;
+        }
+
+        /// <summary>The canvas recipe the game itself uses (SessionPlayerList). Order matters twice.</summary>
+        private static GameObject CreateRoot(string name, int order, Transform parent)
+        {
+            var go = new GameObject(name, typeof(RectTransform)) { layer = 5 };
+            go.SetActive(false);
+            go.transform.SetParent(parent, false);
+            UiBuild.Stretch((RectTransform)go.transform);
+
+            var canvas = go.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.overrideSorting = true;
+            canvas.sortingOrder = order;
+            canvas.additionalShaderChannels = AdditionalCanvasShaderChannels.TexCoord1
+                | AdditionalCanvasShaderChannels.Normal
+                | AdditionalCanvasShaderChannels.Tangent;
+
+            var scaler = go.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
+            scaler.referencePixelsPerUnit = 50f;
+            go.AddComponent<GuiScaler>();          // reads the CanvasScaler in Awake
+            go.AddComponent<GraphicRaycaster>();
+
+            go.AddComponent<CanvasGroup>();        // read by UIGroupHandler in Awake
+            go.AddComponent<UIGroupHandler>().m_groupPriority = GroupPriority;
+            return go;
+        }
+
+        /// <summary>
+        /// Five empty regions at their real sizes: 300 | rest | 340 between a 44 px top bar and
+        /// a 26 px status bar. Phase 2 fills the middle one with the 3D pane.
+        /// </summary>
+        private static void Build(RectTransform root)
+        {
+            // Dims the world and eats clicks that miss the window.
+            UiBuild.Stretch(UiBuild.Panel("Backdrop", root, null, UiTheme.Backdrop).rectTransform);
+
+            var window = UiBuild.Panel("Window", root, UiTheme.Panel);
+            UiBuild.Stretch(window.rectTransform, Margin, Margin, Margin, Margin);
+            var frame = window.rectTransform;
+
+            var bandTop = Pad + TopBarHeight + Gap;
+            var bandBottom = Pad + StatusBarHeight + Gap;
+
+            TopBar = Region("TopBar", frame, UiTheme.PanelBkg, UiTheme.Inset);
+            TopBar.anchorMin = new Vector2(0f, 1f);
+            TopBar.anchorMax = new Vector2(1f, 1f);
+            TopBar.offsetMin = new Vector2(Pad, -Pad - TopBarHeight);
+            TopBar.offsetMax = new Vector2(-Pad, -Pad);
+
+            StatusBar = Region("StatusBar", frame, UiTheme.PanelBkg, UiTheme.Inset);
+            StatusBar.anchorMin = new Vector2(0f, 0f);
+            StatusBar.anchorMax = new Vector2(1f, 0f);
+            StatusBar.offsetMin = new Vector2(Pad, Pad);
+            StatusBar.offsetMax = new Vector2(-Pad, Pad + StatusBarHeight);
+
+            LeftPanel = Region("LeftPanel", frame, UiTheme.PanelBkg, UiTheme.Inset);
+            LeftPanel.anchorMin = new Vector2(0f, 0f);
+            LeftPanel.anchorMax = new Vector2(0f, 1f);
+            LeftPanel.offsetMin = new Vector2(Pad, bandBottom);
+            LeftPanel.offsetMax = new Vector2(Pad + LeftWidth, -bandTop);
+
+            RightPanel = Region("RightPanel", frame, UiTheme.PanelBkg, UiTheme.Inset);
+            RightPanel.anchorMin = new Vector2(1f, 0f);
+            RightPanel.anchorMax = new Vector2(1f, 1f);
+            RightPanel.offsetMin = new Vector2(-Pad - RightWidth, bandBottom);
+            RightPanel.offsetMax = new Vector2(-Pad, -bandTop);
+
+            // Flat dark first, then the sunken frame on top: the frame sprite has a see-through
+            // middle, so on its own the window's wood would shine through the pane.
+            ViewportHost = Region("ViewportHost", frame, null, UiTheme.Viewport);
+            ViewportHost.anchorMin = Vector2.zero;
+            ViewportHost.anchorMax = Vector2.one;
+            ViewportHost.offsetMin = new Vector2(Pad + LeftWidth + Gap, bandBottom);
+            ViewportHost.offsetMax = new Vector2(-Pad - RightWidth - Gap, -bandTop);
+            var sunken = UiBuild.Panel("Frame", ViewportHost, UiTheme.Sunken);
+            sunken.raycastTarget = false;
+            UiBuild.Stretch(sunken.rectTransform);
+
+            Caption(TopBar, "Valheim T\u00f8mrer", 26f, TextAlignmentOptions.Left, UiTheme.Accent);
+            Caption(LeftPanel, "Pieces", 18f, TextAlignmentOptions.Top, UiTheme.TextDim);
+            Caption(ViewportHost, "3D view", 20f, TextAlignmentOptions.Center, UiTheme.TextDim);
+            Caption(RightPanel, "Properties", 18f, TextAlignmentOptions.Top, UiTheme.TextDim);
+            StatusText = Caption(StatusBar, "F7 or Esc closes", 16f, TextAlignmentOptions.Left, UiTheme.TextDim);
+        }
+
+        private static RectTransform Region(string name, Transform parent, Sprite sprite, Color tint)
+        {
+            return UiBuild.Panel(name, parent, sprite, tint).rectTransform;
+        }
+
+        private static TextMeshProUGUI Caption(RectTransform parent, string text, float size, TextAlignmentOptions align, Color color)
+        {
+            var label = UiBuild.Label("Caption", parent, text, size, align, color);
+            UiBuild.Stretch(label.rectTransform, 10f, 4f, 10f, 4f);
+            return label;
+        }
+    }
+}
