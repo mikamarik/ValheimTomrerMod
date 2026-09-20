@@ -64,7 +64,16 @@ namespace ValheimTomrer.Editor
             ViewportHost.Tick();
             Palette.Tick();
             PieceListPanel.Tick();
+            BlueprintPanel.Tick();
+            SelectionPanel.Tick();
+            ChecksPanel.Tick();
             SyncSelection();
+
+            // A text box has the keyboard: Esc puts the old text back, it does not close the window.
+            if (ModUi.Typing)
+            {
+                return;
+            }
 
             // Esc walks back one step at a time: what is in hand, then the free camera, then the window.
             var cancel = EditorInput.Cancel;
@@ -93,6 +102,29 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
+            blueprint = blueprint ?? FirstKit();
+            var document = blueprint != null
+                ? BlueprintDocument.FromBlueprint(blueprint.Blueprint)
+                : BlueprintDocument.New();
+            Begin(document, blueprint);
+        }
+
+        /// <summary>
+        /// Opens the window on a document that is already read, whatever is in it. The pane builds
+        /// the pieces itself, so a blueprint holding a piece this game does not have still opens.
+        /// </summary>
+        public static void OpenDocument(BlueprintDocument document)
+        {
+            if (ModUi.Open || document == null)
+            {
+                return;
+            }
+
+            Begin(document, null);
+        }
+
+        private static void Begin(BlueprintDocument document, ResolvedBlueprint blueprint)
+        {
             if (!EditorWindow.Ensure())
             {
                 ValheimTomrerPlugin.Log.LogWarning("editor could not open: the HUD is not ready yet.");
@@ -118,11 +150,8 @@ namespace ValheimTomrer.Editor
 
             UITooltip.HideTooltip();
             EditorWindow.Show(true);
-            blueprint = blueprint ?? FirstKit();
             PieceCatalog.Ensure();
-            EditorState.Open(blueprint != null
-                ? BlueprintDocument.FromBlueprint(blueprint.Blueprint)
-                : BlueprintDocument.New());
+            EditorState.Open(document);
             ViewportHost.Ensure(EditorWindow.ViewportHost);
             ViewportHost.Show(blueprint);
 
@@ -132,6 +161,13 @@ namespace ValheimTomrer.Editor
             PieceListPanel.Ensure(EditorWindow.PieceListPane);
             PieceListPanel.Show(Document);
             PieceListPanel.PieceClicked = RowClicked;
+
+            BlueprintPanel.Ensure(EditorWindow.BlueprintPane);
+            BlueprintPanel.Show(Document);
+            SelectionPanel.Ensure(EditorWindow.SelectionPane);
+            SelectionPanel.Show();
+            ChecksPanel.Ensure(EditorWindow.ChecksPane);
+            ChecksPanel.Show(Document);
             _syncedSelection = -1;
             ModUi.Open = true;
             EditorInput.Reset();
@@ -151,6 +187,9 @@ namespace ValheimTomrer.Editor
             Palette.Close();
             PieceListPanel.PieceClicked = null;
             PieceListPanel.Close();
+            BlueprintPanel.Close();
+            SelectionPanel.Close();
+            ChecksPanel.Close();
             EditorState.Close();
             EditorWindow.Show(false);
             ModUi.MarkClosed();

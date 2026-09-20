@@ -1,4 +1,6 @@
+using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace ValheimTomrer.Editor.Ui
 {
@@ -16,6 +18,22 @@ namespace ValheimTomrer.Editor.Ui
         public static bool LockCursor;
 
         public static bool Blocking => Open || Time.frameCount - _closedFrame <= 1;
+
+        /// <summary>
+        /// A text box has the keyboard, so the editing keys, Esc and the editor key are not ours
+        /// this frame. The field stays selected after Esc deactivates it, so the focus flag is
+        /// what has to be read, not the selection.
+        /// </summary>
+        public static bool Typing
+        {
+            get
+            {
+                var system = EventSystem.current;
+                var selected = system != null ? system.currentSelectedGameObject : null;
+                var field = selected != null ? selected.GetComponent<TMP_InputField>() : null;
+                return field != null && field.isFocused;
+            }
+        }
 
         public static void MarkClosed()
         {

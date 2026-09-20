@@ -578,7 +578,7 @@ namespace ValheimTomrer.Editor.Ui
         /// <summary>The editing keys. Silent while a text field has the keyboard.</summary>
         private static void EditorKeys()
         {
-            if (EditorState.Document == null || Typing())
+            if (EditorState.Document == null || ModUi.Typing)
             {
                 return;
             }
@@ -678,13 +678,6 @@ namespace ValheimTomrer.Editor.Ui
             {
                 EditorState.Nudge(delta.normalized * (shift ? 1f : EditorState.NudgeStep));
             }
-        }
-
-        private static bool Typing()
-        {
-            var system = EventSystem.current;
-            var selected = system != null ? system.currentSelectedGameObject : null;
-            return selected != null && selected.GetComponent<TMP_InputField>() != null;
         }
 
         private static float Key(KeyCode key)

@@ -24,6 +24,8 @@ namespace ValheimTomrer.Editor.Ui
         private const float StatusBarHeight = 26f;
         private const float LeftWidth = 300f;
         private const float RightWidth = 340f;
+        private const float BlueprintHeight = 368f;
+        private const float SelectionHeight = 252f;
 
         private static GameObject _root;
         private static int _generation = -1;
@@ -43,6 +45,13 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>0 = Pieces, 1 = In blueprint.</summary>
         public static int LeftTab { get; private set; }
+
+        /// <summary>The right panel's three regions, top to bottom.</summary>
+        public static RectTransform BlueprintPane { get; private set; }
+
+        public static RectTransform SelectionPane { get; private set; }
+
+        public static RectTransform ChecksPane { get; private set; }
 
         public static bool Visible => _root != null && _root.activeSelf;
 
@@ -93,6 +102,7 @@ namespace ValheimTomrer.Editor.Ui
             _generation = -1;
             TopBar = LeftPanel = ViewportHost = RightPanel = StatusBar = null;
             PalettePane = PieceListPane = null;
+            BlueprintPane = SelectionPane = ChecksPane = null;
             _leftTabs = null;
             StatusText = null;
         }
@@ -193,9 +203,42 @@ namespace ValheimTomrer.Editor.Ui
             UiBuild.Stretch(sunken.rectTransform);
 
             Caption(TopBar, "Valheim T\u00f8mrer", 26f, TextAlignmentOptions.Left, UiTheme.Accent);
-            Caption(RightPanel, "Properties", 18f, TextAlignmentOptions.Top, UiTheme.TextDim);
             StatusText = Caption(StatusBar, "F7 or Esc closes", 16f, TextAlignmentOptions.Left, UiTheme.TextDim);
             BuildLeftTabs();
+            BuildRightPanes();
+        }
+
+        /// <summary>
+        /// The right panel, top to bottom: the blueprint and its build card, the selection, then
+        /// the problem list, which takes whatever is left.
+        /// </summary>
+        private static void BuildRightPanes()
+        {
+            const float Edge = 6f;
+            var blueprintTop = Edge;
+            var selectionTop = blueprintTop + BlueprintHeight + Gap;
+            var checksTop = selectionTop + SelectionHeight + Gap;
+
+            BlueprintPane = Band("BlueprintPane", blueprintTop, BlueprintHeight, Edge);
+            SelectionPane = Band("SelectionPane", selectionTop, SelectionHeight, Edge);
+
+            ChecksPane = UiBuild.Rect("ChecksPane", RightPanel);
+            ChecksPane.anchorMin = Vector2.zero;
+            ChecksPane.anchorMax = Vector2.one;
+            ChecksPane.offsetMin = new Vector2(Edge, Edge);
+            ChecksPane.offsetMax = new Vector2(-Edge, -checksTop);
+        }
+
+        /// <summary>One region of fixed height, measured down from the right panel's top edge.</summary>
+        private static RectTransform Band(string name, float top, float height, float edge)
+        {
+            var rect = UiBuild.Rect(name, RightPanel);
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.offsetMin = new Vector2(edge, -top - height);
+            rect.offsetMax = new Vector2(-edge, -top);
+            return rect;
         }
 
         /// <summary>Two tabs over the left panel, and an empty pane under each.</summary>

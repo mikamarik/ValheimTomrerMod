@@ -31,7 +31,8 @@ namespace ValheimTomrer.Dev
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
     /// "editor_palette" builds the piece catalog and checks the palette's counts and filters;
     /// "editor_snap" runs the placing and snapping engine against a table of rays, with no UI;
-    /// "editor_edit" drives placing, selecting, copying, turning, nudging and undo, then draws it.
+    /// "editor_edit" drives placing, selecting, copying, turning, nudging and undo, then draws it;
+    /// "editor_panels" checks the right panel: the build card, the selection fields and the problem list.
     /// </summary>
     internal static class AutoTest
     {
@@ -184,6 +185,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_edit":
                     scenario = TestEditorEdit(player);
+                    break;
+                case "editor_panels":
+                    scenario = TestEditorPanels(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -2142,6 +2146,428 @@ namespace ValheimTomrer.Dev
         {
             var forward = q * Vector3.forward;
             return Mathf.Atan2(forward.x, forward.z) * Mathf.Rad2Deg;
+        }
+
+        // ---------- scenario: editor_panels ----------
+
+        /// <summary>
+        /// The right panel. A blueprint holding a seasonal piece, a locked piece, an unknown
+        /// prefab, a piece of another tool, two pieces in the same spot and a scaled piece is
+        /// written to a file and opened; its problem list is then compared row by row with the
+        /// list the phase asks for. The window is opened on it for the rest: a check row is
+        /// clicked, the selection fields are read, committed and reverted, and a new name is
+        /// typed into the blueprint panel with the build card watching.
+        /// </summary>
+        private static IEnumerator TestEditorPanels(Player player)
+        {
+            yield return new WaitForSeconds(1f);
+            yield return EquipHammer(player);
+
+            var tool = player.GetBuildTool();
+            Check(tool != null, "the hammer's piece table is in hand");
+            if (tool == null)
+            {
+                yield break;
+            }
+
+            // A short, known unlock list, so "not unlocked yet" is a fact and not a guess.
+            var knownBefore = new List<string>(player.m_knownRecipes);
+            KnowAFewPieces(player, tool, 6);
+            yield return null;
+
+            PieceCatalog.Clear();
+            PieceCatalog.Ensure();
+            var normal = PieceCatalog.Unlocked.FirstOrDefault(p => p.Dlc.Length == 0 && p.Cost.Length > 0);
+            var locked = PieceCatalog.All.FirstOrDefault(
+                p => !p.Seasonal && p.Dlc.Length == 0 && !PieceCatalog.IsUnlocked(p));
+            var seasonal = PieceCatalog.All.FirstOrDefault(p => p.Seasonal && p.Dlc.Length == 0);
+            var hoe = OtherToolPiece();
+            hoe = hoe != null && PieceCatalog.OtherTool(hoe) != null ? hoe : null;
+            Check(normal != null && locked != null && seasonal != null,
+                $"the fixture's pieces exist: normal={Named(normal)} locked={Named(locked)} "
+                + $"seasonal={Named(seasonal)} otherTool={hoe ?? "none"}");
+            if (normal == null || locked == null || seasonal == null)
+            {
+                yield break;
+            }
+
+            var document = PanelsFixture(normal, seasonal, locked, hoe);
+            if (document == null)
+            {
+                yield break;
+            }
+
+            var checks = CheckProblemList(document, normal, seasonal, locked, hoe);
+            CheckOtherProblems(normal);
+            yield return PanelsInTheWindow(document, checks, normal);
+
+            player.m_knownRecipes.Clear();
+            foreach (var name in knownBefore)
+            {
+                player.m_knownRecipes.Add(name);
+            }
+
+            player.UpdateAvailablePiecesList();
+            Log($"put the character's {knownBefore.Count} recipes back");
+        }
+
+        /// <summary>Cuts the character's recipe list down to a handful, so unlocks are known.</summary>
+        private static void KnowAFewPieces(Player player, PieceTable tool, int count)
+        {
+            var few = new List<string>();
+            foreach (var prefab in tool.m_pieces)
+            {
+                var piece = prefab != null ? prefab.GetComponent<Piece>() : null;
+                if (piece == null || piece.m_repairPiece || piece.m_removePiece || !piece.m_enabled)
+                {
+                    continue;
+                }
+
+                if (!few.Contains(piece.m_name))
+                {
+                    few.Add(piece.m_name);
+                }
+
+                if (few.Count == count)
+                {
+                    break;
+                }
+            }
+
+            player.m_knownRecipes.Clear();
+            foreach (var name in few)
+            {
+                player.m_knownRecipes.Add(name);
+            }
+
+            player.UpdateAvailablePiecesList();
+        }
+
+        /// <summary>Writes the test blueprint and reads it back through the real reader.</summary>
+        private static BlueprintDocument PanelsFixture(
+            PieceEntry normal, PieceEntry seasonal, PieceEntry locked, string hoe)
+        {
+            var lines = new List<string>
+            {
+                "#Name:Panel test",
+                "#Description:A blueprint with problems",
+                "#Icon:vt_missingicon",
+                "#Pieces",
+                PieceFixtureLine(normal.PrefabName, 12f, null),
+                PieceFixtureLine(normal.PrefabName, 12f, null),           // the same spot as the one above
+                PieceFixtureLine(seasonal.PrefabName, 14f, null),
+                PieceFixtureLine(locked.PrefabName, 16f, null),
+                PieceFixtureLine("vt_nosuchpiece", 18f, null),
+                PieceFixtureLine("vt_nosuchpiece", 20f, null),
+                PieceFixtureLine(normal.PrefabName, 22f, "info;1;2;1"),   // a scale other than 1
+            };
+
+            if (hoe != null)
+            {
+                lines.Add(PieceFixtureLine(hoe, 24f, null));
+            }
+
+            lines.Add("");
+            var folder = Path.Combine(OutDir, "panels-test");
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, "problems.blueprint");
+            File.WriteAllText(path, string.Join("\n", lines.ToArray()));
+
+            if (!DocumentStore.Open(path, out var document, out var error))
+            {
+                Check(false, "the test blueprint opens: " + error);
+                return null;
+            }
+
+            Check(document.Pieces.Count == lines.Count - 5,
+                $"the test blueprint holds {document.Pieces.Count} pieces");
+            return document;
+        }
+
+        private static string PieceFixtureLine(string prefab, float x, string rest)
+        {
+            var line = $"{prefab};;{BlueprintFormat.FormatNumber(x, 4)};0;12;0;0;0;1";
+            return rest == null ? line : line + ";" + rest;
+        }
+
+        /// <summary>The whole problem list, row by row, in the order the panel shows it.</summary>
+        private static List<Check> CheckProblemList(
+            BlueprintDocument document, PieceEntry normal, PieceEntry seasonal, PieceEntry locked, string hoe)
+        {
+            // Cost items plus station types, counted here and not by the card, so the card's own
+            // overflow row is checked against something independent.
+            var tokens = new HashSet<string>();
+            var stations = new HashSet<string>();
+            foreach (var entry in new[] { normal, seasonal, locked })
+            {
+                foreach (var cost in entry.Cost)
+                {
+                    if (cost.Amount > 0)
+                    {
+                        tokens.Add(cost.Token);
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(entry.StationToken))
+                {
+                    stations.Add(entry.StationToken);
+                }
+            }
+
+            var slots = BlueprintCard.SlotCount();
+            var needed = tokens.Count + stations.Count;
+
+            var want = new List<string>
+            {
+                "Error|Unknown piece vt_nosuchpiece (2x). The game skips the whole blueprint.",
+            };
+            if (hoe != null)
+            {
+                want.Add($"Error|{hoe} is a {PieceCatalog.OtherTool(hoe).ToLowerInvariant()} piece (1 piece). "
+                    + "The blueprint is never offered.");
+            }
+
+            want.Add($"Warning|{seasonal.DisplayName} is seasonal. The blueprint is offered only in its season.");
+            want.Add($"Warning|{locked.DisplayName} is not unlocked yet. "
+                + "The blueprint is not offered in build mode.");
+            want.Add("Warning|1 piece with a scale other than 1. The mod builds them at normal size.");
+            want.Add("Warning|2 pieces sit in the same spot as another piece of the same kind.");
+            if (needed > slots)
+            {
+                want.Add($"Warning|{needed} cost items and stations. The card shows only {slots}.");
+            }
+
+            want.Add("Warning|The icon piece vt_missingicon is not in the blueprint. "
+                + "The game shows the first piece's icon.");
+            want.Add("Note|The origin is *");
+
+            var got = Checks.Run(document);
+            Check(got.Count == want.Count, $"the list has {want.Count} rows (is {got.Count})");
+            for (var i = 0; i < Mathf.Max(got.Count, want.Count); i++)
+            {
+                var line = i < got.Count ? got[i].LevelWord + "|" + got[i].Message : "(missing)";
+                var wanted = i < want.Count ? want[i] : "(nothing)";
+                var ok = wanted.EndsWith("*")
+                    ? line.StartsWith(wanted.Substring(0, wanted.Length - 1), StringComparison.Ordinal)
+                    : line == wanted;
+                Check(ok, $"row {i + 1}: {line}" + (ok ? "" : $"  |  wanted {wanted}"));
+            }
+
+            Check(Checks.Summary(got).StartsWith(hoe != null ? "2 errors" : "1 error"),
+                $"the summary reads '{Checks.Summary(got)}'");
+            return got;
+        }
+
+        /// <summary>The rows the fixture cannot show: a line that cannot be read, empty, too big, a full card.</summary>
+        private static void CheckOtherProblems(PieceEntry normal)
+        {
+            var empty = DocumentStore.New("Empty");
+            var rows = Checks.Run(empty);
+            Check(rows.Count == 1 && rows[0].Level == CheckLevel.Error
+                && rows[0].Message == "No pieces. The game skips an empty blueprint.",
+                $"an empty blueprint has one row: {Row(rows, 0)}");
+
+            rows = Checks.Run(empty, "line 7: expected at least 9 fields, got 3");
+            Check(rows.Count == 2 && rows[0].Message
+                == "Line 7 cannot be read (expected at least 9 fields, got 3). The game skips this file.",
+                $"a line the reader rejects is a row: {Row(rows, 0)}");
+
+            var big = DocumentStore.New("Too many");
+            var many = new List<NewPiece>();
+            for (var i = 0; i <= BlueprintFormat.MaxPieces; i++)
+            {
+                many.Add(new NewPiece
+                {
+                    PrefabName = normal.PrefabName,
+                    Position = new Vector3(i % 50, i / 50, 0f),
+                    Rotation = Quaternion.identity,
+                });
+            }
+
+            big.AddPieces(many);
+            rows = Checks.Run(big);
+            Check(rows.Any(c => c.Level == CheckLevel.Error
+                    && c.Message == $"{many.Count} pieces. The mod reads at most {BlueprintFormat.MaxPieces}."),
+                $"{many.Count} pieces is one too many: {Row(rows, 0)}");
+
+            // A blueprint with more materials and stations than the card has squares.
+            var slots = BlueprintCard.SlotCount();
+            var full = DocumentStore.New("Full card");
+            var tokens = new HashSet<string>();
+            var stations = new HashSet<string>();
+            var x = 0f;
+            foreach (var entry in PieceCatalog.All)
+            {
+                if (tokens.Count + stations.Count > slots)
+                {
+                    break;
+                }
+
+                var before = tokens.Count + stations.Count;
+                foreach (var cost in entry.Cost)
+                {
+                    if (cost.Amount > 0)
+                    {
+                        tokens.Add(cost.Token);
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(entry.StationToken))
+                {
+                    stations.Add(entry.StationToken);
+                }
+
+                if (tokens.Count + stations.Count > before)
+                {
+                    full.AddPiece(entry.PrefabName, new Vector3(x += 4f, 0f, 0f), Quaternion.identity);
+                }
+            }
+
+            var needed = tokens.Count + stations.Count;
+            var wanted = $"{needed} cost items and stations. The card shows only {slots}.";
+            rows = Checks.Run(full);
+            Check(needed > slots && rows.Any(c => c.Message == wanted),
+                $"{needed} cost items and stations do not fit on {slots} squares: '{wanted}'");
+
+            var card = BlueprintCard.Build(full);
+            Check(card.Slots.Count == slots && card.Hidden.Count == needed - slots,
+                $"the card keeps {card.Slots.Count} and hides {card.Hidden.Count}");
+            Check(card.Slots.Count < 2 || card.Slots[0].Amount >= card.Slots[1].Amount,
+                "the card's cost slots go from the most needed down");
+        }
+
+        private static string Row(List<Check> rows, int index)
+        {
+            return index < rows.Count ? rows[index].LevelWord + " " + rows[index].Message : "(no rows)";
+        }
+
+        /// <summary>The three panels in the real window, driven the way a player would.</summary>
+        private static IEnumerator PanelsInTheWindow(
+            BlueprintDocument document, List<Check> checks, PieceEntry normal)
+        {
+            EditorSession.OpenDocument(document);
+            yield return null;
+            yield return null;
+            yield return null;
+            Check(ModUi.Open && EditorSession.Document == document, "the editor opened on the test blueprint");
+            Check(!document.Dirty, "a freshly opened blueprint is not dirty");
+
+            // ---- the problem list ----
+            Check(ChecksPanel.RowCount == checks.Count,
+                $"the panel draws a row per problem: {ChecksPanel.RowCount} of {checks.Count}");
+            Check(ChecksPanel.HeadingText == "Checks   " + Checks.Summary(checks),
+                $"the heading counts them: '{ChecksPanel.HeadingText}'");
+            Check(ChecksPanel.RowText(0).EndsWith(checks[0].Message),
+                $"the first row reads '{ChecksPanel.RowText(0)}'");
+
+            var unknown = checks.FindIndex(c => c.Message.StartsWith("Unknown piece"));
+            var wantIds = checks[unknown].Pieces;
+            ChecksPanel.Click(unknown);
+            yield return null;
+            yield return null;
+            Check(wantIds.Length == 2 && EditorState.SelectionCount == 2
+                && wantIds.All(EditorState.IsSelected),
+                $"clicking the unknown-piece row selected its {wantIds.Length} pieces "
+                + $"(selection is {EditorState.SelectionCount})");
+            Check(SelectionPanel.Mode == 2 && SelectionPanel.CountText == "2 pieces selected."
+                && SelectionPanel.KindsText == "2x vt_nosuchpiece",
+                $"the selection panel tallies them: '{SelectionPanel.CountText}' '{SelectionPanel.KindsText}'");
+
+            // ---- the name, with the card watching ----
+            var undoBefore = document.UndoDepth;
+            var card = BlueprintCard.Build(document);
+            Check(BlueprintPanel.CardText.StartsWith("A blueprint with problems\n")
+                && BlueprintPanel.CardText.Contains($"{document.Pieces.Count} pieces. Wheel: rotate."),
+                $"the card text reads '{BlueprintPanel.CardText.Replace("\n", " / ")}'");
+            Check(BlueprintPanel.FilledSlots == card.Slots.Count,
+                $"the card fills {BlueprintPanel.FilledSlots} of its {card.TotalSlots} squares");
+
+            BlueprintPanel.NameField.text = "Panel tes";
+            BlueprintPanel.NameField.text = "Panel test 2";
+            yield return null;
+            yield return null;
+            Check(document.Dirty && document.Name == "Panel test 2",
+                $"typing a name changed the blueprint: '{document.Name}', dirty={document.Dirty}");
+            Check(document.UndoDepth == undoBefore + 1,
+                $"the keystrokes are one undo step: {document.UndoDepth} of {undoBefore + 1}");
+            Check(BlueprintPanel.CardName == "Panel test 2",
+                $"the build card followed: '{BlueprintPanel.CardName}'");
+
+            // ---- the icon chooser ----
+            var kinds = document.Pieces.Select(p => p.PrefabName).Distinct().Count();
+            Check(BlueprintPanel.ChoiceCount == kinds + 1,
+                $"First plus one button per kind: {BlueprintPanel.ChoiceCount} for {kinds} kinds");
+            Check(BlueprintPanel.IconWarningText.Length > 0,
+                $"the missing icon piece is called out: '{BlueprintPanel.IconWarningText}'");
+            BlueprintPanel.Choose(1);
+            yield return null;
+            yield return null;
+            Check(BlueprintPanel.ChosenIcon == normal.PrefabName && BlueprintPanel.IconWarningText.Length == 0,
+                $"picking the first kind set #Icon:{BlueprintPanel.ChosenIcon}");
+            Check(ChecksPanel.RowCount == checks.Count - 1,
+                $"and the icon problem left the list: {ChecksPanel.RowCount} of {checks.Count - 1}");
+
+            // ---- the selection fields ----
+            var scaled = document.Pieces.Last(p => p.PrefabName == normal.PrefabName);
+            EditorState.Select(scaled.Id);
+            yield return null;
+            yield return null;
+            Check(SelectionPanel.Mode == 1 && SelectionPanel.NameText == normal.DisplayName,
+                $"one piece selected: '{SelectionPanel.NameText}'");
+            Check(SelectionPanel.XField.text == "22" && SelectionPanel.ZField.text == "12"
+                && SelectionPanel.YawField.text == "0",
+                $"its place reads x={SelectionPanel.XField.text} z={SelectionPanel.ZField.text} "
+                + $"yaw={SelectionPanel.YawField.text}");
+            Check(SelectionPanel.ScaleText.StartsWith("Scale 1 x 2 x 1"),
+                $"the scale warning reads '{SelectionPanel.ScaleText}'");
+            Check(SelectionPanel.KeptText.Contains("Extra fields: info;1;2;1"),
+                $"the kept fields are shown: '{SelectionPanel.KeptText.Replace("\n", " / ")}'");
+
+            SelectionPanel.XField.text = "25.5";
+            SelectionPanel.XField.onEndEdit.Invoke(SelectionPanel.XField.text);
+            yield return null;
+            yield return null;
+            var moved = document.Find(scaled.Id);
+            Check(Mathf.Abs(moved.Position.x - 25.5f) < 1e-4f && SelectionPanel.XField.text == "25.5",
+                $"the x box moved the piece to {V4(moved.Position)}");
+
+            SelectionPanel.XField.text = "nonsense";
+            SelectionPanel.XField.onEndEdit.Invoke(SelectionPanel.XField.text);
+            yield return null;
+            Check(SelectionPanel.XField.text == "25.5"
+                && Mathf.Abs(document.Find(scaled.Id).Position.x - 25.5f) < 1e-4f,
+                $"a number it cannot read is put back: '{SelectionPanel.XField.text}'");
+
+            // Esc: TMP restores the old text itself and marks the edit cancelled, so nothing is applied.
+            AccessTools.Field(typeof(TMPro.TMP_InputField), "m_WasCanceled")
+                .SetValue(SelectionPanel.XField, true);
+            SelectionPanel.XField.onEndEdit.Invoke("99");
+            yield return null;
+            Check(SelectionPanel.XField.text == "25.5"
+                && Mathf.Abs(document.Find(scaled.Id).Position.x - 25.5f) < 1e-4f,
+                $"Esc reverts instead of applying: '{SelectionPanel.XField.text}'");
+            AccessTools.Field(typeof(TMPro.TMP_InputField), "m_WasCanceled")
+                .SetValue(SelectionPanel.XField, false);
+
+            SelectionPanel.YawField.text = "45";
+            SelectionPanel.YawField.onEndEdit.Invoke(SelectionPanel.YawField.text);
+            yield return null;
+            yield return null;
+            Check(Mathf.Abs(Mathf.DeltaAngle(SelectionPanel.YawOf(document.Find(scaled.Id).Rotation), 45f)) < 0.01f,
+                $"the yaw box turned it to {SelectionPanel.YawOf(document.Find(scaled.Id).Rotation):0.##} degrees");
+
+            ViewportHost.Frame();
+            yield return null;
+            yield return Screenshot("editor-panels-1-right-panel");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.Escape);
+            yield return new WaitForSeconds(0.5f);
+            Check(!ModUi.Open, "Esc closed the editor");
+        }
+
+        private static string Named(PieceEntry entry)
+        {
+            return entry != null ? entry.PrefabName : "none";
         }
 
         // ---------- scenario: editor_snap ----------
