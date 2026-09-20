@@ -3,6 +3,7 @@
 # the results. It uses its own character, world and save folder, never the player's saves.
 #   ./scripts/autotest.sh              scenario "blueprints": build every kit and check it
 #   ./scripts/autotest.sh dump         write every hammer piece's size to .devtest/pieces.txt
+#   ./scripts/autotest.sh probe        measure layers, UI, input and pieces to .devtest/probe.txt
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
 set -euo pipefail
 
