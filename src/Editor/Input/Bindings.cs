@@ -96,6 +96,12 @@ namespace ValheimTomrer.Editor.Input
                 return;
             }
 
+            if (PiecePicker.IsOpen)
+            {
+                // The piece menu still reads keys, but nothing flies behind it.
+                Held.Clear();
+            }
+
             // macOS sends no key-up while Cmd is down, so a fly key held into a shortcut would
             // fly on for ever. Cmd going down drops everything, as the browser editor does.
             if (ZInput.GetKeyDown(KeyCode.LeftCommand, false) || ZInput.GetKeyDown(KeyCode.RightCommand, false))
@@ -140,6 +146,13 @@ namespace ValheimTomrer.Editor.Input
             if (ModUi.Typing || Dialogs.IsOpen)
             {
                 return false;
+            }
+
+            // The piece menu owns the keyboard while it is up: the arrows move, Enter places.
+            if (PiecePicker.IsOpen)
+            {
+                PiecePicker.Key(key);
+                return true;
             }
 
             // Ctrl also flies down, so a shortcut it can reach has to win before the fly keys.
@@ -248,12 +261,18 @@ namespace ValheimTomrer.Editor.Input
         }
 
         /// <summary>
-        /// Esc, one step back at a time: a dialog, then what is in hand, then the free camera,
-        /// then the selection. False means there was nothing left, so the window closes.
+        /// Esc (and the pad's circle), one step back at a time: a dialog, the piece menu, then
+        /// what is in hand, then the free camera, then the selection. False means there was
+        /// nothing left, so the window closes.
         /// </summary>
         public static bool Cancel()
         {
             if (Dialogs.Close())
+            {
+                return true;
+            }
+
+            if (PiecePicker.Close())
             {
                 return true;
             }
@@ -501,7 +520,7 @@ namespace ValheimTomrer.Editor.Input
             new HelpRow("Esc", "Stop placing, else clear the selection, else close the editor"),
         };
 
-        /// <summary>The controller half. Filled in when the pad is wired up.</summary>
-        public static readonly HelpRow[] Pad = new HelpRow[0];
+        /// <summary>The controller half, in the wording of the pad in hand (<see cref="PadBindings"/>).</summary>
+        public static HelpRow[] Pad => PadBindings.Help(EditorInput.Glyphs);
     }
 }

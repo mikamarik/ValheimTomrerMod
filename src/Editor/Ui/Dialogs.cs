@@ -111,7 +111,8 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
-            if (EditorInput.Confirm)
+            // A selected button gets cross and Enter itself, or one press would fire twice.
+            if (!ModUi.HasSelection && EditorInput.Confirm)
             {
                 Submit();
             }
@@ -231,11 +232,6 @@ namespace ValheimTomrer.Editor.Ui
 
             Dim(scroll.content, "On a Mac, Cmd works everywhere Ctrl does.");
             Heading(scroll.content, "Controller");
-            if (Bindings.Pad.Length == 0)
-            {
-                Dim(scroll.content, "The controller is wired up in the next step.");
-            }
-
             foreach (var row in Bindings.Pad)
             {
                 KeyRow(scroll.content, row);
@@ -338,6 +334,7 @@ namespace ValheimTomrer.Editor.Ui
                 Mathf.Min(width, Mathf.Max(360f, space.width - 120f)),
                 Mathf.Min(height, Mathf.Max(220f, space.height - 120f)));
             _root.gameObject.SetActive(true);
+            _root.SetAsLastSibling();   // over the piece menu, which also sets itself last
             return true;
         }
 
@@ -354,6 +351,9 @@ namespace ValheimTomrer.Editor.Ui
 
             _submit = UiBuild.Button("Right", _buttons, right, () => onRight());
             Width(_submit, 140f);
+
+            // The pad walks the two buttons; cross presses the selected one (Tick stands back).
+            UiBuild.LinkRow(new List<Selectable> { cancel, _submit });
         }
 
         private static void Width(Button button, float width)

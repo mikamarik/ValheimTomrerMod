@@ -2,7 +2,8 @@ namespace ValheimTomrer.Editor.Input
 {
     /// <summary>
     /// Button names for on-screen hints, in the wording of the pad in hand. Same table as the
-    /// Tomrer editor (src/view/gamepad.ts).
+    /// Tomrer editor (src/view/gamepad.ts), with one change: cross is "×" (U+00D7), not "✕",
+    /// which the game's font does not have and draws as an empty box.
     /// </summary>
     internal sealed class Glyphs
     {
@@ -25,7 +26,7 @@ namespace ValheimTomrer.Editor.Input
         public static readonly Glyphs Ps = new Glyphs(
             new[]
             {
-                "✕", "○", "□", "△", "L1", "R1", "L2", "R2", "Options", "L3", "R3",
+                "×", "○", "□", "△", "L1", "R1", "L2", "R2", "Options", "L3", "R3",
                 "D-pad up", "D-pad down", "D-pad left", "D-pad right",
             },
             "Left stick", "Right stick", "D-pad");

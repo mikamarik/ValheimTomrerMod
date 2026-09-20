@@ -35,6 +35,41 @@ namespace ValheimTomrer.Editor.Ui
             }
         }
 
+        /// <summary>
+        /// The button the UI has selected inside our window, or null. A pad's cross presses it
+        /// through the game's own UI module, so anything we also bind to cross has to stand back
+        /// while it is there, or one press fires twice.
+        /// </summary>
+        public static GameObject Selected
+        {
+            get
+            {
+                var system = EventSystem.current;
+                var selected = system != null ? system.currentSelectedGameObject : null;
+                if (selected == null || !selected.activeInHierarchy)
+                {
+                    return null;
+                }
+
+                var root = EditorWindow.Root;
+                return root != null && selected.transform.IsChildOf(root)
+                    && selected.GetComponent<UnityEngine.UI.Selectable>() != null
+                    ? selected
+                    : null;
+            }
+        }
+
+        public static bool HasSelection => Selected != null;
+
+        /// <summary>Lets go of our selected button, so the pad aims the pane instead.</summary>
+        public static void ClearSelection()
+        {
+            if (Selected != null)
+            {
+                EventSystem.current.SetSelectedGameObject(null);
+            }
+        }
+
         public static void MarkClosed()
         {
             Open = false;

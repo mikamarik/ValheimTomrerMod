@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -259,10 +260,12 @@ namespace ValheimTomrer.Editor.Ui
             bar.offsetMin = new Vector2(6f, -6f - Height);
             bar.offsetMax = new Vector2(-6f, -6f);
 
+            var walk = new List<Selectable>();
             for (var i = 0; i < names.Length; i++)
             {
                 var tab = i;
                 var button = UiBuild.Button(names[i], bar, names[i], () => SetLeftTab(tab), Height);
+                walk.Add(button);
                 var rect = (RectTransform)button.transform;
                 rect.anchorMin = new Vector2(i / (float)names.Length, 0f);
                 rect.anchorMax = new Vector2((i + 1) / (float)names.Length, 1f);
@@ -272,6 +275,7 @@ namespace ValheimTomrer.Editor.Ui
                 _leftTabs[i].fontSize = 15f;
             }
 
+            UiBuild.LinkRow(walk);
             PalettePane = Pane("PalettePane", Height);
             PieceListPane = Pane("PieceListPane", Height);
             SetLeftTab(0);

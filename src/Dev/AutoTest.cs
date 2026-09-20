@@ -34,7 +34,8 @@ namespace ValheimTomrer.Dev
     /// "editor_snap" runs the placing and snapping engine against a table of rays, with no UI;
     /// "editor_edit" drives placing, selecting, copying, turning, nudging and undo, then draws it;
     /// "editor_panels" checks the right panel: the build card, the selection fields and the problem list;
-    /// "editor_keys" drives every key, the wheel and the mouse, plus the top bar and the dialogs.
+    /// "editor_keys" drives every key, the wheel and the mouse, plus the top bar and the dialogs;
+    /// "editor_pad" drives every controller button through a made-up pad, plus the piece menu.
     /// </summary>
     internal static class AutoTest
     {
@@ -193,6 +194,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_keys":
                     scenario = TestEditorKeys(player);
+                    break;
+                case "editor_pad":
+                    scenario = TestEditorPad(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -3086,6 +3090,551 @@ namespace ValheimTomrer.Dev
         private static string Strip(string text)
         {
             return System.Text.RegularExpressions.Regex.Replace(text ?? "", "<[^>]*>", "");
+        }
+
+        // ---------- scenario: editor_pad ----------
+
+        private static PadState _pad;
+
+        /// <summary>
+        /// The whole controller map, driven through a made-up pad (<see cref="PadReader.Fake"/>),
+        /// so no device has to be plugged in: every row of the help table in the order
+        /// <see cref="PadBindings"/> dispatches them, both repeats, the piece menu, and the mouse
+        /// taking the aim back from the crosshair.
+        /// </summary>
+        private static IEnumerator TestEditorPad(Player player)
+        {
+            yield return new WaitForSeconds(1f);
+
+            PieceCatalog.Ensure();
+            var wall = PieceCatalog.Find("woodwall");
+            Check(PieceCatalog.Ready && wall != null, "the catalog is built and has woodwall");
+            if (wall == null)
+            {
+                yield break;
+            }
+
+            // Its own blueprint folder: the player's files are never touched.
+            var folder = Path.Combine(OutDir, "pad-test");
+            var wasFolder = BlueprintLibrary.UserFolder;
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, true);
+            }
+
+            Directory.CreateDirectory(folder);
+            BlueprintLibrary.UserFolder = folder;
+
+            // Every piece in the menu, so a tab is a full grid and a held direction has room to run.
+            var wasShowAll = EditorConfig.ShowAllPieces.Value;
+            EditorConfig.ShowAllPieces.Value = true;
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open, "the key opened the editor");
+
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            var document = EditorSession.Document;
+            Check(ViewportHost.Ready && document != null && document.Pieces.Count >= 3,
+                $"a kit stands in the pane after {waited:0.00} s: "
+                + $"{(document != null ? document.Pieces.Count : 0)} pieces");
+            if (document != null && document.Pieces.Count >= 3)
+            {
+                ViewportHost.SetMode(CameraMode.Orbit);
+                _pad = new PadState();
+                PadReader.Fake = _pad;
+                yield return null;
+                yield return null;
+
+                yield return PadWakes();
+                yield return PadDialogs(document);
+                yield return PadMenu();
+                yield return PadCamera();
+                yield return PadPlacing(document, wall);
+                yield return PadAimed(document);
+                yield return PadMouse();
+            }
+
+            PadReader.Fake = null;
+            _pad = null;
+            EditorConfig.ShowAllPieces.Value = wasShowAll;
+            BlueprintLibrary.UserFolder = wasFolder;
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
+            Check(!ModUi.Open, "the editor closed");
+        }
+
+        /// <summary>Holds buttons for one read, then lets them go: one press, like a tap.</summary>
+        private static IEnumerator Tap(params PadButton[] buttons)
+        {
+            var added = new List<PadButton>();
+            foreach (var button in buttons)
+            {
+                if (_pad.Down.Add(button))
+                {
+                    added.Add(button);
+                }
+            }
+
+            yield return null;
+            yield return null;
+            foreach (var button in added)
+            {
+                _pad.Down.Remove(button);
+            }
+
+            yield return null;
+        }
+
+        /// <summary>The same, held down for a while, for the repeats.</summary>
+        private static IEnumerator Hold(PadButton button, float seconds)
+        {
+            var added = _pad.Down.Add(button);
+            yield return Wait(seconds);
+            if (added)
+            {
+                _pad.Down.Remove(button);
+            }
+
+            yield return null;
+        }
+
+        /// <summary>Frames until so many real seconds have passed. The editor reads unscaled time.</summary>
+        private static IEnumerator Wait(float seconds)
+        {
+            var until = Time.unscaledTime + seconds;
+            while (Time.unscaledTime < until)
+            {
+                yield return null;
+            }
+        }
+
+        /// <summary>Row 1: the pad woke, so the crosshair aims and the hints switch names.</summary>
+        private static IEnumerator PadWakes()
+        {
+            Check(!ViewportHost.PadAim, "the mouse aims until the pad is touched");
+            yield return Tap(PadButton.L2);
+            Check(ViewportHost.PadAim, "the pad woke: the crosshair takes the aim");
+
+            var ps = EditorInput.Glyphs;
+            Check(ps.Of(PadButton.Cross) == "×" && ps.Of(PadButton.L1) == "L1" && ps.Of(PadButton.Options) == "Options",
+                $"a PlayStation pad names its buttons {ps.Of(PadButton.Cross)} {ps.Of(PadButton.Circle)} "
+                + $"{ps.Of(PadButton.Square)} {ps.Of(PadButton.Triangle)}");
+
+            var rows = Bindings.Pad;
+            Check(rows.Length == 18, $"the help table has the whole controller half: {rows.Length} rows");
+            Check(Array.Exists(rows, r => r.Keys == "×") && Array.Exists(rows, r => r.Keys == "L2 + R1"),
+                "and the rows are written in those names");
+
+            _pad.Ps = false;
+            yield return null;
+            yield return null;
+            var xbox = EditorInput.Glyphs;
+            Check(xbox.Of(PadButton.Cross) == "A" && xbox.Of(PadButton.L1) == "LB" && xbox.Of(PadButton.Options) == "Menu",
+                $"an Xbox pad switches them to {xbox.Of(PadButton.Cross)} {xbox.Of(PadButton.Circle)} "
+                + $"{xbox.Of(PadButton.Square)} {xbox.Of(PadButton.Triangle)}");
+            Check(Array.Exists(Bindings.Pad, r => r.Keys == "A") && Array.Exists(Bindings.Pad, r => r.Keys == "LT + RB"),
+                "and the help table follows");
+
+            _pad.Ps = true;
+            yield return null;
+            yield return null;
+        }
+
+        /// <summary>Rows 2 and 3: a dialog eats the pad, Options opens and closes the help.</summary>
+        private static IEnumerator PadDialogs(BlueprintDocument document)
+        {
+            yield return Tap(PadButton.Options);
+            Check(Dialogs.Kind == "help", $"Options opens the help: '{Dialogs.TitleText}'");
+
+            EditorState.Select(document.Pieces[0].Id);
+            yield return Tap(PadButton.Square);
+            Check(EditorState.Mode == EditMode.Idle, "the other buttons do nothing while it is up");
+
+            yield return Tap(PadButton.Options);
+            Check(!Dialogs.IsOpen, "Options closes the help again");
+
+            yield return Tap(PadButton.Options);
+            yield return Tap(PadButton.Circle);
+            Check(!Dialogs.IsOpen, "circle closes a dialog too");
+            EditorState.Select(Array.Empty<int>());
+        }
+
+        /// <summary>Row 8 and the piece menu: tabs, the highlight, the repeat, place and close.</summary>
+        private static IEnumerator PadMenu()
+        {
+            EditorState.CancelMode();
+            EditorState.Select(Array.Empty<int>());
+
+            yield return Tap(PadButton.Cross);
+            Check(PiecePicker.IsOpen, "cross opens the piece menu");
+            Check(PiecePicker.TabCount == PieceCatalog.Tags.Count && PiecePicker.TabName == "Building",
+                $"one tab per usage tag, open on Building: {PiecePicker.TabCount} tabs, '{PiecePicker.TabName}'");
+            Check(PiecePicker.Count > PiecePicker.Columns * 2 && PiecePicker.LiveTiles >= PiecePicker.Count,
+                $"the tab holds {PiecePicker.Count} pieces in a grid {PiecePicker.Columns} icons wide");
+
+            var tab = PiecePicker.Tab;
+            yield return Tap(PadButton.R1);
+            var next = PiecePicker.Tab;
+            yield return Tap(PadButton.L1);
+            Check(next == tab + 1 && PiecePicker.Tab == tab,
+                $"R1 and L1 change the tab: {tab} -> {next} -> {PiecePicker.Tab}");
+
+            PiecePicker.NextTab(-PiecePicker.Tab);
+            yield return Tap(PadButton.L1);
+            var wrapped = PiecePicker.Tab;
+            yield return Tap(PadButton.R1);
+            Check(wrapped == PiecePicker.TabCount - 1 && PiecePicker.Tab == 0,
+                $"L1 on the first tab wraps to the last: {wrapped} of {PiecePicker.TabCount}");
+
+            for (var i = 0; i < PiecePicker.TabCount && PiecePicker.TabName != "Building"; i++)
+            {
+                PiecePicker.NextTab(1);
+            }
+
+            PiecePicker.Move(-PiecePicker.Count, 0);
+            yield return Tap(PadButton.Right);
+            var right = PiecePicker.Index;
+            yield return Tap(PadButton.Down);
+            var down = PiecePicker.Index;
+            yield return Tap(PadButton.Up);
+            Check(right == 1 && down == 1 + PiecePicker.Columns && PiecePicker.Index == 1,
+                $"the D-pad moves by one and by a row: 0 -> {right} -> {down} -> {PiecePicker.Index}");
+
+            PiecePicker.Move(-PiecePicker.Count, 0);
+            _pad.Ls = new Vector2(1f, 0f);
+            yield return null;
+            yield return null;
+            _pad.Ls = Vector2.zero;
+            var stick = PiecePicker.Index;
+            yield return null;
+            Check(stick == 1, $"the left stick moves it too: {stick}");
+
+            PiecePicker.Move(-PiecePicker.Count, 0);
+            yield return Hold(PadButton.Right, 0.15f);
+            var once = PiecePicker.Index;
+            PiecePicker.Move(-PiecePicker.Count, 0);
+            yield return Hold(PadButton.Right, 0.75f);
+            var many = PiecePicker.Index;
+            Check(once == 1 && many >= 3 && many <= 8,
+                $"a held direction goes once, then repeats after {PadBindings.NavDelay} s every "
+                + $"{PadBindings.NavEvery} s: {once} step in 0.15 s, {many} in 0.75 s");
+
+            PiecePicker.Move(-PiecePicker.Count, 0);
+            PiecePicker.Move(2 * PiecePicker.Columns + 3, 0);
+            yield return null;
+            yield return null;
+            yield return Screenshot("editor-pad-1-picker");
+
+            var chosen = PiecePicker.Current;
+            yield return Tap(PadButton.Cross);
+            Check(!PiecePicker.IsOpen && EditorState.Mode == EditMode.Place && EditorState.Held == chosen,
+                $"cross places the highlighted piece: {(chosen != null ? chosen.DisplayName : "none")}");
+
+            yield return Tap(PadButton.Cross);
+            Check(PiecePicker.IsOpen && PiecePicker.Current == chosen, "it opens again on the piece in hand");
+
+            yield return Tap(PadButton.Circle);
+            Check(!PiecePicker.IsOpen && EditorState.Mode == EditMode.Place,
+                "circle closes the menu and leaves the piece in hand");
+            yield return Tap(PadButton.Circle);
+            Check(EditorState.Mode == EditMode.Idle, "the next circle empties the hand");
+        }
+
+        /// <summary>Rows 6 and 14: the sticks turn the camera and fly it, the D-pad lifts it.</summary>
+        private static IEnumerator PadCamera()
+        {
+            var camera = ViewportHost.Camera;
+            ViewportHost.SetMode(CameraMode.Orbit);
+
+            var yaw = camera.Yaw;
+            var from = Time.unscaledTime;
+            _pad.Rs = new Vector2(1f, 0f);
+            yield return Wait(0.3f);
+            _pad.Rs = Vector2.zero;
+            var speed = Mathf.Abs(Mathf.DeltaAngle(yaw, camera.Yaw)) / Mathf.Max(Time.unscaledTime - from, 1e-3f);
+            yield return null;
+            Check(speed > 110f && speed < 190f,
+                $"the right stick turns the camera at about 150 degrees a second: {speed:0}");
+
+            yield return FlySpeed(camera, false);
+            var one = _flySpeed;
+            yield return FlySpeed(camera, true);
+            var boosted = _flySpeed;
+            Check(one > 4.5f && one < 7.5f, $"the left stick flies at about 6 m/s: {one:0.0}");
+            Check(boosted / Mathf.Max(one, 1e-3f) > 2.5f && boosted / Mathf.Max(one, 1e-3f) < 3.5f,
+                $"L1 flies 3 times faster: {boosted:0.0} m/s against {one:0.0}");
+
+            var height = camera.Position.y;
+            yield return Hold(PadButton.Up, 0.2f);
+            var up = camera.Position.y;
+            yield return Hold(PadButton.Down, 0.2f);
+            Check(up > height + 0.5f && camera.Position.y < up - 0.5f,
+                $"the D-pad flies up and down: {height:0.0} -> {up:0.0} -> {camera.Position.y:0.0}");
+        }
+
+        private static float _flySpeed;
+
+        /// <summary>How fast the left stick moves the camera sideways, measured over a real window.</summary>
+        private static IEnumerator FlySpeed(EditorCamera camera, bool boost)
+        {
+            if (boost)
+            {
+                _pad.Down.Add(PadButton.L1);
+            }
+
+            var at = camera.Position;
+            var start = Time.unscaledTime;
+            _pad.Ls = new Vector2(1f, 0f);
+            yield return Wait(0.25f);
+            _pad.Ls = Vector2.zero;
+            _flySpeed = Vector3.Distance(camera.Position, at) / Mathf.Max(Time.unscaledTime - start, 1e-3f);
+            if (boost)
+            {
+                _pad.Down.Remove(PadButton.L1);
+            }
+
+            yield return null;
+        }
+
+        /// <summary>Rows 5, 6, 7, 12 and 13, with a piece in hand over open ground.</summary>
+        private static IEnumerator PadPlacing(BlueprintDocument document, PieceEntry wall)
+        {
+            _pad.Down.Add(PadButton.L1);
+            yield return null;
+            yield return null;
+            var off = !EditorState.Snapping;
+            _pad.Down.Remove(PadButton.L1);
+            yield return null;
+            yield return null;
+            Check(off && EditorState.Snapping, "L1 held turns snapping off, letting go turns it back on");
+
+            // Open ground, well away from the blueprint, so a wall can land with nothing in the way.
+            ViewportHost.SetMode(CameraMode.Orbit);
+            ViewportHost.Camera.LookFrom(new Vector3(30f, 9f, 24f), new Vector3(30f, 0f, 30f));
+            EditorState.StartAdd(wall);
+            var waited = 0f;
+            while (EditorState.Aimed == null && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(EditorState.Aimed != null, "the crosshair aims at open ground with a wall in hand");
+
+            var steps = EditorState.Steps;
+            _pad.Down.Add(PadButton.L2);
+            _pad.Rs = new Vector2(-1f, 0f);
+            yield return null;
+            yield return null;
+            var once = EditorState.Steps - steps;
+            yield return Wait(0.6f);
+            var many = EditorState.Steps - steps;
+            _pad.Rs = Vector2.zero;
+            _pad.Down.Remove(PadButton.L2);
+            yield return null;
+            Check(once == 1 && many >= 3 && many <= 9,
+                $"L2 and the right stick turn {Placer.RotateStep} degrees, once then every "
+                + $"{PadBindings.TurnEvery} s after {PadBindings.TurnDelay} s: {once} step, then {many} in 0.6 s");
+
+            var count = document.Pieces.Count;
+            yield return Tap(PadButton.R2);
+            Check(document.Pieces.Count == count + 1,
+                $"R2 drops the piece in hand: {count} -> {document.Pieces.Count} pieces");
+
+            var manual = EditorState.Manual;
+            yield return Tap(PadButton.R3);
+            var next = EditorState.Manual;
+            yield return Tap(PadButton.L3);
+            Check(manual == -1 && next == 0 && EditorState.Manual == -1,
+                $"R3 and L3 walk the snap point while placing: {manual} -> {next} -> {EditorState.Manual}");
+            EditorState.CancelMode();
+
+            var before = document.Pieces.Count;
+            yield return Tap(PadButton.Left);
+            var undone = document.Pieces.Count;
+            yield return Tap(PadButton.Right);
+            Check(undone == before - 1 && document.Pieces.Count == before,
+                $"the D-pad left and right undo and redo: {before} -> {undone} -> {document.Pieces.Count}");
+            EditorState.Undo();
+            yield return null;
+
+            var turnable = document.Pieces.FirstOrDefault(
+                p => PieceCatalog.Find(p.PrefabName) != null && PieceCatalog.Find(p.PrefabName).CanRotate);
+            Check(turnable != null, "the kit has a piece that can turn");
+            if (turnable != null)
+            {
+                EditorState.Select(turnable.Id);
+                var yaw = YawOf(document.Find(turnable.Id).Rotation);
+                _pad.Down.Add(PadButton.L2);
+                _pad.Rs = new Vector2(-1f, 0f);
+                yield return null;
+                yield return null;
+                _pad.Rs = Vector2.zero;
+                _pad.Down.Remove(PadButton.L2);
+                yield return null;
+                var turned = YawOf(document.Find(turnable.Id).Rotation);
+                Check(Mathf.Abs(Mathf.DeltaAngle(turned, yaw + Placer.RotateStep)) < 0.01f,
+                    $"with an empty hand the same turns the selection: {yaw:0.#} -> {turned:0.#} degrees");
+                EditorState.Undo();
+            }
+
+            var mode = ViewportHost.Camera.Mode;
+            yield return Tap(PadButton.L3);
+            var flipped = ViewportHost.Camera.Mode;
+            yield return Tap(PadButton.L3);
+            Check(flipped != mode && ViewportHost.Camera.Mode == mode,
+                $"with an empty hand L3 switches the camera: {mode} -> {flipped} -> {ViewportHost.Camera.Mode}");
+
+            ViewportHost.SetMode(CameraMode.Orbit);
+            EditorState.Select(document.Pieces[0].Id);
+            ViewportHost.Camera.LookFrom(new Vector3(40f, 20f, 40f), Vector3.zero);
+            yield return Tap(PadButton.R3);
+            var box = EditorState.BoxOf(document.Pieces[0]);
+            Check(Vector3.Distance(ViewportHost.Camera.Pivot, box.center) < 0.5f,
+                $"and R3 looks at the selection: pivot {V4(ViewportHost.Camera.Pivot)}, piece {V4(box.center)}");
+            EditorState.Select(Array.Empty<int>());
+        }
+
+        /// <summary>Rows 7, 9, 10 and 11: what the crosshair is on.</summary>
+        private static IEnumerator PadAimed(BlueprintDocument document)
+        {
+            ViewportHost.SetMode(CameraMode.Orbit);
+            DocPiece aimed = null;
+            foreach (var piece in document.Pieces)
+            {
+                EditorState.Select(piece.Id);
+                ViewportHost.Frame();
+                yield return null;
+                yield return null;
+                if (ViewportHost.AimPiece == piece.Id)
+                {
+                    aimed = piece;
+                    break;
+                }
+            }
+
+            Check(aimed != null, "the crosshair can be put on a piece of the blueprint");
+            if (aimed == null)
+            {
+                yield break;
+            }
+
+            EditorState.Select(Array.Empty<int>());
+            yield return Tap(PadButton.R2);
+            var picked = EditorState.SelectionCount == 1 && EditorState.IsSelected(aimed.Id);
+            yield return Tap(PadButton.L1, PadButton.R2);
+            Check(picked && EditorState.SelectionCount == 0,
+                "R2 takes the aimed piece and L1 + R2 puts it back out of the selection");
+
+            yield return Tap(PadButton.L2, PadButton.R2);
+            Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Add
+                && EditorState.Held != null && EditorState.Held.PrefabName == aimed.PrefabName,
+                $"L2 + R2 puts another {aimed.PrefabName} in hand");
+            EditorState.CancelMode();
+
+            EditorState.Select(aimed.Id);
+            yield return Tap(PadButton.Square);
+            var moving = EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Move;
+            yield return Tap(PadButton.Cross);
+            Check(moving && !PiecePicker.IsOpen,
+                "square moves the selection, and cross is silent while it is in hand");
+            EditorState.CancelMode();
+
+            EditorState.Select(aimed.Id);
+            yield return Tap(PadButton.Triangle);
+            Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Duplicate,
+                "triangle copies the selection");
+            yield return Tap(PadButton.Circle);
+            Check(EditorState.Mode == EditMode.Idle, "circle stops placing");
+            yield return Tap(PadButton.Circle);
+            Check(EditorState.SelectionCount == 0, "and the next one clears the selection");
+
+            var count = document.Pieces.Count;
+            yield return Tap(PadButton.R1);
+            var gone = document.Pieces.Count;
+            EditorState.Undo();
+            yield return null;
+            yield return null;
+            Check(gone == count - 1 && document.Pieces.Count == count,
+                $"R1 deletes the aimed piece: {count} -> {gone} -> {document.Pieces.Count}");
+
+            var ids = new List<int> { aimed.Id };
+            foreach (var piece in document.Pieces)
+            {
+                if (piece.Id != aimed.Id && ids.Count < 2)
+                {
+                    ids.Add(piece.Id);
+                }
+            }
+
+            EditorState.Select(ids);
+            count = document.Pieces.Count;
+            yield return Tap(PadButton.R1);
+            var both = document.Pieces.Count;
+            EditorState.Undo();
+            yield return null;
+            yield return null;
+            Check(both == count - 2,
+                $"and the whole selection when the aimed piece is in it: {count} -> {both}");
+
+            EditorState.Select(Array.Empty<int>());
+            yield return Tap(PadButton.L2, PadButton.R1);
+            Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Duplicate
+                && EditorState.Moving != null && EditorState.Moving.Count == 1,
+                "L2 + R1 puts a copy of the aimed piece in hand instead");
+            EditorState.CancelMode();
+            EditorState.Select(Array.Empty<int>());
+
+            // The research's trap: a selected button gets cross from the game's own UI as well.
+            var button = EditorWindow.Root.GetComponentInChildren<UnityEngine.UI.Button>();
+            Check(button != null, "the window has a button the UI can select");
+            if (button != null)
+            {
+                UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(button.gameObject);
+                yield return null;
+                var had = ModUi.HasSelection;
+                yield return Tap(PadButton.Cross);
+                Check(had && !PiecePicker.IsOpen,
+                    $"cross belongs to the selected button '{button.name}', so the menu does not also open");
+                yield return Tap(PadButton.Cross);
+                Check(PiecePicker.IsOpen, "the pad took the aim with that press, so the next cross opens it");
+                PiecePicker.Close();
+                UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
+                yield return null;
+            }
+        }
+
+        /// <summary>A real mouse move over the pane takes the aim back from the crosshair.</summary>
+        private static IEnumerator PadMouse()
+        {
+            ViewportHost.SetMode(CameraMode.Orbit);
+            yield return null;
+            var camera = ViewportHost.Camera;
+            var ahead = ViewportHost.Scene.Root.TransformPoint(camera.Position + (camera.Forward * 5f));
+            if (!ViewportHost.Raycast.Project(ahead, out var screen))
+            {
+                Check(false, "the middle of the pane has no screen point");
+                yield break;
+            }
+
+            yield return Tap(PadButton.L2);
+            Check(ViewportHost.PadAim, "the pad has the aim again");
+            ViewportHost.MouseMoved(screen);
+            Check(!ViewportHost.PadAim, "the first mouse move over the pane gives it back");
+
+            yield return Tap(PadButton.L2);
+            ViewportHost.MouseMoved(screen + new Vector2(2f, 0f));
+            var wobble = ViewportHost.PadAim;
+            ViewportHost.MouseMoved(screen + new Vector2(9f, 0f));
+            Check(wobble && !ViewportHost.PadAim,
+                "a 2 px wobble keeps the crosshair, a 7 px move gives the aim back to the mouse");
         }
 
         // ---------- scenario: editor_snap ----------

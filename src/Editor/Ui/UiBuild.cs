@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
@@ -151,6 +152,52 @@ namespace ValheimTomrer.Editor.Ui
             scroll.movementType = ScrollRect.MovementType.Clamped;
             scroll.scrollSensitivity = 30f;
             return scroll;
+        }
+
+        /// <summary>
+        /// Walks a row of buttons left and right with the pad, in the order they were made. The
+        /// game's own helpers set the links, so the behaviour matches its windows.
+        /// </summary>
+        public static void LinkRow(IList<Selectable> row, bool wrap = false)
+        {
+            if (row == null || row.Count < 2)
+            {
+                return;
+            }
+
+            foreach (var selectable in row)
+            {
+                var navigation = selectable.navigation;
+                navigation.mode = Navigation.Mode.Explicit;
+                selectable.navigation = navigation;
+            }
+
+            for (var i = 0; i < row.Count; i++)
+            {
+                GuiUtils.SetNavigationLeft(row[i], i > 0 ? row[i - 1] : wrap ? row[row.Count - 1] : null);
+                GuiUtils.SetNavigationRight(row[i], i < row.Count - 1 ? row[i + 1] : wrap ? row[0] : null);
+            }
+        }
+
+        /// <summary>The same, up and down.</summary>
+        public static void LinkColumn(IList<Selectable> column)
+        {
+            if (column == null || column.Count < 2)
+            {
+                return;
+            }
+
+            foreach (var selectable in column)
+            {
+                var navigation = selectable.navigation;
+                navigation.mode = Navigation.Mode.Explicit;
+                selectable.navigation = navigation;
+            }
+
+            for (var i = 0; i + 1 < column.Count; i++)
+            {
+                GuiUtils.SetNavigationVertical(column[i], column[i + 1]);
+            }
         }
 
         public static RectTransform Row(string name, Transform parent, float spacing = 8f, int padding = 0)

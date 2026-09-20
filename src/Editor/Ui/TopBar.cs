@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using TMPro;
 using UnityEngine;
@@ -31,6 +32,9 @@ namespace ValheimTomrer.Editor.Ui
         private static Button _center;
         private static TextMeshProUGUI _boxes;
         private static TextMeshProUGUI _dots;
+
+        /// <summary>Every button in the bar, in the order the pad walks them.</summary>
+        private static readonly List<Selectable> Walk = new List<Selectable>();
 
         /// <summary>What the Save button reads, "Save" or "Save (2 errors)".</summary>
         public static string SaveText => _saveLabel != null ? _saveLabel.text : "";
@@ -109,6 +113,7 @@ namespace ValheimTomrer.Editor.Ui
 
         private static void Build(RectTransform host)
         {
+            Walk.Clear();
             _root = UiBuild.Rect("TopBarContent", host);
             UiBuild.Stretch(_root, Edge, 0f, Edge, 0f);
 
@@ -151,6 +156,9 @@ namespace ValheimTomrer.Editor.Ui
                 .GetComponentInChildren<TextMeshProUGUI>();
             Add(row, "?", EditorCommands.Help);
             Add(row, "Settings", EditorCommands.Settings);
+
+            // The pad walks the bar left and right, around the ends.
+            UiBuild.LinkRow(Walk, true);
         }
 
         /// <summary>A label pinned a set distance from the bar's left edge.</summary>
@@ -176,6 +184,7 @@ namespace ValheimTomrer.Editor.Ui
             element.minWidth = width;
             element.preferredWidth = width;
 
+            Walk.Add(button);
             return button;
         }
 

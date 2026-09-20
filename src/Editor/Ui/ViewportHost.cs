@@ -30,6 +30,9 @@ namespace ValheimTomrer.Editor.Ui
         private const float BoxSelectThreshold = 4f;
         private const float MessageSeconds = 6f;
 
+        /// <summary>How far the mouse has to move over the pane to take the aim back from the pad.</summary>
+        private const float MouseTakeOver = 3f;
+
         private static RectTransform _host;
         private static RawImage _image;
         private static GameObject _crosshair;
@@ -59,6 +62,8 @@ namespace ValheimTomrer.Editor.Ui
         private static Vector2 _aimAt = new Vector2(0.5f, 0.5f);
         private static int _aimPiece = -1;
         private static Vector2 _dragStart;
+        private static Vector2 _lastMouse;
+        private static bool _hasLastMouse;
         private static bool _boxSelecting;
         private static long _boxSignature = -1;
         private static readonly List<Bounds> BoxList = new List<Bounds>();
@@ -95,6 +100,52 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>The piece the aim is on, or -1.</summary>
         public static int AimPiece => _aimPiece;
+
+        /// <summary>
+        /// The controller aims, with the crosshair in the middle of the view, like the game.
+        /// A real mouse move over the pane gives the aim back.
+        /// </summary>
+        public static bool PadAim { get; private set; }
+
+        /// <summary>The pad woke: the crosshair takes the aim and the UI lets go of its button.</summary>
+        public static void TakeAim()
+        {
+            PadAim = true;
+            ModUi.ClearSelection();
+        }
+
+        /// <summary>The mouse is in charge again: a click on the pane, or a real move over it.</summary>
+        public static void GiveAimBack()
+        {
+            PadAim = false;
+        }
+
+        /// <summary>
+        /// The mouse moved to a screen point. Over the pane, a move of more than 3 px takes the
+        /// aim back from the pad, the way the Tomrer editor does it.
+        /// </summary>
+        public static void MouseMoved(Vector2 screen)
+        {
+            if (_raycast == null || _camera == null || _camera.Mode == CameraMode.Free)
+            {
+                return;
+            }
+
+            if (!_raycast.ScreenToViewport(screen, out _))
+            {
+                // Off the pane: the next move back onto it counts as a real one.
+                _hasLastMouse = false;
+                return;
+            }
+
+            if (PadAim && (!_hasLastMouse || Vector2.Distance(screen, _lastMouse) > MouseTakeOver))
+            {
+                GiveAimBack();
+            }
+
+            _lastMouse = screen;
+            _hasLastMouse = true;
+        }
 
         /// <summary>Builds the pane's widgets. Called after the window itself is built.</summary>
         public static void Ensure(RectTransform host)
@@ -167,11 +218,12 @@ namespace ValheimTomrer.Editor.Ui
             StepFill();
             Fit();
             Bindings.Tick();
+            PadBindings.Tick();
             ReadInput();
             ModUi.LockCursor = _camera.WantsCursorLock;
             if (_crosshair != null)
             {
-                _crosshair.SetActive(_camera.Mode == CameraMode.Free);
+                _crosshair.SetActive(_camera.Mode == CameraMode.Free || PadAim);
             }
 
             UpdateModel();
@@ -299,6 +351,8 @@ namespace ValheimTomrer.Editor.Ui
             _boxSignature = -1;
             _aimPiece = -1;
             _boxSelecting = false;
+            PadAim = false;
+            _hasLastMouse = false;
             _fill = null;
             _scene = null;
             _preview = null;
@@ -485,6 +539,7 @@ namespace ValheimTomrer.Editor.Ui
             if (_hint != null)
             {
                 _hint.gameObject.SetActive(!placing);
+                _hint.text = PadAim ? PadHint() : MouseHint;
             }
 
             if (_placeLine != null)
@@ -505,13 +560,27 @@ namespace ValheimTomrer.Editor.Ui
                 var entry = piece != null ? Catalog.PieceCatalog.Find(piece.PrefabName) : null;
                 _aimName.text = piece == null ? "" : entry != null ? entry.DisplayName : piece.PrefabName;
                 _aimName.rectTransform.anchoredPosition =
-                    new Vector2(0f, _camera.Mode == CameraMode.Free ? -18f : -80f);
+                    new Vector2(0f, _camera.Mode == CameraMode.Free || PadAim ? -18f : -80f);
             }
 
             if (_fill == null)
             {
                 Status(DocumentLine());
             }
+        }
+
+        /// <summary>The line along the bottom of the pane, in the words of whatever is in hand.</summary>
+        private const string MouseHint =
+            "Pick a piece on the left to place it.   Click to select, shift adds, drag a box to select many."
+            + "   G moves, Ctrl+D copies, R turns, arrows nudge, Del removes.";
+
+        private static string PadHint()
+        {
+            var g = EditorInput.Glyphs;
+            return $"{g.Of(PadButton.Cross)}: pieces menu   |   {g.Of(PadButton.R2)}: place or select   |   "
+                + $"{g.Of(PadButton.Square)}: move   |   {g.Of(PadButton.Triangle)}: copy   |   "
+                + $"{g.Of(PadButton.R1)}: delete   |   {g.Of(PadButton.Circle)}: back   |   "
+                + $"{g.Of(PadButton.Options)}: help";
         }
 
         private static string PlaceHud()
@@ -602,21 +671,15 @@ namespace ValheimTomrer.Editor.Ui
             }
         }
 
-        /// <summary>The pad and the free camera's mouse. The keys are all in <see cref="Bindings"/>.</summary>
+        /// <summary>
+        /// The free camera's mouse. The keys are in <see cref="Bindings"/> and the pad is in
+        /// <see cref="PadBindings"/>, both already run this frame.
+        /// </summary>
         private static void ReadInput()
         {
-            var dt = Mathf.Min(EditorInput.Dt, 0.1f);
             if (Dialogs.IsOpen)
             {
                 return;
-            }
-
-            var pad = EditorInput.Pad;
-            if (pad != null)
-            {
-                var up = (pad.Held(PadButton.R2) ? 1f : 0f) - (pad.Held(PadButton.L2) ? 1f : 0f);
-                _camera.FlyPad(new Vector3(pad.Ls.x, up, pad.Ls.y), pad.Held(PadButton.L1), dt);
-                _camera.TurnPad(pad.Rs, dt);
             }
 
             // First person: the cursor is held, so there are no drag events left to read.
@@ -648,7 +711,8 @@ namespace ValheimTomrer.Editor.Ui
 
         private static Vector2 AimPoint()
         {
-            if (_camera.Mode == CameraMode.Free)
+            // The crosshair aims in free look and while the controller is in charge.
+            if (_camera.Mode == CameraMode.Free || PadAim)
             {
                 return new Vector2(0.5f, 0.5f);
             }
@@ -669,6 +733,8 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
+            // A click on the pane puts the mouse in charge, like the browser editor does.
+            GiveAimBack();
             _dragStart = data.position;
             _boxSelecting = false;
             HideSelectRect();
@@ -880,9 +946,7 @@ namespace ValheimTomrer.Editor.Ui
             _aimName = UiBuild.Label("AimName", _image.rectTransform, "", 15f, TextAlignmentOptions.Top, UiTheme.Text);
             Centre(_aimName.rectTransform, new Vector2(0f, -80f), new Vector2(420f, 22f));
 
-            _hint = UiBuild.Label("Hint", _image.rectTransform,
-                "Pick a piece on the left to place it.   Click to select, shift adds, drag a box to select many."
-                + "   G moves, Ctrl+D copies, R turns, arrows nudge, Del removes.",
+            _hint = UiBuild.Label("Hint", _image.rectTransform, MouseHint,
                 14f, TextAlignmentOptions.BottomLeft, UiTheme.TextDim);
             Strip(_hint.rectTransform, false, 8f, 44f);
 
@@ -966,9 +1030,11 @@ namespace ValheimTomrer.Editor.Ui
         /// </summary>
         private sealed class ViewportPointer : MonoBehaviour,
             IBeginDragHandler, IDragHandler, IScrollHandler,
-            IPointerDownHandler, IPointerUpHandler, IPointerClickHandler
+            IPointerDownHandler, IPointerUpHandler, IPointerClickHandler, IPointerMoveHandler
         {
             public void OnBeginDrag(PointerEventData eventData) => OnDragStart(eventData);
+
+            public void OnPointerMove(PointerEventData eventData) => MouseMoved(eventData.position);
 
             public void OnDrag(PointerEventData eventData) => ViewportHost.OnDrag(eventData);
 

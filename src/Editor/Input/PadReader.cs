@@ -25,6 +25,38 @@ namespace ValheimTomrer.Editor.Input
         Right,
     }
 
+    /// <summary>
+    /// A made-up pad, for the autotest. <see cref="PadReader.Fake"/> takes one instead of a real
+    /// device, and the reader treats it exactly like one: same dead zone, same press edges.
+    /// </summary>
+    internal sealed class PadState
+    {
+        public bool Ps = true;
+        public Vector2 Ls;
+        public Vector2 Rs;
+
+        public readonly HashSet<PadButton> Down = new HashSet<PadButton>();
+
+        public void Set(PadButton button, bool down)
+        {
+            if (down)
+            {
+                Down.Add(button);
+            }
+            else
+            {
+                Down.Remove(button);
+            }
+        }
+
+        public void Clear()
+        {
+            Down.Clear();
+            Ls = Vector2.zero;
+            Rs = Vector2.zero;
+        }
+    }
+
     /// <summary>One frame of the pad. Sticks are already dead-zoned, up is positive.</summary>
     internal sealed class PadFrame
     {
@@ -59,6 +91,12 @@ namespace ValheimTomrer.Editor.Input
         private bool _still = true;   // both sticks in the middle last frame
         private bool _fresh = true;
 
+        /// <summary>
+        /// A made-up pad the reader hands out instead of a real device. Only the autotest sets
+        /// it, so every button can be driven with no controller plugged in.
+        /// </summary>
+        public static PadState Fake { get; set; }
+
         /// <summary>Buttons held right now count as already held: the next read reports no presses.</summary>
         public void Reset()
         {
@@ -68,35 +106,43 @@ namespace ValheimTomrer.Editor.Input
         /// <summary>The first connected pad, or null. Nothing while the game window is not in front.</summary>
         public PadFrame Read()
         {
+            var fake = Fake;
             var pad = Gamepad.current;
-            if (pad == null || !Application.isFocused)
+            if (fake == null && (pad == null || !Application.isFocused))
             {
                 Reset();
                 return null;
             }
 
             var down = new HashSet<PadButton>();
-            foreach (var button in All)
+            if (fake != null)
             {
-                var control = Control(pad, button);
-                if (control == null)
+                down.UnionWith(fake.Down);
+            }
+            else
+            {
+                foreach (var button in All)
                 {
-                    continue;
-                }
+                    var control = Control(pad, button);
+                    if (control == null)
+                    {
+                        continue;
+                    }
 
-                // Triggers are analog: down past half way, up again below a third.
-                var isDown = button == PadButton.L2 || button == PadButton.R2
-                    ? control.ReadValue() > (_prev.Contains(button) ? 0.3f : 0.5f)
-                    : control.isPressed;
-                if (isDown)
-                {
-                    down.Add(button);
+                    // Triggers are analog: down past half way, up again below a third.
+                    var isDown = button == PadButton.L2 || button == PadButton.R2
+                        ? control.ReadValue() > (_prev.Contains(button) ? 0.3f : 0.5f)
+                        : control.isPressed;
+                    if (isDown)
+                    {
+                        down.Add(button);
+                    }
                 }
             }
 
             var before = _fresh ? down : _prev;
-            var ls = Stick(pad.leftStick.ReadValue());
-            var rs = Stick(pad.rightStick.ReadValue());
+            var ls = Stick(fake != null ? fake.Ls : pad.leftStick.ReadValue());
+            var rs = Stick(fake != null ? fake.Rs : pad.rightStick.ReadValue());
             var still = ls == Vector2.zero && rs == Vector2.zero;
 
             var woke = false;
@@ -115,7 +161,7 @@ namespace ValheimTomrer.Editor.Input
 
             var frame = new PadFrame
             {
-                Ps = IsPlayStation(pad),
+                Ps = fake != null ? fake.Ps : IsPlayStation(pad),
                 Ls = ls,
                 Rs = rs,
                 Woke = woke,

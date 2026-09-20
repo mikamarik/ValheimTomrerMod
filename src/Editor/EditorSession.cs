@@ -63,6 +63,7 @@ namespace ValheimTomrer.Editor
 
             ViewportHost.Tick();
             Palette.Tick();
+            PiecePicker.Tick();
             PieceListPanel.Tick();
             BlueprintPanel.Tick();
             SelectionPanel.Tick();
@@ -133,6 +134,7 @@ namespace ValheimTomrer.Editor
             }
 
             EditorState.Open(document);
+            PiecePicker.Close();
             ViewportHost.Show(null);
             Palette.Selected = null;
             PieceListPanel.Show(document);
@@ -178,6 +180,8 @@ namespace ValheimTomrer.Editor
             Palette.Ensure(EditorWindow.PalettePane);
             Palette.Show();
             Palette.PieceChosen = StartAdd;
+            PiecePicker.Ensure(EditorWindow.Root);
+            PiecePicker.PieceChosen = StartAdd;
             PieceListPanel.Ensure(EditorWindow.PieceListPane);
             PieceListPanel.Show(Document);
             PieceListPanel.PieceClicked = RowClicked;
@@ -205,6 +209,8 @@ namespace ValheimTomrer.Editor
             }
 
             ViewportHost.Close();
+            PiecePicker.Close();
+            PiecePicker.PieceChosen = null;
             Palette.PieceChosen = null;
             Palette.Selected = null;
             Palette.Close();
@@ -217,6 +223,7 @@ namespace ValheimTomrer.Editor
             Toasts.Clear();
             EditorCommands.Reset();
             Bindings.Reset();
+            PadBindings.Reset();
             EditorState.Close();
             EditorWindow.Show(false);
             ModUi.MarkClosed();
@@ -227,8 +234,8 @@ namespace ValheimTomrer.Editor
             ValheimTomrerPlugin.Log.LogInfo("editor closed");
         }
 
-        /// <summary>A tile in the palette: that piece goes in hand.</summary>
-        private static void StartAdd(PieceEntry entry)
+        /// <summary>A tile in the palette or the pad's piece menu: that piece goes in hand.</summary>
+        public static void StartAdd(PieceEntry entry)
         {
             if (EditorState.StartAdd(entry))
             {
