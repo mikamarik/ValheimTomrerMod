@@ -1418,7 +1418,7 @@ namespace ValheimTomrer.Dev
         // ---------- scenario: editor_view ----------
 
         /// <summary>
-        /// The 3D pane: a kit standing on the grid, the camera framing it, orbiting, zooming and
+        /// The 3D pane: a kit standing on the grid, the camera framing it, turning, zooming and
         /// flying, and nothing left behind when the window closes. Three screenshots, and the
         /// picture itself is read back out of the render texture so a black pane cannot pass.
         /// </summary>

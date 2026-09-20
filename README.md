@@ -12,8 +12,9 @@ Make blueprints in the game, then build them with the hammer. **Valheim 1.0**, s
   blueprint.
 - **The game's rules still apply.** Real materials, a workbench in range, and only pieces this
   character has unlocked.
-- **Mouse and controller.** Placing, moving, turning and deleting all have a pad button. The
-  side panels still need the mouse.
+- **Mouse and controller.** Placing, moving, turning and deleting all have a pad button, and
+  L3 walks the top bar and the side panels, so Save, the filters and the name field work without
+  a mouse.
 - **Plain text files.** A blueprint is a small text file you can read, edit or send to a friend.
 - **Nothing added to your world.** No custom pieces, no custom items, no files but the blueprints.
 
@@ -41,6 +42,8 @@ Valheim/BepInEx/plugins/
 4. **Click to place it.** It snaps to what is already there, the same way the hammer does.
    Hold Shift for no snapping. Q and E pick which corner of the piece goes on the spot you aim at.
    The piece stays in hand, so click again for the next one. Esc stops placing.
+   When the view does not have the mouse yet, the first click takes it for the camera and places
+   nothing. The next click places.
 5. **Fix mistakes:** click a piece to select it, G moves it, R turns it, Del removes it,
    Ctrl+Z undoes. Drag a box over several pieces to take them all.
 6. **Name it** on the right, write a line of description, and pick the icon the build card shows.
@@ -77,14 +80,14 @@ the ground is blocked. The message says which.
 
 | Key | What it does |
 |---|---|
-| `B` | Orbit camera or free camera. Free looks around with the mouse, like flying in the game. |
+| Click the view | The view takes the mouse and looks around with it, like flying in the game. `Esc` gives it back. |
 | `W` `A` `S` `D` | Fly forward, back, left, right |
 | `Space` `Ctrl` | Fly up, down. Hold `Shift` to fly 3 times faster. |
-| Right drag | Turn around the point in front (orbit), or look around (free) |
+| Right drag | Look around, without taking the mouse |
 | Middle drag, `Shift` + right drag | Pan |
 | Wheel | Zoom toward the cursor. While placing it turns the piece 22.5 degrees. |
 | Click | Select a piece, or drop what is in hand. `Shift`+click adds or removes. |
-| Drag on the view | Select everything in the box (orbit camera) |
+| Drag on the view | Select everything in the box. Only while the view does not have the mouse. |
 | `Ctrl+A` | Select all |
 | `G` | Move the selection |
 | `Ctrl+D` | Duplicate. Copies keep coming until `Esc`. |
@@ -98,7 +101,9 @@ the ground is blocked. The message says which.
 | `F` | Look at the selection, or at everything |
 | `Ctrl+S` | Save |
 | `H` `?` | The help window, with the same tables |
-| `Esc` | Stop placing, else clear the selection, else close the editor |
+| `Tab`, `Shift+Tab` | Walk the top bar and the two side panels, on and back |
+| Arrows, `Enter` (while walking) | Step to the next thing, and press it. A text box starts typing. |
+| `Esc` | In this order: stop placing, give the mouse back, leave the walk, clear the selection, close the editor |
 
 On a Mac, `Cmd` works everywhere `Ctrl` does.
 
@@ -110,15 +115,20 @@ PlayStation names first, Xbox names in brackets.
 |---|---|
 | Left stick | Fly forward, back, left, right |
 | L1 (LB) + left stick | Fly 3 times faster |
-| Right stick | Look around (free camera), or circle the point in front (orbit) |
+| Right stick | Look around |
 | D-pad up, down | Fly up, down |
 | R2 (RT) | Place, else select the piece in the middle of the view |
 | L1 (LB) + R2 (RT) | Add that piece to the selection, or take it out |
 | L2 (LT) + right stick left, right | Turn 22.5 degrees |
 | L1 (LB) hold | No snapping while held |
-| L3, R3 (stick clicks) | While placing: the snap point. Else: L3 switches the camera, R3 looks at the selection. |
+| L3, R3 (stick clicks) | While placing: the snap point. Else: L3 walks the panels, R3 looks at the selection. |
+| L3 (LS), nothing in hand | Walk the top bar and the two side panels. An orange ring shows where you are. |
+| While walking: D-pad, left stick | Step to the next thing |
+| While walking: L1 (LB), R1 (RB) | Change panel: top bar, left, right |
+| While walking: × (A) | Press what the ring is on. A text box starts typing. |
+| While walking: ○ (B) | Back to the 3D view |
 | × (A) | Pieces menu: D-pad chooses, L1 R1 change the tab, × places, ○ closes |
-| ○ (B) | Stop placing, or clear the selection, or close the editor |
+| ○ (B) | The same order as `Esc`: stop placing, leave the walk, clear the selection, close the editor |
 | □ (X) | Move the selection |
 | △ (Y) | Duplicate the selection |
 | R1 (RB) | Delete the piece in the middle of the view |
@@ -127,9 +137,10 @@ PlayStation names first, Xbox names in brackets.
 | D-pad left, right | Undo, redo |
 | Options (Menu) | This help |
 
-**The pad does not reach the side panels and the top bar.** The sticks fly and the D-pad undoes,
-so there is nothing left to move a cursor with. Use the mouse for Save, Open, the name field and
-the piece list. The pieces menu on × covers placing without a mouse.
+**L3 reaches the top bar and both side panels.** An orange ring marks where you are, and every
+button, tab, chip and text box on the walk can be pressed with ×. That covers Build this, Save,
+Open, the name and description, the icon and the piece filters. Three lists are still mouse only:
+the piece grid, In blueprint and Checks. The pieces menu on × is the way to place without a mouse.
 
 ## Configuration
 
@@ -146,10 +157,9 @@ Valheim/BepInEx/config/com.mikamarik.valheimtomrer.cfg
 | Editor | `Key` | `F7` | Opens and closes the editor window. |
 | Editor | `CaptureKey` | `F8` | Picks two corners in the world and makes a blueprint of what is in the box. |
 | Editor | `ShowAllPieces` | `false` | Every piece in the editor, instead of only the ones this character has unlocked. |
-| Editor | `CameraMode` | `Orbit` | Which camera the editor starts in: `Orbit` or `Free`. |
 | Editor | `SnapDots` | `true` | Show the snap dots while placing. Snapping itself is always on. |
 | Editor | `Boxes` | `false` | Draw pieces as plain boxes instead of models. |
-| Editor | `LookSensitivity` | `1.0` | Mouse look speed in the free camera. 2 is twice as fast. |
+| Editor | `LookSensitivity` | `1.0` | Mouse look speed in the 3D view. 2 is twice as fast. |
 | Editor | `PadLookSensitivity` | `1.0` | Right stick look speed. 2 is twice as fast. |
 
 The top bar's **Boxes** and **Snap dots** buttons write their setting back, so the editor opens
