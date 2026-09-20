@@ -26,7 +26,10 @@ namespace ValheimTomrer.Editor.Ui
         private const float Head = 40f;
         private const float FootHeight = 44f;
         private const float Pad = 14f;
-        private const float RowHeight = 26f;
+        private const float RowHeight = 28f;
+
+        /// <summary>Where the name stops and the file and the date start.</summary>
+        private const float NameSplit = 0.42f;
 
         private static readonly Regex Name = new Regex(NamePattern);
 
@@ -40,6 +43,8 @@ namespace ValheimTomrer.Editor.Ui
 
         private static readonly List<BlueprintEntry> Rows = new List<BlueprintEntry>();
         private static readonly List<TextMeshProUGUI> RowLabels = new List<TextMeshProUGUI>();
+        private static readonly List<TextMeshProUGUI> RowDetails = new List<TextMeshProUGUI>();
+        private static readonly List<Selectable> RowButtons = new List<Selectable>();
 
         private static Action _confirmRun;
         private static TextMeshProUGUI _note;
@@ -54,17 +59,29 @@ namespace ValheimTomrer.Editor.Ui
         /// <summary>The name box of the save-as dialog.</summary>
         public static TMP_InputField NameField { get; private set; }
 
+        /// <summary>The panel itself, without the backdrop: what the controller walk covers.</summary>
+        public static RectTransform Modal => _modal;
+
+        /// <summary>The widget the controller walk lands on when the dialog opens.</summary>
+        public static Selectable FocusStart { get; private set; }
+
         /// <summary>The line under a field: why the name is refused, or that it exists already.</summary>
         public static string NoteText => _note != null && _note.gameObject.activeSelf ? _note.text : "";
 
         public static string TitleText => _title != null ? _title.text : "";
 
-        /// <summary>Rows of the open dialog, kits first.</summary>
+        /// <summary>Rows of the open dialog, the mod's own blueprints first.</summary>
         public static int RowCount => Rows.Count;
 
+        /// <summary>Everything one row says: its name, then the file and the date.</summary>
         public static string RowText(int index)
         {
-            return index >= 0 && index < RowLabels.Count ? RowLabels[index].text : "";
+            if (index < 0 || index >= RowLabels.Count)
+            {
+                return "";
+            }
+
+            return RowLabels[index].text + "   " + RowDetails[index].text;
         }
 
         public static BlueprintEntry Row(int index)
@@ -111,8 +128,9 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
-            // A selected button gets cross and Enter itself, or one press would fire twice.
-            if (!ModUi.HasSelection && EditorInput.Confirm)
+            // A selected button, or a widget the walk has, gets cross and Enter itself. Either
+            // way this has to stand back, or one press fires twice.
+            if (!ModUi.HasSelection && !FocusNav.InDialog && EditorInput.Confirm)
             {
                 Submit();
             }
@@ -138,22 +156,30 @@ namespace ValheimTomrer.Editor.Ui
             Kind = "";
             _confirmRun = null;
             NameField = null;
+            FocusStart = null;
             _note = null;
             _fileLine = null;
             _submit = null;
             Rows.Clear();
             RowLabels.Clear();
+            RowDetails.Clear();
+            RowButtons.Clear();
             if (_root != null)
             {
                 _root.gameObject.SetActive(false);
             }
 
+            // The walk goes back to the panel it came from, or off if it was off.
+            FocusNav.LeaveDialog();
             return true;
         }
 
         // ---------- the dialogs ----------
 
-        /// <summary>The kits inside the mod and the player's own files, with size and date.</summary>
+        /// <summary>
+        /// The blueprints that come with the mod first, with no heading over them, then the
+        /// player's own files under one.
+        /// </summary>
         public static void Open()
         {
             if (!Begin("open", "Open a blueprint", 780f, 580f))
@@ -164,18 +190,20 @@ namespace ValheimTomrer.Editor.Ui
             var scroll = UiBuild.Scroll("Files", _body, 2f);
             UiBuild.Stretch((RectTransform)scroll.transform);
 
-            Heading(scroll.content, "Kits in the mod");
             AddRows(scroll.content, DocumentStore.ListKits());
+            Gap(scroll.content, 12f);
             Heading(scroll.content, "Your blueprints");
-            Dim(scroll.content, BlueprintLibrary.UserFolder);
             var files = DocumentStore.ListUserFiles();
             if (files.Count == 0)
             {
-                Dim(scroll.content, "No files there yet. Save as puts one here.");
+                Dim(scroll.content, "None yet. Save as writes one here.");
             }
 
             AddRows(scroll.content, files);
             Foot("Close", () => Close(), null, null);
+
+            // The walk starts on the first blueprint, so a controller can pick one straight away.
+            Start(RowButtons.Count > 0 ? RowButtons[0] : _submit);
         }
 
         /// <summary>The name a blueprint is saved under. It becomes #Name: and, slugged, the file name.</summary>
@@ -210,6 +238,7 @@ namespace ValheimTomrer.Editor.Ui
 
             Foot("Cancel", () => Close(), "Save", SubmitSaveAs);
             CheckName();
+            Start(NameField);
             NameField.ActivateInputField();
         }
 
@@ -245,11 +274,17 @@ namespace ValheimTomrer.Editor.Ui
                 + "mouse-only: pick pieces with the cross menu instead.");
 
             Dim(scroll.content,
+                "A window like this one takes the walk on its own: the D-pad moves through what it holds, "
+                + "cross presses, and circle closes it. In a name box, circle hands the keyboard back "
+                + "first, so the next press reaches the buttons.");
+
+            Dim(scroll.content,
                 "Placing works like the game: the piece touches the surface you aim at, then snaps to the "
                 + "closest snap point within 0.5 m. When that finds nothing the editor also slides it to the "
                 + "closest spot that touches the point under the cursor. The red arrow marks the front: it "
                 + "faces the player when the mod builds the blueprint.");
             Foot("Close", () => Close(), null, null);
+            Start(_submit);
         }
 
         /// <summary>A yes or no question. The answer runs after the dialog is gone.</summary>
@@ -265,6 +300,7 @@ namespace ValheimTomrer.Editor.Ui
             label.enableWordWrapping = true;
             UiBuild.Stretch(label.rectTransform);
             Foot("Cancel", () => Close(), ok, Answer);
+            Start(_submit);
         }
 
         // ---------- building ----------
@@ -279,6 +315,7 @@ namespace ValheimTomrer.Editor.Ui
 
             Close();
             Kind = kind;
+            FocusStart = null;
             _title.text = title;
 
             for (var i = _body.childCount - 1; i >= 0; i--)
@@ -318,6 +355,16 @@ namespace ValheimTomrer.Editor.Ui
             UiBuild.LinkRow(new List<Selectable> { cancel, _submit });
         }
 
+        /// <summary>
+        /// Says where the controller walk starts, and takes it into the dialog. Called last by
+        /// every dialog, once everything it holds exists.
+        /// </summary>
+        private static void Start(Selectable widget)
+        {
+            FocusStart = widget;
+            FocusNav.EnterDialog();
+        }
+
         private static void Width(Button button, float width)
         {
             var element = button.GetComponent<LayoutElement>();
@@ -340,6 +387,12 @@ namespace ValheimTomrer.Editor.Ui
             rect.pivot = new Vector2(0.5f, 1f);
             rect.offsetMin = new Vector2(0f, -top - height);
             rect.offsetMax = new Vector2(0f, -top);
+        }
+
+        /// <summary>Air between two lists.</summary>
+        private static void Gap(Transform parent, float height)
+        {
+            UiBuild.Rect("Gap", parent).gameObject.AddComponent<LayoutElement>().preferredHeight = height;
         }
 
         private static void Heading(Transform parent, string text)
@@ -383,7 +436,10 @@ namespace ValheimTomrer.Editor.Ui
             UiBuild.Stretch(what.rectTransform, 258f, 0f, 0f, 0f);
         }
 
-        /// <summary>One clickable file row: where it is, how big it is and when it changed.</summary>
+        /// <summary>
+        /// One clickable row: the blueprint's name on the left, and on the right where it is and
+        /// when it changed.
+        /// </summary>
         private static void AddRows(Transform parent, List<BlueprintEntry> entries)
         {
             foreach (var entry in entries)
@@ -391,29 +447,63 @@ namespace ValheimTomrer.Editor.Ui
                 var index = Rows.Count;
                 Rows.Add(entry);
 
-                var background = UiBuild.Panel("Row", parent, UiTheme.ItemBackground);
+                // item_background is a pale sprite, so the chip is tinted dark and the text on it
+                // stays white. A colour transition would tint it a second time on hover and undo
+                // that, so the row has none: the walk's ring is what marks the current one.
+                var background = UiBuild.Panel("Row", parent, UiTheme.ItemBackground, UiTheme.Slot);
                 background.rectTransform.gameObject.AddComponent<LayoutElement>().preferredHeight = RowHeight;
                 var button = background.gameObject.AddComponent<Button>();
                 button.targetGraphic = background;
+                button.transition = Selectable.Transition.None;
                 button.onClick.AddListener(() => ClickRow(index));
+                RowButtons.Add(button);
 
-                var text = RowLine(entry);
-                var label = UiBuild.Label("Text", background.transform, text, 14f, TextAlignmentOptions.Left,
-                    entry.Error != null ? UiTheme.Warn : UiTheme.Text);
-                UiBuild.Stretch(label.rectTransform, 8f, 0f, 8f, 0f);
-                label.overflowMode = TextOverflowModes.Ellipsis;
-                RowLabels.Add(label);
+                var colour = entry.Error != null ? UiTheme.Warn : UiTheme.Text;
+                var name = Cell(background.transform, "Name", NameOf(entry), 15f,
+                    TextAlignmentOptions.MidlineLeft, colour, 0f, NameSplit, 10f, 6f);
+                RowLabels.Add(name);
+
+                var detail = Cell(background.transform, "Detail", RowLine(entry), 12f,
+                    TextAlignmentOptions.MidlineRight, entry.Error != null ? UiTheme.Warn : UiTheme.TextDim,
+                    NameSplit, 1f, 6f, 10f);
+                RowDetails.Add(detail);
             }
         }
 
-        /// <summary>path, size and date, in one line, the way the browser editor lists them.</summary>
+        /// <summary>One column of a row, pinned between two fractions of its width.</summary>
+        private static TextMeshProUGUI Cell(
+            Transform parent,
+            string name,
+            string text,
+            float size,
+            TextAlignmentOptions align,
+            Color colour,
+            float from,
+            float to,
+            float left,
+            float right)
+        {
+            var label = UiBuild.Label(name, parent, text, size, align, colour);
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.overflowMode = TextOverflowModes.Ellipsis;
+            label.rectTransform.anchorMin = new Vector2(from, 0f);
+            label.rectTransform.anchorMax = new Vector2(to, 1f);
+            label.rectTransform.offsetMin = new Vector2(left, 0f);
+            label.rectTransform.offsetMax = new Vector2(-right, 0f);
+            return label;
+        }
+
+        private static string NameOf(BlueprintEntry entry)
+        {
+            return string.IsNullOrEmpty(entry.Name) ? "(no name)" : entry.Name;
+        }
+
+        /// <summary>Where it is and when it changed, in one line on the right.</summary>
         private static string RowLine(BlueprintEntry entry)
         {
-            var where = entry.IsKit
-                ? entry.Name
-                : Relative(entry.Path);
-            var parts = where + "   " + Size(entry.Size);
-            parts += entry.IsKit ? "   in the mod" : "   " + entry.Modified.ToString("d MMM yyyy HH:mm");
+            var parts = entry.IsKit
+                ? "in the mod"
+                : Relative(entry.Path) + "   " + entry.Modified.ToString("d MMM yyyy HH:mm");
             if (entry.Error != null)
             {
                 return parts + "   " + entry.Error;
@@ -433,11 +523,6 @@ namespace ValheimTomrer.Editor.Ui
             return path.StartsWith(folder, StringComparison.OrdinalIgnoreCase)
                 ? path.Substring(folder.Length).TrimStart(Path.DirectorySeparatorChar)
                 : path;
-        }
-
-        private static string Size(long bytes)
-        {
-            return bytes < 1024 ? bytes + " B" : (bytes / 1024f).ToString("0.0") + " KB";
         }
 
         // ---------- save as ----------

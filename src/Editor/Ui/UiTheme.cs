@@ -29,6 +29,21 @@ namespace ValheimTomrer.Editor.Ui
         public static readonly Color Backdrop = new Color(0f, 0f, 0f, 0.65f);
         public static readonly Color Inset = new Color(1f, 1f, 1f, 0.85f);
 
+        /// <summary>
+        /// The hint text drawn straight over the 3D picture: dark, on <see cref="FontEdged"/>, so
+        /// the letters read on a bright sky and their white edge reads on a dark floor.
+        /// </summary>
+        public static readonly Color TextOnPicture = new Color32(0x1A, 0x14, 0x0E, 0xFF);
+
+        /// <summary>
+        /// A row or a tile that carries text. <c>item_background</c> is a pale sprite, so white
+        /// text on it at full tint is white on white: it is tinted dark instead.
+        /// </summary>
+        public static readonly Color Slot = new Color(0.17f, 0.14f, 0.11f, 0.94f);
+
+        /// <summary>The same, weaker, for a row that cannot be clicked.</summary>
+        public static readonly Color SlotDim = new Color(0.17f, 0.14f, 0.11f, 0.72f);
+
         /// <summary>The panel interiors: the game's wood at 70 per cent, so light text still reads.</summary>
         public static readonly Color PanelInterior = new Color(0.70f, 0.70f, 0.70f, 1f);
         public static readonly Color Viewport = new Color(0.06f, 0.07f, 0.09f, 0.96f);
@@ -41,6 +56,12 @@ namespace ValheimTomrer.Editor.Ui
         /// picture, where the background is whatever the camera happens to be looking at.
         /// </summary>
         public static Material FontOutlined { get; private set; }
+
+        /// <summary>
+        /// A white edge and no shadow, the other way round: for the dark hint text along the
+        /// bottom of the 3D pane, which needs lifting off a dark floor, not off a bright sky.
+        /// </summary>
+        public static Material FontEdged { get; private set; }
 
         public static Sprite Panel { get; private set; }         // woodpanel_trophys
         public static Sprite PanelBkg { get; private set; }      // panel_bkg
@@ -56,6 +77,15 @@ namespace ValheimTomrer.Editor.Ui
         public static int Generation { get; private set; }
 
         public static bool Ready => Font != null;
+
+        /// <summary>Switches a text material's edge or shadow off: the shaders read the alpha.</summary>
+        private static readonly Color NoColour = new Color(0f, 0f, 0f, 0f);
+
+        /// <summary>The black edge under white text over the picture. Wide enough to carry a sky.</summary>
+        private const float OutlineWidth = 0.2f;
+
+        /// <summary>The white edge around the dark hint text. A hairline, it only has to separate.</summary>
+        private const float EdgeWidth = 0.06f;
 
         private static Hud _builtFrom;
         private static readonly List<Sprite> Copies = new List<Sprite>();
@@ -77,8 +107,10 @@ namespace ValheimTomrer.Editor.Ui
             Clear();
 
             Font = hud.m_hoverName.font;
-            FontMaterial = OwnTextMaterial(hud.m_hoverName.fontSharedMaterial, false);
-            FontOutlined = OwnTextMaterial(hud.m_hoverName.fontSharedMaterial, true);
+            var source = hud.m_hoverName.fontSharedMaterial;
+            FontMaterial = OwnTextMaterial(source, "ValheimTomrerText", NoColour, 0f, false);
+            FontOutlined = OwnTextMaterial(source, "ValheimTomrerTextOutlined", Color.black, OutlineWidth, true);
+            FontEdged = OwnTextMaterial(source, "ValheimTomrerTextEdged", Color.white, EdgeWidth, false);
 
             var atlas = Resources.FindObjectsOfTypeAll<SpriteAtlas>().FirstOrDefault(a => a.name == "UIAtlas");
             if (atlas == null)
@@ -126,8 +158,14 @@ namespace ValheimTomrer.Editor.Ui
                 Object.Destroy(FontOutlined);
             }
 
+            if (FontEdged != null)
+            {
+                Object.Destroy(FontEdged);
+            }
+
             FontMaterial = null;
             FontOutlined = null;
+            FontEdged = null;
             Panel = PanelBkg = PanelWood = Button = ButtonHighlight = ButtonPressed = TextField
                 = ItemBackground = Sunken = null;
             _builtFrom = null;
@@ -142,57 +180,57 @@ namespace ValheimTomrer.Editor.Ui
         /// 12 to 16 point sizes the panels use, that eats the strokes and every label reads grey
         /// however light its colour is.
         ///
-        /// So there are two of our own, both with a white face at full strength so the label's
+        /// So there are three of our own, all with a white face at full strength so the label's
         /// colour is the only thing deciding how it looks:
         /// <list type="bullet">
-        /// <item>plain, no outline and no shadow, for text on a panel, where the wood behind it
-        /// is dark and known.</item>
-        /// <item>outlined, a thin black edge and a shadow, for text over the 3D picture, where the
-        /// background is whatever the camera is pointed at and can be as light as the sky.</item>
+        /// <item><see cref="FontMaterial"/>: no edge and no shadow, for text on a panel, where the
+        /// wood behind it is dark and known.</item>
+        /// <item><see cref="FontOutlined"/>: a black edge and a shadow, for white text over the
+        /// 3D picture, where the background can be as light as the sky.</item>
+        /// <item><see cref="FontEdged"/>: a hairline white edge and no shadow, for the dark hint
+        /// text along the bottom of the pane.</item>
         /// </list>
-        /// Both are copies of a loaded material, made at runtime. Nothing is written to disk.
+        /// All three are copies of a loaded material, made at runtime. Nothing is written to disk.
         /// </summary>
-        private static Material OwnTextMaterial(Material source, bool outlined)
+        private static Material OwnTextMaterial(Material source, string name, Color edge, float edgeWidth, bool shadow)
         {
             if (source == null)
             {
                 return null;
             }
 
-            var mine = new Material(source) { name = outlined ? "ValheimTomrerTextOutlined" : "ValheimTomrerText" };
+            var mine = new Material(source) { name = name };
             Set(mine, ShaderUtilities.ID_FaceColor, Color.white);
-            Set(mine, ShaderUtilities.ID_GlowColor, new Color(0f, 0f, 0f, 0f));
+            Set(mine, ShaderUtilities.ID_GlowColor, NoColour);
             Set(mine, ShaderUtilities.ID_GlowPower, 0f);
             mine.DisableKeyword(ShaderUtilities.Keyword_Glow);
 
-            if (outlined)
+            // A fat edge eats into the glyph, so the face is dilated back out. A hairline one is
+            // drawn around the letter as it is.
+            var edged = edge.a > 0f && edgeWidth > 0f;
+            Set(mine, ShaderUtilities.ID_FaceDilate, edgeWidth >= 0.15f ? 0.1f : 0.05f);
+            Set(mine, ShaderUtilities.ID_OutlineColor, edged ? edge : NoColour);
+            Set(mine, ShaderUtilities.ID_OutlineWidth, edged ? edgeWidth : 0f);
+            Set(mine, ShaderUtilities.ID_OutlineSoftness, 0f);
+            Set(mine, ShaderUtilities.ID_UnderlayColor, shadow ? new Color(0f, 0f, 0f, 0.65f) : NoColour);
+            Set(mine, ShaderUtilities.ID_UnderlayOffsetX, shadow ? 0.5f : 0f);
+            Set(mine, ShaderUtilities.ID_UnderlayOffsetY, shadow ? -0.5f : 0f);
+            Set(mine, ShaderUtilities.ID_UnderlayDilate, shadow ? 0.1f : 0f);
+            Set(mine, ShaderUtilities.ID_UnderlaySoftness, shadow ? 0.2f : 0f);
+            Keyword(mine, ShaderUtilities.Keyword_Outline, edged);
+            Keyword(mine, ShaderUtilities.Keyword_Underlay, shadow);
+            return mine;
+        }
+
+        private static void Keyword(Material material, string keyword, bool on)
+        {
+            if (on)
             {
-                Set(mine, ShaderUtilities.ID_FaceDilate, 0.1f);
-                Set(mine, ShaderUtilities.ID_OutlineColor, Color.black);
-                Set(mine, ShaderUtilities.ID_OutlineWidth, 0.2f);
-                Set(mine, ShaderUtilities.ID_OutlineSoftness, 0f);
-                Set(mine, ShaderUtilities.ID_UnderlayColor, new Color(0f, 0f, 0f, 0.65f));
-                Set(mine, ShaderUtilities.ID_UnderlayOffsetX, 0.5f);
-                Set(mine, ShaderUtilities.ID_UnderlayOffsetY, -0.5f);
-                Set(mine, ShaderUtilities.ID_UnderlayDilate, 0.1f);
-                Set(mine, ShaderUtilities.ID_UnderlaySoftness, 0.2f);
-                mine.EnableKeyword(ShaderUtilities.Keyword_Outline);
-                mine.EnableKeyword(ShaderUtilities.Keyword_Underlay);
-                return mine;
+                material.EnableKeyword(keyword);
+                return;
             }
 
-            Set(mine, ShaderUtilities.ID_FaceDilate, 0.05f);
-            Set(mine, ShaderUtilities.ID_OutlineColor, new Color(0f, 0f, 0f, 0f));
-            Set(mine, ShaderUtilities.ID_OutlineWidth, 0f);
-            Set(mine, ShaderUtilities.ID_OutlineSoftness, 0f);
-            Set(mine, ShaderUtilities.ID_UnderlayColor, new Color(0f, 0f, 0f, 0f));
-            Set(mine, ShaderUtilities.ID_UnderlayOffsetX, 0f);
-            Set(mine, ShaderUtilities.ID_UnderlayOffsetY, 0f);
-            Set(mine, ShaderUtilities.ID_UnderlayDilate, 0f);
-            Set(mine, ShaderUtilities.ID_UnderlaySoftness, 0f);
-            mine.DisableKeyword(ShaderUtilities.Keyword_Outline);
-            mine.DisableKeyword(ShaderUtilities.Keyword_Underlay);
-            return mine;
+            material.DisableKeyword(keyword);
         }
 
         /// <summary>The distance-field shaders come in variants, so a property can be missing.</summary>

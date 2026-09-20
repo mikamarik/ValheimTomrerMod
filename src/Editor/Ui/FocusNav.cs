@@ -15,6 +15,9 @@ namespace ValheimTomrer.Editor.Ui
         Left,
         TopBar,
         Right,
+
+        /// <summary>The dialog on top. It stands on its own: L1 and R1 cannot walk out of it.</summary>
+        Dialog,
     }
 
     /// <summary>
@@ -59,8 +62,15 @@ namespace ValheimTomrer.Editor.Ui
         private static int _index;
         private static bool _wasTyping;
 
+        // Where the walk was before a dialog took it, so closing the dialog puts it back.
+        private static FocusRegion _before;
+        private static bool _wasActive;
+
         /// <summary>True while the focus is in a panel instead of the 3D pane.</summary>
         public static bool Active { get; private set; }
+
+        /// <summary>True while the walk is inside a dialog, so the dialog's own Enter stands back.</summary>
+        public static bool InDialog => Active && Current == FocusRegion.Dialog;
 
         public static FocusRegion Current { get; private set; }
 
@@ -99,6 +109,12 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
+            if (Dialogs.IsOpen)
+            {
+                EnterDialog();
+                return;
+            }
+
             // The window opens with a vanilla build-menu button selected. It has to let go, or the
             // game's own input module presses it on the first cross or Enter.
             Deselect();
@@ -128,6 +144,82 @@ namespace ValheimTomrer.Editor.Ui
             {
                 _ring.gameObject.SetActive(false);
             }
+        }
+
+        /// <summary>
+        /// Takes the walk into the dialog that is up, on the widget the dialog asked for. Where
+        /// the walk was is remembered, so closing the dialog puts it back there.
+        /// </summary>
+        public static void EnterDialog()
+        {
+            if (!ModUi.Open || !Dialogs.IsOpen)
+            {
+                return;
+            }
+
+            if (Current != FocusRegion.Dialog)
+            {
+                _wasActive = Active;
+                _before = Current;
+            }
+
+            Deselect();
+            Current = FocusRegion.Dialog;
+            Active = true;
+            Collect(Current);
+            if (Walk.Count == 0)
+            {
+                // Nothing to walk. Off the region again, or the next call would think the walk
+                // was already in a dialog and forget where it really was.
+                Current = _before;
+                Leave();
+                return;
+            }
+
+            var start = Dialogs.FocusStart;
+            var at = start != null ? Walk.IndexOf(start) : -1;
+            Focus(at >= 0 ? at : 0);
+        }
+
+        /// <summary>The dialog is gone: back to the panel the walk came from, or off.</summary>
+        public static void LeaveDialog()
+        {
+            if (Current != FocusRegion.Dialog)
+            {
+                return;
+            }
+
+            LetGoOfField();
+            Focused = null;
+            Walk.Clear();
+            _index = 0;
+
+            // Off the dialog first, whatever happens next, or the next EnterDialog would think
+            // the walk was already in one and forget where it really was.
+            Current = _before;
+            if (!_wasActive)
+            {
+                Leave();
+                return;
+            }
+
+            Collect(Current);
+            if (Walk.Count == 0)
+            {
+                Leave();
+                return;
+            }
+
+            Focus(0);
+        }
+
+        /// <summary>
+        /// A focused text box gives the keyboard back. The pad has no Esc, so this is how circle
+        /// gets out of a box and on to the rest of the dialog.
+        /// </summary>
+        public static void StopTyping()
+        {
+            LetGoOfField();
         }
 
         /// <summary>One step on in the region, wrapping at both ends.</summary>
@@ -160,7 +252,8 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
-            if (delta == 0)
+            // L1 and R1 cannot walk out of a dialog: it covers the panels.
+            if (delta == 0 || Current == FocusRegion.Dialog)
             {
                 return;
             }
@@ -283,6 +376,7 @@ namespace ValheimTomrer.Editor.Ui
             {
                 case FocusRegion.TopBar: return EditorWindow.TopBar;
                 case FocusRegion.Left: return EditorWindow.LeftPanel;
+                case FocusRegion.Dialog: return Dialogs.Modal;
                 default: return EditorWindow.RightPanel;
             }
         }
@@ -297,7 +391,56 @@ namespace ValheimTomrer.Editor.Ui
                 _ring.SetAsLastSibling();
             }
 
+            ShowInList(Focused);
             Place();
+        }
+
+        /// <summary>
+        /// Scrolls a focused widget into view. Without it the walk reaches a file far down the
+        /// open dialog's list and the ring sits outside the window.
+        /// </summary>
+        private static void ShowInList(Selectable widget)
+        {
+            if (widget == null)
+            {
+                return;
+            }
+
+            var scroll = widget.GetComponentInParent<ScrollRect>();
+            if (scroll == null || !scroll.vertical || scroll.content == null || scroll.viewport == null)
+            {
+                return;
+            }
+
+            var target = (RectTransform)widget.transform;
+            if (!target.IsChildOf(scroll.content))
+            {
+                return;
+            }
+
+            target.GetWorldCorners(Corners);
+            var view = scroll.viewport;
+            var top = view.InverseTransformPoint(Corners[1]).y;
+            var bottom = view.InverseTransformPoint(Corners[0]).y;
+
+            var shift = 0f;
+            if (top > view.rect.yMax)
+            {
+                shift = top - view.rect.yMax;
+            }
+            else if (bottom < view.rect.yMin)
+            {
+                shift = bottom - view.rect.yMin;
+            }
+
+            if (Mathf.Abs(shift) < 0.5f)
+            {
+                return;
+            }
+
+            var at = scroll.content.anchoredPosition;
+            at.y = Mathf.Clamp(at.y - shift, 0f, Mathf.Max(0f, scroll.content.rect.height - view.rect.height));
+            scroll.content.anchoredPosition = at;
         }
 
         /// <summary>The focused box stops typing and lets the EventSystem go.</summary>
@@ -351,8 +494,8 @@ namespace ValheimTomrer.Editor.Ui
             _ring.anchoredPosition = min - origin - new Vector2(Outset, Outset);
             _ring.sizeDelta = (max - min) + new Vector2(Outset * 2f, Outset * 2f);
 
-            // A dialog covers the panels, so the ring waits behind it.
-            _ring.gameObject.SetActive(!Dialogs.IsOpen);
+            // A dialog covers the panels, so the ring waits behind it unless it is in the dialog.
+            _ring.gameObject.SetActive(!Dialogs.IsOpen || Current == FocusRegion.Dialog);
         }
 
         /// <summary>Four plain bars, tinted with the theme's accent. Nothing is loaded from disk.</summary>

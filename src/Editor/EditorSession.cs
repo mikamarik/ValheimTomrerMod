@@ -96,6 +96,14 @@ namespace ValheimTomrer.Editor
             // A text box has the keyboard: Esc puts the old text back, it does not close the window.
             if (ModUi.Typing)
             {
+                // The one exception, and the pad's only way out of a box: Esc or circle in a
+                // dialog hands the keyboard back, so the rest of the dialog can be reached. The
+                // press is used up here, or the same one would close the dialog as well.
+                if (Dialogs.IsOpen && EditorInput.Cancel)
+                {
+                    FocusNav.StopTyping();
+                }
+
                 return;
             }
 

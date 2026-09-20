@@ -13,8 +13,9 @@ Make blueprints in the game, then build them with the hammer. **Valheim 1.0**, s
 - **The game's rules still apply.** Real materials, a workbench in range, and only pieces this
   character has unlocked.
 - **Mouse and controller.** Placing, moving, turning and deleting all have a pad button, and
-  L3 walks the top bar and the side panels, so Save, the filters and the name field work without
-  a mouse. The controls along the bottom of the 3D view show the game's own button icons.
+  L3 walks the top bar, the side panels and every window, so Save, Open, the filters and the name
+  field work without a mouse. The controls along the bottom of the 3D view show the game's own
+  button icons.
 - **Plain text files.** A blueprint is a small text file you can read, edit or send to a friend.
 - **Nothing added to your world.** No custom pieces, no custom items, no files but the blueprints.
 
@@ -36,7 +37,7 @@ Valheim/BepInEx/plugins/
 
 ## Make a blueprint
 
-1. **Press F7.** The editor opens on one of the kits that ship with the mod. No hammer needed.
+1. **Press F7.** The editor opens on one of the blueprints that ship with the mod. No hammer needed.
 2. **New** in the top bar starts an empty one.
 3. **Pick a piece** in the Pieces list on the left. It follows the mouse in the 3D view.
 4. **Click to place it.** It snaps to what is already there, the same way the hammer does.
@@ -50,7 +51,7 @@ Valheim/BepInEx/plugins/
 8. **Build this** in the top bar wants the hammer already in hand. It hands the blueprint over and
    closes the window. Aim at the ground and click, like any other piece.
 
-The kits that ship with the mod are read only. Edit one and Save as makes your own copy.
+The blueprints that ship with the mod are read only. Edit one and Save as makes your own copy.
 
 ## Copy a building you already have
 
@@ -99,9 +100,9 @@ the ground is blocked. The message says which.
 | `F` | Look at the selection, or at everything |
 | `Ctrl+S` | Save |
 | `H` `?` | The help window, with the same tables |
-| `Tab`, `Shift+Tab` | Walk the top bar and the two side panels, on and back |
+| `Tab`, `Shift+Tab` | Walk the top bar and the two side panels, on and back. In a window like Open or Save as, it walks what that window holds. |
 | Arrows, `Enter` (while walking) | Step to the next thing, and press it. A text box starts typing. |
-| `Esc` | In this order: stop placing, give the mouse back, leave the walk, clear the selection, close the editor |
+| `Esc` | In this order: give a text box back, close the window, stop placing, give the mouse back, leave the walk, clear the selection, close the editor |
 
 On a Mac, `Cmd` works everywhere `Ctrl` does.
 
@@ -122,11 +123,11 @@ PlayStation names first, Xbox names in brackets.
 | L3, R3 (stick clicks) | While placing: the snap point. Else: L3 walks the panels, R3 looks at the selection. |
 | L3 (LS), nothing in hand | Walk the top bar and the two side panels. An orange ring shows where you are. |
 | While walking: D-pad, left stick | Step to the next thing |
-| While walking: L1 (LB), R1 (RB) | Change panel: top bar, left, right |
+| While walking: L1 (LB), R1 (RB) | Change panel: top bar, left, right. In a window they do nothing, it has nowhere to walk to. |
 | While walking: × (A) | Press what the ring is on. A text box starts typing. |
-| While walking: ○ (B) | Back to the 3D view |
+| While walking: ○ (B) | Back to the 3D view. In a name box it gives the keyboard back first. |
 | × (A) | Pieces menu: D-pad chooses, L1 R1 change the tab, × places, ○ closes |
-| ○ (B) | The same order as `Esc`: stop placing, leave the walk, clear the selection, close the editor |
+| ○ (B) | The same order as `Esc`: give a text box back, close the window, stop placing, leave the walk, clear the selection, close the editor |
 | □ (X) | Move the piece in the middle of the view. It follows the crosshair, R2 drops it. |
 | △ (Y) | Copy it. Copies keep coming until ○ stops them. |
 | R1 (RB) | Delete it |
@@ -139,6 +140,11 @@ PlayStation names first, Xbox names in brackets.
 button, tab, chip and text box on the walk can be pressed with ×. That covers Build this, Save,
 Open, the name and description, the icon and the piece filters. Three lists are still mouse only:
 the piece grid, In blueprint and Checks. The pieces menu on × is the way to place without a mouse.
+
+**Windows take the walk on their own.** Open, Save as and every question put the ring on
+themselves the moment they show up: the D-pad steps through the blueprints or the buttons, × picks
+one, ○ closes. A long list scrolls to follow the ring. The rest of the pad does nothing while a
+window is up.
 
 ## Configuration
 
@@ -175,6 +181,9 @@ Valheim/BepInEx/config/ValheimTomrer/blueprints/*.blueprint
 Plain text, one line per piece. Drop a file in and it shows up in the editor and on the B key,
 no restart. Files from other blueprint mods are read as far as they fit; a file the mod cannot
 write back exactly opens read only, so Save as is the way out.
+
+A blueprint with no pieces in it yet is a normal file: New, then Save as, names it before you have
+placed anything. The B key skips it until it has something to build.
 
 ## Compatibility
 

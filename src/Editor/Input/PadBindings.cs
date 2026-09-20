@@ -82,14 +82,22 @@ namespace ValheimTomrer.Editor.Input
                 NavY.Step(0, dt);
             }
 
-            // 2. A dialog is up: only Options (it closes the help) and circle (the Esc ladder).
+            // 2. A dialog is up: the walk through it (the D-pad moves, cross presses), Options
+            //    (it closes the help) and circle (the Esc ladder). Nothing else.
             if (Dialogs.IsOpen)
             {
                 if (pad.Pressed(PadButton.Options) && Dialogs.Kind == "help")
                 {
                     Dialogs.Close();
+                    return;
                 }
 
+                if (!FocusNav.InDialog)
+                {
+                    FocusNav.EnterDialog();
+                }
+
+                Focus(pad, dt);
                 return;
             }
 

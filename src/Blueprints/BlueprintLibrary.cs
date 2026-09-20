@@ -101,7 +101,16 @@ namespace ValheimTomrer.Blueprints
         {
             try
             {
-                result.Add(load());
+                var blueprint = load();
+
+                // The build tool has nothing to build from an empty blueprint, and resolving one
+                // has no piece to take an icon from. The editor still opens the file.
+                if (blueprint.Pieces.Count == 0)
+                {
+                    return;
+                }
+
+                result.Add(blueprint);
             }
             catch (Exception e) when (e is FormatException || e is IOException || e is OverflowException)
             {

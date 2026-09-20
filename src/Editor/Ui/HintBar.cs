@@ -141,10 +141,10 @@ namespace ValheimTomrer.Editor.Ui
                 }
             }
 
-            // Straight over the picture, so it needs the outlined material. The cap labels do not:
-            // they sit on their own wooden background.
-            var label = UiBuild.OverPicture(
-                UiBuild.Label("Text", item, hint.Text, TextSize, TextAlignmentOptions.MidlineLeft));
+            // Straight over the picture: dark, with a white edge and no shadow. The cap labels
+            // stay white and plain, they sit on their own wooden background.
+            var label = UiBuild.EdgedOverPicture(UiBuild.Label(
+                "Text", item, hint.Text, TextSize, TextAlignmentOptions.MidlineLeft, UiTheme.TextOnPicture));
             label.textWrappingMode = TextWrappingModes.NoWrap;
             Sizes(label.gameObject, Mathf.Ceil(label.GetPreferredValues(hint.Text, 4000f, 0f).x) + 2f, CapHeight);
         }

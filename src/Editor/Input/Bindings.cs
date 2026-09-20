@@ -90,16 +90,17 @@ namespace ValheimTomrer.Editor.Input
             var dt = Mathf.Min(EditorInput.Dt, 0.1f);
             SetMods(ReadMods());
 
-            if (ModUi.Typing || Dialogs.IsOpen)
+            if (ModUi.Typing)
             {
-                // A text box or a dialog owns the keyboard: stop flying and read nothing.
+                // A text box owns the keyboard: stop flying and read nothing.
                 Held.Clear();
                 return;
             }
 
-            if (PiecePicker.IsOpen || FocusNav.Active)
+            if (Dialogs.IsOpen || PiecePicker.IsOpen || FocusNav.Active)
             {
-                // The piece menu and the panel walk still read keys, but nothing flies behind them.
+                // A dialog, the piece menu and the walk still read keys, but nothing flies behind
+                // them. A dialog only ever gets Tab, the arrows and Enter, through the walk.
                 Held.Clear();
             }
 
@@ -143,10 +144,17 @@ namespace ValheimTomrer.Editor.Input
         {
             SetMods(mods);
 
-            // A text box has the keyboard, or a dialog is up: the key is not ours.
-            if (ModUi.Typing || Dialogs.IsOpen)
+            // A text box has the keyboard: the key is not ours.
+            if (ModUi.Typing)
             {
                 return false;
+            }
+
+            // A dialog covers everything else: only the walk through it reads a key, so Tab, the
+            // arrows and Enter reach its buttons and nothing else does.
+            if (Dialogs.IsOpen)
+            {
+                return DialogKey(key);
             }
 
             // The piece menu owns the keyboard while it is up: the arrows move, Enter places.
@@ -369,6 +377,46 @@ namespace ValheimTomrer.Editor.Input
             }
         }
 
+        /// <summary>
+        /// A dialog is up: Tab and the arrows walk what it holds and Enter presses it. Everything
+        /// else is left alone, so the game never sees it and the editor never acts on it.
+        /// </summary>
+        private static bool DialogKey(KeyCode key)
+        {
+            if (key == KeyCode.Tab)
+            {
+                if (FocusNav.InDialog)
+                {
+                    FocusNav.Move(Shift ? -1 : 1);
+                }
+                else
+                {
+                    FocusNav.EnterDialog();
+                }
+
+                return true;
+            }
+
+            if (!FocusNav.InDialog)
+            {
+                return false;
+            }
+
+            switch (key)
+            {
+                case KeyCode.UpArrow:
+                case KeyCode.DownArrow:
+                case KeyCode.LeftArrow:
+                case KeyCode.RightArrow:
+                case KeyCode.Return:
+                case KeyCode.KeypadEnter:
+                    FocusKey(key);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         /// <summary>The keys the panel walk uses. The rest are swallowed while it is on.</summary>
         private static void FocusKey(KeyCode key)
         {
@@ -570,12 +618,14 @@ namespace ValheimTomrer.Editor.Input
             new HelpRow("F", "Look at the selection, or at everything"),
             new HelpRow("Ctrl+S", "Save"),
             new HelpRow("H, ?", "This help"),
-            new HelpRow("Tab, Shift+Tab", "Walk the top bar and the two side panels, on and back"),
+            new HelpRow("Tab, Shift+Tab",
+                "Walk the top bar and the two side panels, on and back. In a dialog it walks "
+                + "what the dialog holds."),
             new HelpRow("Arrows, Enter (while walking)",
                 "Step to the next widget, and press it. A text box starts typing, Esc gives it back."),
             new HelpRow("Esc",
-                "Stop placing, else give the mouse back, else leave the walk, else clear the "
-                + "selection, else close the editor"),
+                "Close the dialog, else stop placing, else give the mouse back, else leave the "
+                + "walk, else clear the selection, else close the editor"),
         };
 
         /// <summary>The controller half, in the wording of the pad in hand (<see cref="PadBindings"/>).</summary>

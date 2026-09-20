@@ -2211,9 +2211,7 @@ namespace ValheimTomrer.Dev
                 BlueprintLibrary.UserFolder = temp;
 
                 var document = DocumentStore.New("Camp hut");
-                Check(!DocumentStore.SaveAs(document, "Camp hut", false, out var error),
-                    $"a blueprint with no pieces is not saved: {error}");
-                Check(!DocumentStore.Save(document, out error),
+                Check(!DocumentStore.Save(document, out var error),
                     $"a blueprint with no file of its own needs a new name: {error}");
 
                 document.AddPiece("woodwall", new Vector3(0f, 0.5f, 0f), Quaternion.Euler(0f, 90f, 0f));
@@ -2273,12 +2271,40 @@ namespace ValheimTomrer.Dev
 
                 CheckSectionsAreReadOnly(temp);
                 CheckKeptFields(temp);
+                CheckEmptyIsSaved(temp);
             }
             finally
             {
                 BlueprintLibrary.UserFolder = real;
                 BlueprintLibrary.Reload();
             }
+        }
+
+        /// <summary>
+        /// New, then Save as, before a single piece is placed: that is the first thing the editor
+        /// does, so an empty blueprint has to write, read back and stay out of the build tool.
+        /// </summary>
+        private static void CheckEmptyIsSaved(string folder)
+        {
+            var blank = DocumentStore.New("Empty start");
+            Check(DocumentStore.SaveAs(blank, "Empty start", false, out var error),
+                $"a blueprint with no pieces is saved: {error}");
+
+            var path = Path.Combine(folder, "empty-start.blueprint");
+            Check(File.Exists(path) && blank.SourcePath == path && !blank.Dirty,
+                "empty-start.blueprint is on disk and the document is clean");
+            Check(DocumentStore.Open(path, out var reopened, out error)
+                && reopened.Pieces.Count == 0 && reopened.Name == "Empty start",
+                $"and it reads back empty, still named: {error}");
+            Check(!BlueprintLibrary.All.Any(b =>
+                    string.Equals(b.SourcePath, path, StringComparison.OrdinalIgnoreCase)),
+                $"but the build tool's list leaves it out: {BlueprintLibrary.All.Count} blueprints");
+
+            var rows = Checks.Run(reopened);
+            Check(rows.Count == 1 && rows[0].Level == CheckLevel.Warning,
+                $"and the problem list calls it a warning, not an error: {Row(rows, 0)}");
+
+            Check(DocumentStore.Delete(path, out error), "delete the empty one: " + error);
         }
 
         /// <summary>
@@ -2762,8 +2788,8 @@ namespace ValheimTomrer.Dev
         {
             var empty = DocumentStore.New("Empty");
             var rows = Checks.Run(empty);
-            Check(rows.Count == 1 && rows[0].Level == CheckLevel.Error
-                && rows[0].Message == "No pieces. The game skips an empty blueprint.",
+            Check(rows.Count == 1 && rows[0].Level == CheckLevel.Warning
+                && rows[0].Message == "No pieces yet. The build tool skips an empty blueprint.",
                 $"an empty blueprint has one row: {Row(rows, 0)}");
 
             rows = Checks.Run(empty, "line 7: expected at least 9 fields, got 3");
@@ -3412,9 +3438,9 @@ namespace ValheimTomrer.Dev
 
             Check(kits > 0 && mine >= 0, $"both lists are there: {kits} kits and the file we saved");
             Check(mine < 0 || (Dialogs.RowText(mine).Contains("keys-test.blueprint")
-                && Dialogs.RowText(mine).Contains(" B")
+                && Dialogs.RowText(mine).Contains(" pieces")
                 && Dialogs.RowText(mine).Contains(DateTime.Now.Year.ToString())),
-                $"a row carries path, size and date: '{(mine >= 0 ? Dialogs.RowText(mine) : "none")}'");
+                $"a row carries path, date and pieces: '{(mine >= 0 ? Dialogs.RowText(mine) : "none")}'");
             Dialogs.Close();
 
             // ---- save as ----
@@ -4070,6 +4096,7 @@ namespace ValheimTomrer.Dev
             yield return FocusEnter();
             yield return FocusRegions(document);
             yield return FocusPress(document);
+            yield return FocusDialog();
             yield return FocusLeave();
 
             Check(_focusSelected == 0,
@@ -4249,6 +4276,45 @@ namespace ValheimTomrer.Dev
             yield return null;
             Check(FocusNav.Active && FocusNav.Focused == field && !ModUi.Typing && !ModUi.HasSelection,
                 "the box lets go of the keyboard, the walk keeps it, and nothing is selected in the UI");
+        }
+
+        /// <summary>
+        /// A dialog takes the walk on its own while it is up: the D-pad moves through what it
+        /// holds, L1 and R1 cannot walk out of it, and closing it puts the walk back where it was.
+        /// </summary>
+        private static IEnumerator FocusDialog()
+        {
+            var before = FocusNav.Current;
+            EditorCommands.OpenDialog();
+            yield return null;
+            yield return null;
+
+            Check(Dialogs.IsOpen && FocusNav.InDialog,
+                $"Open takes the walk into the dialog: region {FocusNav.Current}, "
+                + $"widget '{WidgetName(FocusNav.Focused)}'");
+            var live = Interactable(Dialogs.Modal);
+            Check(FocusNav.Count == live && live > 1,
+                $"the walk holds everything the dialog can press: {FocusNav.Count} of {live}");
+            Check(FocusNav.Focused == Dialogs.FocusStart && Dialogs.RowCount > 0,
+                $"and it starts on the first of {Dialogs.RowCount} blueprints");
+            Check(RingGap() < 4f, $"the ring is on it, over the dialog: {RingGap():0.0} px");
+
+            var first = FocusNav.Focused;
+            yield return FocusTap(PadButton.Down);
+            Check(FocusNav.Focused != first && FocusNav.InDialog,
+                $"the D-pad moves on inside it, to '{WidgetName(FocusNav.Focused)}'");
+
+            var at = FocusNav.Focused;
+            yield return FocusTap(PadButton.R1);
+            Check(FocusNav.InDialog && FocusNav.Focused == at,
+                $"R1 cannot walk out of it: still '{WidgetName(FocusNav.Focused)}'");
+
+            yield return FocusTap(PadButton.Circle);
+            yield return null;
+            yield return null;
+            Check(!Dialogs.IsOpen, "circle closes the dialog");
+            Check(FocusNav.Active && FocusNav.Current == before,
+                $"and the walk is back on the {FocusNav.Current} region it came from");
         }
 
         /// <summary>Circle gives the pane back, and the sticks fly again.</summary>

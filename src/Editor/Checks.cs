@@ -64,7 +64,9 @@ namespace ValheimTomrer.Editor
 
             if (pieces.Count == 0)
             {
-                Add(found, CheckLevel.Error, "No pieces. The game skips an empty blueprint.");
+                // Not an error: a new blueprint is named and saved before it has a piece, and the
+                // file reads back fine. Only the build tool has nothing to do with it.
+                Add(found, CheckLevel.Warning, "No pieces yet. The build tool skips an empty blueprint.");
             }
             else if (pieces.Count > BlueprintFormat.MaxPieces)
             {

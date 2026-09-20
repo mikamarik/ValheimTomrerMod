@@ -28,9 +28,6 @@ namespace ValheimTomrer.Editor.Doc
 
         public int Pieces;
 
-        /// <summary>Bytes on disk, or inside the DLL for a kit.</summary>
-        public long Size;
-
         /// <summary>When the file last changed. Meaningless for a kit.</summary>
         public DateTime Modified;
 
@@ -66,7 +63,6 @@ namespace ValheimTomrer.Editor.Doc
                     var blueprint = BlueprintFormat.ParseBlueprint(fallback, lines);
                     entry.Name = blueprint.Name;
                     entry.Pieces = blueprint.Pieces.Count;
-                    entry.Size = lines.Sum(l => (long)l.Length + 1L);
                 }
                 catch (Exception e)
                 {
@@ -104,9 +100,7 @@ namespace ValheimTomrer.Editor.Doc
                 var entry = new BlueprintEntry { Path = file, Name = fallback };
                 try
                 {
-                    var info = new FileInfo(file);
-                    entry.Size = info.Length;
-                    entry.Modified = info.LastWriteTime;
+                    entry.Modified = new FileInfo(file).LastWriteTime;
                     var blueprint = Read(file);
                     entry.Name = blueprint.Name;
                     entry.Pieces = blueprint.Pieces.Count;
@@ -153,7 +147,7 @@ namespace ValheimTomrer.Editor.Doc
             document = null;
             if (kit == null || kit.Resource == null)
             {
-                error = "not a kit";
+                error = "not a blueprint that ships with the mod";
                 return false;
             }
 
@@ -168,7 +162,7 @@ namespace ValheimTomrer.Editor.Doc
             }
             catch (Exception e)
             {
-                error = $"cannot open kit {kit.Name}: {e.Message}";
+                error = $"cannot open {kit.Name}: {e.Message}";
                 return false;
             }
         }
@@ -185,12 +179,6 @@ namespace ValheimTomrer.Editor.Doc
             if (document.ReadOnly || string.IsNullOrEmpty(document.SourcePath))
             {
                 error = "this blueprint can only be saved under a new name";
-                return false;
-            }
-
-            if (document.Pieces.Count == 0)
-            {
-                error = "a blueprint needs at least one piece";
                 return false;
             }
 
@@ -213,12 +201,6 @@ namespace ValheimTomrer.Editor.Doc
             if (document == null)
             {
                 error = "nothing open";
-                return false;
-            }
-
-            if (document.Pieces.Count == 0)
-            {
-                error = "a blueprint needs at least one piece";
                 return false;
             }
 

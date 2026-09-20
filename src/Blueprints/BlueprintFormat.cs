@@ -384,13 +384,13 @@ namespace ValheimTomrer.Blueprints
             }
         }
 
+        /// <summary>
+        /// A blueprint with no pieces is a file like any other: the editor writes one the moment a
+        /// new blueprint is named and saved, and reads it back to carry on. Only the build tool
+        /// needs pieces, and <see cref="BlueprintLibrary"/> keeps empty ones out of its list.
+        /// </summary>
         private static Blueprint Finish(Blueprint blueprint)
         {
-            if (blueprint.Pieces.Count == 0)
-            {
-                throw new FormatException("no pieces");
-            }
-
             return blueprint;
         }
 

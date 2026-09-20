@@ -355,7 +355,7 @@ namespace ValheimTomrer.Editor.Ui
                     return;
                 }
 
-                Background.color = SelectedIds.Contains(Piece.Id) ? UiTheme.Accent : Color.white;
+                Background.color = SelectedIds.Contains(Piece.Id) ? UiTheme.Accent : UiTheme.Slot;
             }
 
             public void Hide()

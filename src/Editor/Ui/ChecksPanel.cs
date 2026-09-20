@@ -211,8 +211,8 @@ namespace ValheimTomrer.Editor.Ui
                 Rect.SetSiblingIndex(Index);
                 Label.text = LevelTag(check) + check.Message;
                 Background.color = check.Pieces != null && check.Pieces.Length > 0
-                    ? Color.white
-                    : new Color(1f, 1f, 1f, 0.85f);
+                    ? UiTheme.Slot
+                    : UiTheme.SlotDim;
             }
 
             public void Hide()
