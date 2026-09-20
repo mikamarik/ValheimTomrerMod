@@ -7,6 +7,7 @@
 #   ./scripts/autotest.sh editor_open  open the editor window with its key, check the input takeover
 #   ./scripts/autotest.sh editor_view  fill the 3D pane with a kit and drive the camera
 #   ./scripts/autotest.sh editor_files round-trip every blueprint and run the file commands
+#   ./scripts/autotest.sh editor_palette build the piece catalog and check the palette panel
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
 set -euo pipefail
 

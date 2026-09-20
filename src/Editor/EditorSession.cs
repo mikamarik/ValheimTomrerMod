@@ -1,5 +1,7 @@
 using UnityEngine;
 using ValheimTomrer.Blueprints;
+using ValheimTomrer.Editor.Catalog;
+using ValheimTomrer.Editor.Doc;
 using ValheimTomrer.Editor.Input;
 using ValheimTomrer.Editor.Ui;
 
@@ -16,6 +18,9 @@ namespace ValheimTomrer.Editor
     internal static class EditorSession
     {
         public static bool IsOpen => ModUi.Open;
+
+        /// <summary>The blueprint being edited. Phase 6 takes this over with an EditorState.</summary>
+        public static BlueprintDocument Document { get; private set; }
 
         public static void Tick()
         {
@@ -55,6 +60,8 @@ namespace ValheimTomrer.Editor
             }
 
             ViewportHost.Tick();
+            Palette.Tick();
+            PieceListPanel.Tick();
 
             // In free camera Esc only gives the cursor back; the window stays open.
             var cancel = EditorInput.Cancel;
@@ -102,8 +109,16 @@ namespace ValheimTomrer.Editor
 
             UITooltip.HideTooltip();
             EditorWindow.Show(true);
+            blueprint = blueprint ?? FirstKit();
+            Document = blueprint != null ? BlueprintDocument.FromBlueprint(blueprint.Blueprint) : BlueprintDocument.New();
             ViewportHost.Ensure(EditorWindow.ViewportHost);
-            ViewportHost.Show(blueprint ?? FirstKit());
+            ViewportHost.Show(blueprint);
+
+            PieceCatalog.Ensure();
+            Palette.Ensure(EditorWindow.PalettePane);
+            Palette.Show();
+            PieceListPanel.Ensure(EditorWindow.PieceListPane);
+            PieceListPanel.Show(Document);
             ModUi.Open = true;
             EditorInput.Reset();
             ValheimTomrerPlugin.Log.LogInfo("editor opened");
@@ -117,6 +132,9 @@ namespace ValheimTomrer.Editor
             }
 
             ViewportHost.Close();
+            Palette.Close();
+            PieceListPanel.Close();
+            Document = null;
             EditorWindow.Show(false);
             ModUi.MarkClosed();
             UITooltip.HideTooltip();
@@ -131,6 +149,7 @@ namespace ValheimTomrer.Editor
         {
             Close();
             EditorWindow.Destroy();
+            PieceCatalog.Clear();
             UiTheme.Clear();
         }
 

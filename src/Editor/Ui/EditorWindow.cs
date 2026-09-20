@@ -27,6 +27,7 @@ namespace ValheimTomrer.Editor.Ui
 
         private static GameObject _root;
         private static int _generation = -1;
+        private static TextMeshProUGUI[] _leftTabs;
 
         public static RectTransform TopBar { get; private set; }
         public static RectTransform LeftPanel { get; private set; }
@@ -34,6 +35,14 @@ namespace ValheimTomrer.Editor.Ui
         public static RectTransform RightPanel { get; private set; }
         public static RectTransform StatusBar { get; private set; }
         public static TextMeshProUGUI StatusText { get; private set; }
+
+        /// <summary>The left panel's two tabs: the piece palette and the open blueprint's pieces.</summary>
+        public static RectTransform PalettePane { get; private set; }
+
+        public static RectTransform PieceListPane { get; private set; }
+
+        /// <summary>0 = Pieces, 1 = In blueprint.</summary>
+        public static int LeftTab { get; private set; }
 
         public static bool Visible => _root != null && _root.activeSelf;
 
@@ -83,7 +92,26 @@ namespace ValheimTomrer.Editor.Ui
             _root = null;
             _generation = -1;
             TopBar = LeftPanel = ViewportHost = RightPanel = StatusBar = null;
+            PalettePane = PieceListPane = null;
+            _leftTabs = null;
             StatusText = null;
+        }
+
+        /// <summary>Switches the left panel between the palette and the blueprint's piece list.</summary>
+        public static void SetLeftTab(int tab)
+        {
+            LeftTab = Mathf.Clamp(tab, 0, 1);
+            if (PalettePane == null || _leftTabs == null)
+            {
+                return;
+            }
+
+            PalettePane.gameObject.SetActive(LeftTab == 0);
+            PieceListPane.gameObject.SetActive(LeftTab == 1);
+            for (var i = 0; i < _leftTabs.Length; i++)
+            {
+                _leftTabs[i].color = i == LeftTab ? UiTheme.Accent : UiTheme.Text;
+            }
         }
 
         /// <summary>The canvas recipe the game itself uses (SessionPlayerList). Order matters twice.</summary>
@@ -165,9 +193,48 @@ namespace ValheimTomrer.Editor.Ui
             UiBuild.Stretch(sunken.rectTransform);
 
             Caption(TopBar, "Valheim T\u00f8mrer", 26f, TextAlignmentOptions.Left, UiTheme.Accent);
-            Caption(LeftPanel, "Pieces", 18f, TextAlignmentOptions.Top, UiTheme.TextDim);
             Caption(RightPanel, "Properties", 18f, TextAlignmentOptions.Top, UiTheme.TextDim);
             StatusText = Caption(StatusBar, "F7 or Esc closes", 16f, TextAlignmentOptions.Left, UiTheme.TextDim);
+            BuildLeftTabs();
+        }
+
+        /// <summary>Two tabs over the left panel, and an empty pane under each.</summary>
+        private static void BuildLeftTabs()
+        {
+            const float Height = 26f;
+            var names = new[] { "Pieces", "In blueprint" };
+            _leftTabs = new TextMeshProUGUI[names.Length];
+
+            var bar = UiBuild.Rect("Tabs", LeftPanel);
+            bar.anchorMin = new Vector2(0f, 1f);
+            bar.anchorMax = new Vector2(1f, 1f);
+            bar.pivot = new Vector2(0.5f, 1f);
+            bar.offsetMin = new Vector2(6f, -6f - Height);
+            bar.offsetMax = new Vector2(-6f, -6f);
+
+            for (var i = 0; i < names.Length; i++)
+            {
+                var tab = i;
+                var button = UiBuild.Button(names[i], bar, names[i], () => SetLeftTab(tab), Height);
+                var rect = (RectTransform)button.transform;
+                rect.anchorMin = new Vector2(i / (float)names.Length, 0f);
+                rect.anchorMax = new Vector2((i + 1) / (float)names.Length, 1f);
+                rect.offsetMin = new Vector2(i == 0 ? 0f : 2f, 0f);
+                rect.offsetMax = Vector2.zero;
+                _leftTabs[i] = button.GetComponentInChildren<TextMeshProUGUI>();
+                _leftTabs[i].fontSize = 15f;
+            }
+
+            PalettePane = Pane("PalettePane", Height);
+            PieceListPane = Pane("PieceListPane", Height);
+            SetLeftTab(0);
+        }
+
+        private static RectTransform Pane(string name, float tabHeight)
+        {
+            var pane = UiBuild.Rect(name, LeftPanel);
+            UiBuild.Stretch(pane, 0f, 0f, 0f, tabHeight + 10f);
+            return pane;
         }
 
         private static RectTransform Region(string name, Transform parent, Sprite sprite, Color tint)

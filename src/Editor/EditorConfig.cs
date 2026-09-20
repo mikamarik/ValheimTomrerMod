@@ -18,6 +18,9 @@ namespace ValheimTomrer.Editor
 
         public static ConfigEntry<KeyCode> Key;
 
+        /// <summary>Off: the palette only lists what this character has unlocked.</summary>
+        public static ConfigEntry<bool> ShowAllPieces;
+
         public static void Bind(ConfigFile config)
         {
             Key = config.Bind(
@@ -25,6 +28,12 @@ namespace ValheimTomrer.Editor
                 "Key",
                 KeyCode.F7,
                 "Opens the blueprint editor. Esc, the same key, or the pad's B/circle closes it.");
+
+            ShowAllPieces = config.Bind(
+                "Editor",
+                "ShowAllPieces",
+                false,
+                "Show every building piece in the editor. Off means only the ones this character has unlocked.");
         }
     }
 }

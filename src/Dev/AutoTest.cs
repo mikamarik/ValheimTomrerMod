@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using ValheimTomrer.Blueprints;
 using ValheimTomrer.Editor;
+using ValheimTomrer.Editor.Catalog;
 using ValheimTomrer.Editor.Doc;
 using ValheimTomrer.Editor.Ui;
 using ValheimTomrer.Editor.View;
@@ -26,7 +27,8 @@ namespace ValheimTomrer.Dev
     /// "probe" measures what the in-game editor will be built on and writes probe.txt;
     /// "editor_open" opens the editor window with its key and checks the input takeover;
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
-    /// "editor_files" round-trips every blueprint through the writer and runs the file commands.
+    /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
+    /// "editor_palette" builds the piece catalog and checks the palette's counts and filters.
     /// </summary>
     internal static class AutoTest
     {
@@ -170,6 +172,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_files":
                     scenario = TestEditorFiles(player);
+                    break;
+                case "editor_palette":
+                    scenario = TestEditorPalette(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -1261,6 +1266,279 @@ namespace ValheimTomrer.Dev
             UnityEngine.InputSystem.InputSystem.QueueStateEvent(
                 keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState());
             yield return null;
+            yield return null;
+        }
+
+        // ---------- scenario: editor_palette ----------
+
+        /// <summary>
+        /// The piece catalog and the palette panel. The character is given a handful of recipes, so
+        /// the unlocked list is short and the config switch makes a visible difference. Then the
+        /// window is opened and the grid, the chips, the search box and the piece list are checked
+        /// against the hammer's own numbers.
+        /// </summary>
+        private static IEnumerator TestEditorPalette(Player player)
+        {
+            yield return new WaitForSeconds(1f);
+            yield return EquipHammer(player);
+
+            var tool = player.GetBuildTool();
+            Check(tool != null, "the hammer's piece table is in hand");
+            if (tool == null)
+            {
+                yield break;
+            }
+
+            Check(!player.PlacementCostDisabled, "placement cost is on, so the unlocked list is the real one");
+
+            // A short, known unlock list. Without this the test would ride on whatever the saved
+            // character happened to know.
+            var knownBefore = new List<string>(player.m_knownRecipes);
+            var few = new List<string>();
+            foreach (var prefab in tool.m_pieces)
+            {
+                var piece = prefab.GetComponent<Piece>();
+                if (piece == null || piece.m_repairPiece || piece.m_removePiece || !piece.m_enabled)
+                {
+                    continue;
+                }
+
+                if (!few.Contains(piece.m_name))
+                {
+                    few.Add(piece.m_name);
+                }
+
+                if (few.Count == 6)
+                {
+                    break;
+                }
+            }
+
+            player.m_knownRecipes.Clear();
+            foreach (var name in few)
+            {
+                player.m_knownRecipes.Add(name);
+            }
+
+            player.UpdateAvailablePiecesList();
+            yield return null;
+
+            var wantAll = tool.m_pieces.Count(p => Buildable(p));
+            var wantUnlocked = tool.m_availablePieces.Count(p => !p.m_repairPiece && !p.m_removePiece);
+            Log($"hammer table: {tool.m_pieces.Count} pieces, {wantAll} buildable, {wantUnlocked} unlocked");
+
+            PieceCatalog.Clear();
+            EditorConfig.ShowAllPieces.Value = false;
+            var built = PieceCatalog.Ensure();
+            Check(built && PieceCatalog.All.Count == wantAll,
+                $"the catalog holds every piece but repair and remove: {PieceCatalog.All.Count} of {wantAll}");
+            Check(PieceCatalog.Visible.Count == wantUnlocked,
+                $"ShowAllPieces off: the palette shows the {wantUnlocked} unlocked pieces"
+                + $" (is {PieceCatalog.Visible.Count})");
+            Check(wantUnlocked < wantAll, $"the two lists really differ ({wantUnlocked} of {wantAll})");
+
+            EditorConfig.ShowAllPieces.Value = true;
+            Check(PieceCatalog.Visible.Count == wantAll,
+                $"ShowAllPieces on: the palette shows all {wantAll} pieces (is {PieceCatalog.Visible.Count})");
+
+            CheckCatalogDetail();
+
+            // The window itself.
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(1f);
+            Check(ModUi.Open, "the key opened the editor");
+            Check(EditorWindow.PalettePane != null && EditorWindow.PalettePane.gameObject.activeSelf,
+                "the Pieces tab is the one on show");
+
+            yield return null;
+            yield return null;
+            Check(Palette.ShownCount == wantAll, $"the grid lists all {wantAll} pieces (is {Palette.ShownCount})");
+            Check(Palette.FooterText == $"{wantAll} of {wantAll} pieces.", $"footer reads '{Palette.FooterText}'");
+            Check(Palette.TagChipCount == PieceCatalog.Tags.Count + 1,
+                $"one chip per tag plus All: {Palette.TagChipCount} chips for {PieceCatalog.Tags.Count} tags");
+            Check(Palette.MaterialChipCount > 5, $"the material filter has {Palette.MaterialChipCount} chips");
+
+            // Virtualised: a few rows of widgets carry hundreds of pieces.
+            Log($"tiles alive: {Palette.LiveTiles} for {Palette.ShownCount} pieces");
+            Check(Palette.LiveTiles > 0 && Palette.LiveTiles < 120,
+                $"only the rows in view exist: {Palette.LiveTiles} tiles for {Palette.ShownCount} pieces");
+
+            // Search: an AND of the words, over display name and prefab.
+            yield return SearchIs(player, "wood wall");
+            yield return SearchIs(player, "beam");
+            yield return SearchIs(player, "zzzz");
+            Check(Palette.ShownCount == 0, "a search that matches nothing empties the grid");
+
+            Palette.SetSearch("");
+            yield return null;
+            Check(Palette.ShownCount == wantAll, "clearing the search brings every piece back");
+
+            // A tag chip.
+            var tag = PieceCatalog.Tags.Contains("Roof") ? "Roof" : PieceCatalog.Tags[0];
+            var wantTag = PieceCatalog.Visible.Count(p => p.UsageTags.Contains(tag));
+            Palette.SetTag(tag);
+            yield return null;
+            Check(Palette.ShownCount == wantTag, $"the {tag} chip leaves {wantTag} pieces (is {Palette.ShownCount})");
+            Palette.SetTag(null);
+            yield return null;
+
+            // Open the material row and a hover card, so the screenshot shows everything at once.
+            Palette.SetMaterialsOpen(true);
+            var card = PieceCatalog.Find("woodwall") ?? PieceCatalog.Visible[0];
+            Palette.ShowCard(card);
+            yield return null;
+            yield return null;
+            Check(Palette.CardVisible, $"the hover card is up for '{card.DisplayName}'");
+            yield return Screenshot("editor-palette-1-grid");
+
+            Palette.HideCard();
+            Palette.SetMaterialsOpen(false);
+
+            // The switch works live, with the window open.
+            EditorConfig.ShowAllPieces.Value = false;
+            yield return null;
+            yield return null;
+            Check(Palette.ShownCount == wantUnlocked,
+                $"flipping the switch refreshed the open palette: {Palette.ShownCount} of {wantUnlocked}");
+            yield return Screenshot("editor-palette-2-unlocked");
+
+            EditorConfig.ShowAllPieces.Value = true;
+            yield return null;
+            yield return null;
+
+            // The second tab.
+            yield return TestPieceList(player);
+
+            yield return PressKey(UnityEngine.InputSystem.Key.Escape);
+            yield return new WaitForSeconds(0.5f);
+            Check(!ModUi.Open, "Esc closed the editor");
+
+            player.m_knownRecipes.Clear();
+            foreach (var name in knownBefore)
+            {
+                player.m_knownRecipes.Add(name);
+            }
+
+            player.UpdateAvailablePiecesList();
+            Log($"put the character's {knownBefore.Count} recipes back");
+        }
+
+        private static bool Buildable(GameObject prefab)
+        {
+            var piece = prefab != null ? prefab.GetComponent<Piece>() : null;
+            return piece != null && !piece.m_repairPiece && !piece.m_removePiece;
+        }
+
+        /// <summary>Types a search and compares the grid with the same filter run by hand.</summary>
+        private static IEnumerator SearchIs(Player player, string text)
+        {
+            var words = text.ToLowerInvariant().Split(' ');
+            var want = PieceCatalog.Visible.Count(p => words.All(w => p.SearchText.Contains(w)));
+            Palette.SetSearch(text);
+            yield return null;
+            Check(Palette.ShownCount == want, $"search '{text}' leaves {want} pieces (is {Palette.ShownCount})");
+        }
+
+        /// <summary>What the catalog read off the prefabs, beyond the counts.</summary>
+        private static void CheckCatalogDetail()
+        {
+            var noIcon = PieceCatalog.All.Count(p => p.Icon == null);
+            Log($"pieces with no icon: {noIcon} (they get a blank slot with the prefab name)");
+
+            var wall = PieceCatalog.Find("woodwall");
+            Check(wall != null, "the catalog knows woodwall");
+            if (wall != null)
+            {
+                Log($"woodwall: '{wall.DisplayName}' | tags {string.Join(",", wall.UsageTags)}"
+                    + $" | cost {string.Join(",", wall.Cost.Select(c => c.Amount + " " + c.Name))}"
+                    + $" | station {wall.StationName ?? "-"} | size {wall.Bounds.size}"
+                    + $" | snaps {wall.SnapPoints.Length} | colliders {wall.Colliders.Length}"
+                    + $" (ray {wall.RayColliders.Length}, touch {wall.TouchColliders.Length},"
+                    + $" snap search {wall.SnapSearchColliders.Length})");
+                Check(wall.SnapPoints.Length == 4 && wall.SnapNames.Length == 4,
+                    $"woodwall has its 4 snap points, named ({wall.SnapNames.Length} names)");
+                Check(wall.Cost.Length == 1 && wall.Cost[0].Amount == 2 && wall.Cost[0].Icon != null,
+                    "woodwall costs 2 wood, with the item's own icon");
+                Check(wall.StationName != null && wall.Icon != null, "woodwall has a station and an icon");
+                Check(wall.RayColliders.Length > 0 && wall.SnapSearchColliders.Length > 0,
+                    $"woodwall's colliders are split: {wall.RayColliders.Length} ray, "
+                    + $"{wall.TouchColliders.Length} touch, {wall.SnapSearchColliders.Length} snap search");
+                Check(wall.Bounds.size.x > 1.5f && wall.Bounds.size.y > 1.5f, $"woodwall measures {wall.Bounds.size}");
+            }
+
+            Check(PieceCatalog.All.All(p => !p.RepairPiece && !p.RemovePiece),
+                "no repair or remove tool got into the catalog");
+            Check(PieceCatalog.Tags.Count > 5 && PieceCatalog.Tags[0] == "Misc",
+                $"tags in the game's order: {string.Join(", ", PieceCatalog.Tags)}");
+
+            // A piece of another tool must be named as such, not called unknown.
+            var other = OtherToolPiece();
+            if (other != null)
+            {
+                var problem = PieceCatalog.Problem(other);
+                Check(problem != null && problem.EndsWith("piece"),
+                    $"'{other}' is reported as '{problem}'");
+            }
+
+            Check(PieceCatalog.Problem("not_a_piece_at_all") == "unknown", "a made-up name is 'unknown'");
+        }
+
+        /// <summary>The first piece of a build tool that is not the hammer (hoe, cultivator, ...).</summary>
+        private static string OtherToolPiece()
+        {
+            var hammer = PieceCatalog.Table;
+            foreach (var prefab in ObjectDB.instance.m_items)
+            {
+                var item = prefab != null ? prefab.GetComponent<ItemDrop>() : null;
+                var table = item != null ? item.m_itemData.m_shared.m_buildPieces : null;
+                if (table == null || table == hammer)
+                {
+                    continue;
+                }
+
+                foreach (var piece in table.m_pieces)
+                {
+                    if (piece != null && PieceCatalog.Find(piece.name) == null)
+                    {
+                        Log($"other tool: '{item.m_itemData.m_shared.m_name}' has {table.m_pieces.Count} pieces,"
+                            + $" first '{piece.name}'");
+                        return piece.name;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>The second tab: one row per piece of the open blueprint, and the selection hook.</summary>
+        private static IEnumerator TestPieceList(Player player)
+        {
+            EditorWindow.SetLeftTab(1);
+            yield return null;
+            yield return null;
+
+            var document = EditorSession.Document;
+            Check(document != null && document.Pieces.Count > 0, "a blueprint is open in the editor");
+            if (document == null)
+            {
+                yield break;
+            }
+
+            Check(PieceListPanel.RowCount == document.Pieces.Count,
+                $"the list has a row per piece: {PieceListPanel.RowCount} of {document.Pieces.Count}");
+            Check(PieceListPanel.LiveRows > 0 && PieceListPanel.LiveRows <= PieceListPanel.RowCount + 1,
+                $"only the rows in view exist: {PieceListPanel.LiveRows} widgets for {PieceListPanel.RowCount} rows");
+            Check(PieceListPanel.FooterText.EndsWith("pieces."), $"footer reads '{PieceListPanel.FooterText}'");
+
+            var clicked = new List<int>();
+            PieceListPanel.PieceClicked = (id, additive) => clicked.Add(id);
+            PieceListPanel.SetSelection(new[] { document.Pieces[0].Id });
+            yield return null;
+            Check(PieceListPanel.Selection.Count == 1, "the next phase can push a selection into the list");
+            PieceListPanel.PieceClicked = null;
+
+            yield return Screenshot("editor-palette-3-list");
+            EditorWindow.SetLeftTab(0);
             yield return null;
         }
 
