@@ -67,6 +67,9 @@ namespace ValheimTomrer.Editor
             BlueprintPanel.Tick();
             SelectionPanel.Tick();
             ChecksPanel.Tick();
+            TopBar.Tick();
+            Dialogs.Tick();
+            Toasts.Tick();
             SyncSelection();
 
             // A text box has the keyboard: Esc puts the old text back, it does not close the window.
@@ -75,15 +78,10 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
-            // Esc walks back one step at a time: what is in hand, then the free camera, then the window.
+            // Esc walks back one step at a time: a dialog, then what is in hand, then the free
+            // camera, then the selection. Nothing left to step back from and the window closes.
             var cancel = EditorInput.Cancel;
-            if (cancel && EditorState.Mode != EditMode.Idle)
-            {
-                EditorState.CancelMode();
-                return;
-            }
-
-            if (cancel && ViewportHost.LeaveFreeLook())
+            if (cancel && Bindings.Cancel())
             {
                 return;
             }
@@ -121,6 +119,28 @@ namespace ValheimTomrer.Editor
             }
 
             Begin(document, null);
+        }
+
+        /// <summary>
+        /// Swaps the open blueprint for another one without closing the window. New and Open both
+        /// come through here: the pane starts empty and fills itself from the document.
+        /// </summary>
+        public static void Replace(BlueprintDocument document)
+        {
+            if (!ModUi.Open || document == null)
+            {
+                return;
+            }
+
+            EditorState.Open(document);
+            ViewportHost.Show(null);
+            Palette.Selected = null;
+            PieceListPanel.Show(document);
+            BlueprintPanel.Show(document);
+            SelectionPanel.Show();
+            ChecksPanel.Show(document);
+            _syncedSelection = -1;
+            ValheimTomrerPlugin.Log.LogInfo($"editor now on '{document.Name}' ({document.Pieces.Count} pieces)");
         }
 
         private static void Begin(BlueprintDocument document, ResolvedBlueprint blueprint)
@@ -168,6 +188,9 @@ namespace ValheimTomrer.Editor
             SelectionPanel.Show();
             ChecksPanel.Ensure(EditorWindow.ChecksPane);
             ChecksPanel.Show(Document);
+            TopBar.Ensure(EditorWindow.TopBar);
+            Dialogs.Ensure(EditorWindow.Root);
+            Toasts.Ensure(EditorWindow.Root);
             _syncedSelection = -1;
             ModUi.Open = true;
             EditorInput.Reset();
@@ -190,6 +213,10 @@ namespace ValheimTomrer.Editor
             BlueprintPanel.Close();
             SelectionPanel.Close();
             ChecksPanel.Close();
+            Dialogs.Close();
+            Toasts.Clear();
+            EditorCommands.Reset();
+            Bindings.Reset();
             EditorState.Close();
             EditorWindow.Show(false);
             ModUi.MarkClosed();

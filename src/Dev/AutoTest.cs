@@ -9,6 +9,7 @@ using ValheimTomrer.Blueprints;
 using ValheimTomrer.Editor;
 using ValheimTomrer.Editor.Catalog;
 using ValheimTomrer.Editor.Doc;
+using ValheimTomrer.Editor.Input;
 using ValheimTomrer.Editor.Placement;
 using ValheimTomrer.Editor.Ui;
 using ValheimTomrer.Editor.View;
@@ -32,7 +33,8 @@ namespace ValheimTomrer.Dev
     /// "editor_palette" builds the piece catalog and checks the palette's counts and filters;
     /// "editor_snap" runs the placing and snapping engine against a table of rays, with no UI;
     /// "editor_edit" drives placing, selecting, copying, turning, nudging and undo, then draws it;
-    /// "editor_panels" checks the right panel: the build card, the selection fields and the problem list.
+    /// "editor_panels" checks the right panel: the build card, the selection fields and the problem list;
+    /// "editor_keys" drives every key, the wheel and the mouse, plus the top bar and the dialogs.
     /// </summary>
     internal static class AutoTest
     {
@@ -188,6 +190,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_panels":
                     scenario = TestEditorPanels(player);
+                    break;
+                case "editor_keys":
+                    scenario = TestEditorKeys(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -2560,6 +2565,8 @@ namespace ValheimTomrer.Dev
             yield return null;
             yield return Screenshot("editor-panels-1-right-panel");
 
+            // Esc steps back one thing at a time, so the selection has to go before the window.
+            EditorState.Select(Array.Empty<int>());
             yield return PressKey(UnityEngine.InputSystem.Key.Escape);
             yield return new WaitForSeconds(0.5f);
             Check(!ModUi.Open, "Esc closed the editor");
@@ -2568,6 +2575,517 @@ namespace ValheimTomrer.Dev
         private static string Named(PieceEntry entry)
         {
             return entry != null ? entry.PrefabName : "none";
+        }
+
+        // ---------- scenario: editor_keys ----------
+
+        /// <summary>
+        /// Every key, the wheel and the mouse, driven straight through the binding dispatcher
+        /// (<see cref="Bindings.Press"/>), plus the top bar and the dialogs. One case per row of
+        /// the help table, and the two rules that are easy to get wrong: a key while a text box
+        /// has the keyboard does nothing, and Ctrl+S saves instead of flying down.
+        /// </summary>
+        private static IEnumerator TestEditorKeys(Player player)
+        {
+            yield return new WaitForSeconds(1f);
+
+            PieceCatalog.Ensure();
+            var wall = PieceCatalog.Find("woodwall");
+            Check(PieceCatalog.Ready && wall != null, "the catalog is built and has woodwall");
+            if (wall == null)
+            {
+                yield break;
+            }
+
+            // Its own blueprint folder: the player's files are never touched.
+            var folder = Path.Combine(OutDir, "keys-test");
+            var wasFolder = BlueprintLibrary.UserFolder;
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, true);
+            }
+
+            Directory.CreateDirectory(folder);
+            BlueprintLibrary.UserFolder = folder;
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open, "the key opened the editor");
+
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            var document = EditorSession.Document;
+            Check(ViewportHost.Ready && document != null && document.Pieces.Count >= 3,
+                $"a kit stands in the pane after {waited:0.00} s: "
+                + $"{(document != null ? document.Pieces.Count : 0)} pieces");
+            if (document == null || document.Pieces.Count < 3)
+            {
+                BlueprintLibrary.UserFolder = wasFolder;
+                yield break;
+            }
+
+            ViewportHost.SetMode(CameraMode.Orbit);
+            yield return CameraKeys();
+            yield return EditKeys(document, wall);
+            yield return SaveKeys(document);
+            yield return MouseAndBars(document, wall);
+            yield return KeysWhileTyping(document);
+            yield return DialogKeys(document);
+
+            BlueprintLibrary.UserFolder = wasFolder;
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
+            Check(!ModUi.Open, "the editor closed");
+        }
+
+        /// <summary>B, W A S D, Space, Ctrl, Shift and F.</summary>
+        private static IEnumerator CameraKeys()
+        {
+            var camera = ViewportHost.Camera;
+
+            var mode = camera.Mode;
+            Bindings.Press(KeyCode.B, KeyMods.None);
+            var flipped = camera.Mode;
+            Bindings.Press(KeyCode.B, KeyMods.None);
+            Check(flipped != mode && camera.Mode == mode,
+                $"B switches the camera: {mode} -> {flipped} -> {camera.Mode}");
+
+            var forward = Travel(KeyCode.W, KeyMods.None, 0.2f);
+            Check(forward.magnitude > 0.5f && Vector3.Dot(forward.normalized, camera.Forward) > 0.8f,
+                $"W flies where the camera looks: {V4(forward)}");
+            var back = Travel(KeyCode.S, KeyMods.None, 0.2f);
+            Check(Vector3.Dot(back.normalized, camera.Forward) < -0.8f, $"S flies backwards: {V4(back)}");
+            var right = Travel(KeyCode.D, KeyMods.None, 0.2f);
+            Check(Vector3.Dot(right.normalized, camera.Right) > 0.9f, $"D flies right: {V4(right)}");
+            var left = Travel(KeyCode.A, KeyMods.None, 0.2f);
+            Check(Vector3.Dot(left.normalized, camera.Right) < -0.9f, $"A flies left: {V4(left)}");
+
+            var up = Travel(KeyCode.Space, KeyMods.None, 0.2f);
+            Check(up.y > 0.5f && Mathf.Abs(up.x) < 1e-3f, $"Space flies straight up: {V4(up)}");
+            var down = Travel(KeyCode.LeftControl, KeyMods.Ctrl, 0.2f);
+            Check(down.y < -0.5f && Mathf.Abs(down.x) < 1e-3f, $"Ctrl flies straight down: {V4(down)}");
+
+            var slow = Travel(KeyCode.D, KeyMods.None, 0.1f).magnitude;
+            var fast = Travel(KeyCode.D, KeyMods.Shift, 0.1f).magnitude;
+            Check(Mathf.Abs((fast / Mathf.Max(slow, 1e-4f)) - 3f) < 0.05f,
+                $"Shift flies 3 times faster: {fast:0.###} m against {slow:0.###} m");
+
+            Bindings.SetMods(KeyMods.Shift);
+            var noSnap = !EditorState.Snapping;
+            Bindings.SetMods(KeyMods.None);
+            Check(noSnap && EditorState.Snapping, "Shift held turns snapping off, letting go turns it back on");
+
+            yield return null;
+        }
+
+        /// <summary>How far one key press of a fly key moves the camera in one step.</summary>
+        private static Vector3 Travel(KeyCode key, KeyMods mods, float dt)
+        {
+            Bindings.Reset();
+            var from = ViewportHost.Camera.Position;
+            Bindings.Press(key, mods);
+            Bindings.Fly(dt);
+            Bindings.Reset();
+            return ViewportHost.Camera.Position - from;
+        }
+
+        /// <summary>The editing keys: undo, redo, select all, duplicate, move, turn, nudge, delete.</summary>
+        private static IEnumerator EditKeys(BlueprintDocument document, PieceEntry wall)
+        {
+            var count = document.Pieces.Count;
+            var first = document.Pieces[0].Id;
+
+            EditorState.Select(first);
+            Bindings.Press(KeyCode.Delete, KeyMods.None);
+            Check(document.Pieces.Count == count - 1, $"Delete removed the selection: {document.Pieces.Count}");
+            Bindings.Press(KeyCode.Z, KeyMods.Ctrl);
+            Check(document.Pieces.Count == count, $"Ctrl+Z put it back: {document.Pieces.Count}");
+            Bindings.Press(KeyCode.Y, KeyMods.Ctrl);
+            Check(document.Pieces.Count == count - 1, $"Ctrl+Y took it out again: {document.Pieces.Count}");
+            Bindings.Press(KeyCode.Z, KeyMods.Cmd);
+            Bindings.Press(KeyCode.Z, KeyMods.Cmd | KeyMods.Shift);
+            Check(document.Pieces.Count == count - 1, $"Shift+Cmd+Z redoes as well: {document.Pieces.Count}");
+            Bindings.Press(KeyCode.Z, KeyMods.Ctrl);
+            Check(document.Pieces.Count == count, "and one more undo brings the piece back");
+
+            EditorState.Select(document.Pieces[0].Id);
+            Bindings.Press(KeyCode.Backspace, KeyMods.None);
+            Check(document.Pieces.Count == count - 1, "Backspace deletes too");
+            Bindings.Press(KeyCode.Z, KeyMods.Ctrl);
+
+            Bindings.Press(KeyCode.A, KeyMods.Cmd);
+            Check(EditorState.SelectionCount == count, $"Cmd+A selected all {EditorState.SelectionCount}");
+
+            Bindings.Press(KeyCode.D, KeyMods.Cmd);
+            Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Duplicate
+                && EditorState.Moving != null && EditorState.Moving.Count == count,
+                $"Cmd+D put {count} copies in hand");
+            EditorState.CancelMode();
+
+            var id = document.Pieces[0].Id;
+            EditorState.Select(id);
+            Bindings.Press(KeyCode.G, KeyMods.None);
+            Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Move,
+                "G took the selection in hand");
+            EditorState.CancelMode();
+
+            var turnable = document.Pieces.FirstOrDefault(
+                p => PieceCatalog.Find(p.PrefabName) != null && PieceCatalog.Find(p.PrefabName).CanRotate);
+            Check(turnable != null, "the kit has a piece that can turn");
+            if (turnable != null)
+            {
+                EditorState.Select(turnable.Id);
+                var yaw = YawOf(document.Find(turnable.Id).Rotation);
+                Bindings.Press(KeyCode.R, KeyMods.None);
+                var turned = YawOf(document.Find(turnable.Id).Rotation);
+                Bindings.Press(KeyCode.R, KeyMods.Shift);
+                var back = YawOf(document.Find(turnable.Id).Rotation);
+                Check(Mathf.Abs(Mathf.DeltaAngle(turned, yaw + Placer.RotateStep)) < 0.01f
+                    && Mathf.Abs(Mathf.DeltaAngle(back, yaw)) < 0.01f,
+                    $"R turns {Placer.RotateStep} degrees and Shift+R turns back: {yaw:0.#} -> {turned:0.#} -> {back:0.#}");
+            }
+
+            // The arrows walk the ground axis the camera is closest to, so only the step is fixed.
+            EditorState.Select(id);
+            var was = document.Find(id).Position;
+            Bindings.Press(KeyCode.UpArrow, KeyMods.None);
+            var step = document.Find(id).Position - was;
+            Check(Mathf.Abs(step.magnitude - Bindings.NudgeStep) < 1e-4f && Mathf.Abs(step.y) < 1e-6f
+                && (Mathf.Abs(step.x) < 1e-6f || Mathf.Abs(step.z) < 1e-6f),
+                $"an arrow key nudges {Bindings.NudgeStep} m along one ground axis: {V4(step)}");
+
+            was = document.Find(id).Position;
+            Bindings.Press(KeyCode.DownArrow, KeyMods.Alt);
+            var fine = document.Find(id).Position - was;
+            Check(Mathf.Abs(fine.magnitude - Bindings.NudgeFine) < 1e-4f && Vector3.Dot(fine, step) < 0f,
+                $"with Alt it is {Bindings.NudgeFine} m, and Down goes the other way: {V4(fine)}");
+
+            was = document.Find(id).Position;
+            Bindings.Press(KeyCode.PageUp, KeyMods.None);
+            Bindings.Press(KeyCode.PageDown, KeyMods.Alt);
+            var lifted = document.Find(id).Position - was;
+            Check(Mathf.Abs(lifted.y - (Bindings.NudgeStep - Bindings.NudgeFine)) < 1e-4f
+                && Mathf.Abs(lifted.x) < 1e-6f,
+                $"PageUp and PageDown move straight up and down: {V4(lifted)}");
+
+            // Q and E walk the snap point, but only while something is in hand.
+            Check(!Bindings.Press(KeyCode.E, KeyMods.None), "E does nothing while the hand is empty");
+            EditorState.StartAdd(wall);
+            var manual = EditorState.Manual;
+            Bindings.Press(KeyCode.E, KeyMods.None);
+            var next = EditorState.Manual;
+            Bindings.Press(KeyCode.Q, KeyMods.None);
+            Check(manual == -1 && next == 0 && EditorState.Manual == -1,
+                $"E and Q walk the snap point: {manual} -> {next} -> {EditorState.Manual}");
+
+            var steps = EditorState.Steps;
+            Bindings.Wheel(1f, new Vector2(0.5f, 0.5f));
+            Check(EditorState.Steps == steps + 1,
+                $"one wheel notch turns the piece one step of {Placer.RotateStep} degrees");
+            EditorState.CancelMode();
+
+            var distance = ViewportHost.Camera.Distance;
+            Bindings.Wheel(1f, new Vector2(0.5f, 0.5f));
+            var closer = ViewportHost.Camera.Distance;
+            Bindings.Wheel(-1f, new Vector2(0.5f, 0.5f));
+            Check(closer < distance && ViewportHost.Camera.Distance > closer,
+                $"with an empty hand the wheel zooms: {distance:0.##} -> {closer:0.##} "
+                + $"-> {ViewportHost.Camera.Distance:0.##}");
+
+            // F looks at the selection, and at everything when there is none.
+            EditorState.Select(id);
+            Bindings.Press(KeyCode.F, KeyMods.None);
+            var box = EditorState.BoxOf(document.Find(id));
+            Check(Vector3.Distance(ViewportHost.Camera.Pivot, box.center) < 0.5f,
+                $"F looks at the selected piece: pivot {V4(ViewportHost.Camera.Pivot)}, piece {V4(box.center)}");
+            EditorState.Select(Array.Empty<int>());
+            Bindings.Press(KeyCode.F, KeyMods.None);
+            var all = EditorState.BoxOf(new List<DocPiece>(document.Pieces));
+            Check(all.HasValue && Vector3.Distance(ViewportHost.Camera.Pivot, all.Value.center) < 0.5f,
+                "and at the whole blueprint when nothing is selected");
+
+            // Esc walks back one step at a time.
+            EditorState.StartAdd(wall);
+            Check(Bindings.Cancel() && EditorState.Mode == EditMode.Idle, "Esc empties the hand first");
+            EditorState.Select(id);
+            Check(Bindings.Cancel() && EditorState.SelectionCount == 0, "the next Esc clears the selection");
+            Check(!Bindings.Cancel(), "and the one after that has nothing left, so the window would close");
+
+            yield return null;
+        }
+
+        /// <summary>Ctrl+S, and the file name the top bar shows.</summary>
+        private static IEnumerator SaveKeys(BlueprintDocument document)
+        {
+            Check(EditorCommands.SaveAs("Keys test", true), "Save as wrote the blueprint");
+            Check(!document.Dirty && !string.IsNullOrEmpty(document.SourcePath),
+                $"it now has a file: {Path.GetFileName(document.SourcePath ?? "none")}");
+
+            EditorState.Select(document.Pieces[0].Id);
+            EditorState.Nudge(new Vector3(0f, 0f, 0.5f));
+            Check(document.Dirty, "an edit made it dirty again");
+
+            // Ctrl is the fly-down key, so this is the case that proves shortcuts win.
+            Bindings.Reset();
+            var was = ViewportHost.Camera.Position;
+            Bindings.Press(KeyCode.S, KeyMods.Ctrl);
+            Bindings.Fly(0.5f);
+            Check(!document.Dirty, "Ctrl+S saved the blueprint");
+            Check(Vector3.Distance(ViewportHost.Camera.Position, was) < 1e-4f,
+                "and did not fly the camera down as a plain S would");
+
+            TopBar.Tick();
+            Check(TopBar.FileText.Contains("Keys test") && TopBar.FileText.Contains("keys-test.blueprint"),
+                $"the top bar names the file: '{Strip(TopBar.FileText)}'");
+
+            yield return null;
+        }
+
+        /// <summary>The mouse rows, the two view switches and the Save button's error count.</summary>
+        private static IEnumerator MouseAndBars(BlueprintDocument document, PieceEntry wall)
+        {
+            var camera = ViewportHost.Camera;
+            var yaw = camera.Yaw;
+            camera.Drag(new Vector2(60f, 0f), 800f);
+            Check(Mathf.Abs(Mathf.DeltaAngle(camera.Yaw, yaw)) > 1f,
+                $"a right drag turns the camera: {yaw:0.#} -> {camera.Yaw:0.#} degrees");
+
+            var at = camera.Position;
+            camera.Pan(new Vector2(60f, 0f), 10f, 800f);
+            Check(Vector3.Distance(camera.Position, at) > 0.1f,
+                $"a middle drag pans it: {V4(camera.Position - at)}");
+
+            ViewportHost.Frame();
+            yield return null;
+
+            // A click on the picture picks what is under it; the same click with Shift lets it go.
+            EditorState.Select(Array.Empty<int>());
+            var centre = ViewportHost.Scene.Root.TransformPoint(EditorState.BoxOf(document.Pieces[0]).center);
+            if (ViewportHost.Raycast.Project(centre, out var screen))
+            {
+                ViewportHost.ClickAt(screen, false);
+                var picked = EditorState.SelectionCount;
+                ViewportHost.ClickAt(screen, true);
+                Check(picked == 1 && EditorState.SelectionCount == 0,
+                    $"a click selects one piece and Shift+click lets it go: {picked} -> {EditorState.SelectionCount}");
+            }
+            else
+            {
+                Check(false, "the first piece does not show on screen");
+            }
+
+            ViewportHost.BoxSelect(Vector2.zero, new Vector2(Screen.width, Screen.height), false);
+            Check(EditorState.SelectionCount > 1,
+                $"a drag over the whole pane box-selects {EditorState.SelectionCount} pieces");
+            EditorState.Select(Array.Empty<int>());
+
+            // Boxes: the models stop drawing and a wire box stands in for each piece.
+            EditorCommands.ToggleBoxes();
+            yield return null;
+            yield return null;
+            Check(EditorState.PieceBoxesOn && ViewportHost.Boxes.AllCount == document.Pieces.Count,
+                $"Boxes draws one box per piece: {ViewportHost.Boxes.AllCount} of {document.Pieces.Count}");
+            EditorCommands.ToggleBoxes();
+            yield return null;
+            yield return null;
+            Check(!EditorState.PieceBoxesOn && ViewportHost.Boxes.AllCount == 0, "and switches back to the models");
+
+            // Snap dots: only the dots go, snapping itself stays on.
+            EditorState.StartAdd(wall);
+            ViewportHost.SetMode(CameraMode.Free);
+            var tries = 0f;
+            while (EditorState.Aimed == null && tries < 2f)
+            {
+                tries += Time.deltaTime;
+                yield return null;
+            }
+
+            var drawn = ViewportHost.Dots.Drawn;
+            EditorCommands.ToggleSnapDots();
+            yield return null;
+            yield return null;
+            Check(drawn > 0 && !EditorState.SnapDotsOn && ViewportHost.Dots.Drawn == 0,
+                $"Snap dots switches them off: {drawn} -> {ViewportHost.Dots.Drawn}");
+            EditorCommands.ToggleSnapDots();
+            EditorState.CancelMode();
+            ViewportHost.SetMode(CameraMode.Orbit);
+            yield return null;
+
+            // Save says what is wrong and still saves: an empty blueprint is one error.
+            EditorState.SelectAll();
+            EditorState.DeleteSelection();
+            ChecksPanel.Refresh();
+            TopBar.Tick();
+            Check(TopBar.SaveText == "Save (1 error)" && TopBar.SaveIsRed,
+                $"with an error the Save button reads '{TopBar.SaveText}' in red");
+            EditorState.Undo();
+            ChecksPanel.Refresh();
+            TopBar.Tick();
+            Check(TopBar.SaveText == "Save" && !TopBar.SaveIsRed,
+                $"and goes back to '{TopBar.SaveText}' once the error is gone");
+
+            // Move one piece first, or the kit's origin is already where centring would put it.
+            EditorState.Select(document.Pieces[0].Id);
+            EditorState.Nudge(new Vector3(3f, 0f, 0f));
+            var pieces = document.Pieces.Count;
+            var wasAt = document.Pieces[1].Position;
+            EditorCommands.CenterOrigin();
+            Check(document.Pieces.Count == pieces && Vector3.Distance(document.Pieces[1].Position, wasAt) > 1e-3f,
+                $"Center origin moved the whole blueprint: {V4(wasAt)} -> {V4(document.Pieces[1].Position)}");
+            EditorState.Undo();
+            EditorState.Undo();
+        }
+
+        /// <summary>A key while a text box has the keyboard is not the editor's.</summary>
+        private static IEnumerator KeysWhileTyping(BlueprintDocument document)
+        {
+            var field = BlueprintPanel.NameField;
+            Check(field != null, "the blueprint panel has a name box");
+            if (field == null)
+            {
+                yield break;
+            }
+
+            UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(field.gameObject);
+            field.ActivateInputField();
+            var waited = 0f;
+            while (!ModUi.Typing && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(ModUi.Typing, $"the name box has the keyboard after {waited:0.00} s");
+            var count = document.Pieces.Count;
+            EditorState.Select(document.Pieces[0].Id);
+            var used = Bindings.Press(KeyCode.Delete, KeyMods.None)
+                || Bindings.Press(KeyCode.G, KeyMods.None)
+                || Bindings.Press(KeyCode.S, KeyMods.Ctrl);
+            Check(!used && document.Pieces.Count == count && EditorState.Mode == EditMode.Idle,
+                "Delete, G and Ctrl+S all do nothing while a text box has the keyboard");
+
+            field.DeactivateInputField();
+            UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
+            yield return null;
+            yield return null;
+            Check(!ModUi.Typing, "the keys are the editor's again once the box lets go");
+            EditorState.Select(Array.Empty<int>());
+        }
+
+        /// <summary>The open, save as, help and unsaved-changes dialogs, and the toasts.</summary>
+        private static IEnumerator DialogKeys(BlueprintDocument document)
+        {
+            // ---- help, and the screenshot ----
+            Check(Bindings.Press(KeyCode.H, KeyMods.None) && Dialogs.Kind == "help",
+                $"H opens the help: '{Dialogs.TitleText}'");
+            Check(!Bindings.Press(KeyCode.Delete, KeyMods.None), "and the editing keys are silent while it is up");
+            yield return null;
+            yield return null;
+            yield return Screenshot("editor-keys-1-help");
+            Check(Bindings.Cancel() && !Dialogs.IsOpen, "Esc closes the help");
+            Check(Bindings.Press(KeyCode.Slash, KeyMods.Shift) && Dialogs.Kind == "help", "? opens it too");
+            Dialogs.Close();
+
+            // ---- open ----
+            EditorCommands.OpenDialog();
+            yield return null;
+            Check(Dialogs.Kind == "open" && Dialogs.RowCount > 1,
+                $"Open lists {Dialogs.RowCount} blueprints");
+            var kits = 0;
+            var mine = -1;
+            for (var i = 0; i < Dialogs.RowCount; i++)
+            {
+                if (Dialogs.Row(i).IsKit)
+                {
+                    kits++;
+                }
+                else if (mine < 0)
+                {
+                    mine = i;
+                }
+            }
+
+            Check(kits > 0 && mine >= 0, $"both lists are there: {kits} kits and the file we saved");
+            Check(mine < 0 || (Dialogs.RowText(mine).Contains("keys-test.blueprint")
+                && Dialogs.RowText(mine).Contains(" B")
+                && Dialogs.RowText(mine).Contains(DateTime.Now.Year.ToString())),
+                $"a row carries path, size and date: '{(mine >= 0 ? Dialogs.RowText(mine) : "none")}'");
+            Dialogs.Close();
+
+            // ---- save as ----
+            Dialogs.SaveAs("Keys test");
+            yield return null;
+            Check(Dialogs.Kind == "saveAs" && Dialogs.NameField != null, "Save as opened with a name box");
+            Check(Dialogs.NoteText.Contains("exists"), $"a name that is taken warns: '{Dialogs.NoteText}'");
+            Dialogs.NameField.text = "a..b";
+            Check(Dialogs.NoteText.StartsWith("Use letters"), $"two dots are refused: '{Dialogs.NoteText}'");
+            Dialogs.NameField.text = " leading space";
+            Check(Dialogs.NoteText.StartsWith("Use letters"), "so is a name that does not start with a letter");
+            Dialogs.NameField.text = "Another name";
+            Check(Dialogs.NoteText.Length == 0, $"a free name says nothing: '{Dialogs.NoteText}'");
+            Dialogs.NameField.DeactivateInputField();
+            UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
+            Dialogs.Close();
+            yield return null;
+
+            // ---- the unsaved-changes question ----
+            EditorState.Select(document.Pieces[0].Id);
+            EditorState.Nudge(new Vector3(0f, 0f, 0.5f));
+            Check(document.Dirty, "the blueprint has changes again");
+            EditorCommands.NewBlueprint();
+            yield return null;
+            Check(Dialogs.Kind == "confirm", $"New asks first: '{Dialogs.TitleText}'");
+            Dialogs.Close();
+            Check(EditorSession.Document == document, "cancelling kept the blueprint");
+
+            EditorCommands.NewBlueprint();
+            Dialogs.Submit();
+            yield return null;
+            yield return null;
+            Check(!Dialogs.IsOpen && EditorSession.Document != document
+                && EditorSession.Document.Pieces.Count == 0,
+                "answering Discard started an empty blueprint");
+
+            // ---- open a kit from the list ----
+            EditorCommands.OpenDialog();
+            yield return null;
+            var kit = -1;
+            for (var i = 0; i < Dialogs.RowCount && kit < 0; i++)
+            {
+                if (Dialogs.Row(i).IsKit && Dialogs.Row(i).Error == null && Dialogs.Row(i).Pieces > 0)
+                {
+                    kit = i;
+                }
+            }
+
+            Dialogs.ClickRow(kit);
+            yield return null;
+            yield return null;
+            Check(kit >= 0 && !Dialogs.IsOpen && EditorSession.Document.Pieces.Count > 0,
+                $"clicking a kit opened it: {EditorSession.Document.Pieces.Count} pieces");
+
+            // ---- toasts ----
+            Toasts.Clear();
+            Toasts.Info("a note");
+            Toasts.Error("a problem");
+            Check(Toasts.Count == 2 && Toasts.LevelOf(0) == ToastLevel.Error,
+                $"two messages are up, newest first: {Toasts.Count}");
+            yield return new WaitForSeconds(Toasts.Seconds + 0.6f);
+            Toasts.Tick();
+            Check(Toasts.Count == 1 && Toasts.LevelOf(0) == ToastLevel.Error,
+                $"the note went after {Toasts.Seconds} s and the error is still up: {Toasts.Count}");
+            Toasts.Clear();
+        }
+
+        /// <summary>Rich text out of a label, so a log line reads as what a person sees.</summary>
+        private static string Strip(string text)
+        {
+            return System.Text.RegularExpressions.Regex.Replace(text ?? "", "<[^>]*>", "");
         }
 
         // ---------- scenario: editor_snap ----------

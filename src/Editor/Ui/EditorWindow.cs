@@ -31,6 +31,9 @@ namespace ValheimTomrer.Editor.Ui
         private static int _generation = -1;
         private static TextMeshProUGUI[] _leftTabs;
 
+        /// <summary>The whole canvas. Dialogs and toasts hang here, over everything else.</summary>
+        public static RectTransform Root { get; private set; }
+
         public static RectTransform TopBar { get; private set; }
         public static RectTransform LeftPanel { get; private set; }
         public static RectTransform ViewportHost { get; private set; }
@@ -77,6 +80,7 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             _root = CreateRoot("ValheimTomrerEditor", SortOrder, parent);
+            Root = (RectTransform)_root.transform;
             _generation = UiTheme.Generation;
             Build((RectTransform)_root.transform);
             ValheimTomrerPlugin.Log.LogInfo("editor window built");
@@ -99,6 +103,7 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             _root = null;
+            Root = null;
             _generation = -1;
             TopBar = LeftPanel = ViewportHost = RightPanel = StatusBar = null;
             PalettePane = PieceListPane = null;
@@ -202,7 +207,6 @@ namespace ValheimTomrer.Editor.Ui
             sunken.raycastTarget = false;
             UiBuild.Stretch(sunken.rectTransform);
 
-            Caption(TopBar, "Valheim T\u00f8mrer", 26f, TextAlignmentOptions.Left, UiTheme.Accent);
             StatusText = Caption(StatusBar, "F7 or Esc closes", 16f, TextAlignmentOptions.Left, UiTheme.TextDim);
             BuildLeftTabs();
             BuildRightPanes();

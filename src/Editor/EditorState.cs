@@ -48,8 +48,11 @@ namespace ValheimTomrer.Editor
     /// </summary>
     internal static class EditorState
     {
-        /// <summary>How far one arrow-key press moves the selection.</summary>
-        public const float NudgeStep = 0.25f;
+        /// <summary>Draw the pieces as boxes instead of models. A top bar switch.</summary>
+        public static bool PieceBoxesOn { get; set; }
+
+        /// <summary>Show the snap points while placing. Snapping itself is always on.</summary>
+        public static bool SnapDotsOn { get; set; } = true;
 
         /// <summary>A group bigger than this snaps against every piece, not only the ones within 10 m.</summary>
         private const int SearchAllFrom = 8;

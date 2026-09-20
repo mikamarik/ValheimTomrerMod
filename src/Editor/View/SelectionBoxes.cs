@@ -5,7 +5,8 @@ namespace ValheimTomrer.Editor.View
 {
     /// <summary>
     /// The wire boxes in the pane: a gold one around every selected piece, a lighter one around the
-    /// whole selection, and a thin light one around the piece the aim is on.
+    /// whole selection, a thin light one around the piece the aim is on, and, when the top bar's
+    /// Boxes switch is on, a pale one around every piece in place of the models.
     ///
     /// Each box is twelve thin bars, not lines, because a one-pixel line disappears the moment the
     /// pane is drawn at anything but full size. All the bars of one colour go in a single mesh, so
@@ -20,11 +21,13 @@ namespace ValheimTomrer.Editor.View
         private const float PieceBar = 0.03f;
         private const float GroupBar = 0.024f;
         private const float AimBar = 0.015f;
+        private const float AllBar = 0.02f;
         private const float GroupPad = 0.08f;
 
         private static readonly Color PieceColor = Hex(0xFFC24A);
         private static readonly Color GroupColor = Hex(0xFFE9A8);
         private static readonly Color AimColor = Hex(0xE8F1F8);
+        private static readonly Color AllColor = Hex(0xBFCAD6);
 
         private readonly Transform _parent;
         private readonly int _layer;
@@ -34,7 +37,9 @@ namespace ValheimTomrer.Editor.View
         private OverlayMesh _pieces;
         private OverlayMesh _group;
         private OverlayMesh _aim;
+        private OverlayMesh _all;
         private int _shown;
+        private int _allShown;
 
         public SelectionBoxes(Transform parent, int layer)
         {
@@ -44,6 +49,17 @@ namespace ValheimTomrer.Editor.View
 
         /// <summary>Boxes standing in the pane: one per selected piece, plus the group and the aim.</summary>
         public int BoxCount => _shown;
+
+        /// <summary>Boxes drawn in place of the models, for the Boxes view.</summary>
+        public int AllCount => _allShown;
+
+        /// <summary>One box per piece, drawn instead of the models. An empty list switches it off.</summary>
+        public void ShowAll(IList<Bounds> boxes)
+        {
+            Build();
+            _allShown = boxes != null ? Mathf.Min(boxes.Count, BoxCap) : 0;
+            Fill(_all, boxes, AllBar);
+        }
 
         /// <summary>Draws the boxes. Empty lists switch the meshes off.</summary>
         public void Show(IList<Bounds> selected, Bounds? group, Bounds? aim)
@@ -89,8 +105,10 @@ namespace ValheimTomrer.Editor.View
             _pieces?.Destroy();
             _group?.Destroy();
             _aim?.Destroy();
-            _pieces = _group = _aim = null;
+            _all?.Destroy();
+            _pieces = _group = _aim = _all = null;
             _shown = 0;
+            _allShown = 0;
         }
 
         private void Build()
@@ -103,6 +121,7 @@ namespace ValheimTomrer.Editor.View
             _pieces = new OverlayMesh("SelectionBoxes", _parent, _layer, PieceColor);
             _group = new OverlayMesh("SelectionGroupBox", _parent, _layer, GroupColor);
             _aim = new OverlayMesh("AimBox", _parent, _layer, AimColor);
+            _all = new OverlayMesh("PieceBoxes", _parent, _layer, AllColor);
         }
 
         /// <summary>Rebuilds one colour's mesh out of the boxes it has to draw.</summary>

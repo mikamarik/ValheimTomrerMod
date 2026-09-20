@@ -28,6 +28,12 @@ namespace ValheimTomrer.Editor.Doc
 
         public int Pieces;
 
+        /// <summary>Bytes on disk, or inside the DLL for a kit.</summary>
+        public long Size;
+
+        /// <summary>When the file last changed. Meaningless for a kit.</summary>
+        public DateTime Modified;
+
         /// <summary>Why the file cannot be opened, or null when it is fine.</summary>
         public string Error;
     }
@@ -56,9 +62,11 @@ namespace ValheimTomrer.Editor.Doc
                 var entry = new BlueprintEntry { Resource = resource, IsKit = true, ReadOnly = true, Name = fallback };
                 try
                 {
-                    var blueprint = BlueprintFormat.ParseBlueprint(fallback, ReadResource(resource));
+                    var lines = ReadResource(resource);
+                    var blueprint = BlueprintFormat.ParseBlueprint(fallback, lines);
                     entry.Name = blueprint.Name;
                     entry.Pieces = blueprint.Pieces.Count;
+                    entry.Size = lines.Sum(l => (long)l.Length + 1L);
                 }
                 catch (Exception e)
                 {
@@ -96,6 +104,9 @@ namespace ValheimTomrer.Editor.Doc
                 var entry = new BlueprintEntry { Path = file, Name = fallback };
                 try
                 {
+                    var info = new FileInfo(file);
+                    entry.Size = info.Length;
+                    entry.Modified = info.LastWriteTime;
                     var blueprint = Read(file);
                     entry.Name = blueprint.Name;
                     entry.Pieces = blueprint.Pieces.Count;

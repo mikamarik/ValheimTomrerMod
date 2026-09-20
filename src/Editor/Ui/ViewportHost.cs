@@ -166,8 +166,8 @@ namespace ValheimTomrer.Editor.Ui
 
             StepFill();
             Fit();
+            Bindings.Tick();
             ReadInput();
-            EditorKeys();
             ModUi.LockCursor = _camera.WantsCursorLock;
             if (_crosshair != null)
             {
@@ -179,16 +179,27 @@ namespace ValheimTomrer.Editor.Ui
             UpdateBoxes();
             UpdateOverlays();
 
-            _dots.Show(EditorState.Aimed);
+            _dots.Show(EditorState.SnapDotsOn ? EditorState.Aimed : null);
             _preview.Render();
         }
 
-        /// <summary>Looks at the whole blueprint from its front.</summary>
+        /// <summary>F: looks at the selection, or at the whole blueprint when nothing is selected.</summary>
         public static void Frame()
         {
             if (_camera == null)
             {
                 return;
+            }
+
+            var selected = EditorState.SelectedPieces();
+            if (selected.Count > 0)
+            {
+                var box = EditorState.BoxOf(selected);
+                if (box.HasValue)
+                {
+                    _camera.Frame(box.Value);
+                    return;
+                }
             }
 
             if (_model != null && _model.Done)
@@ -220,6 +231,21 @@ namespace ValheimTomrer.Editor.Ui
                 _orbitLabel.color = mode == CameraMode.Orbit ? UiTheme.Accent : UiTheme.Text;
                 _freeLabel.color = mode == CameraMode.Free ? UiTheme.Accent : UiTheme.Text;
             }
+        }
+
+        /// <summary>B: orbit becomes free and free becomes orbit.</summary>
+        public static void ToggleCamera()
+        {
+            if (_camera == null)
+            {
+                return;
+            }
+
+            var free = _camera.Mode == CameraMode.Orbit;
+            SetMode(free ? CameraMode.Free : CameraMode.Orbit);
+            Toasts.Info(free
+                ? "Free camera: the mouse looks around, W A S D fly. Esc gives the cursor back."
+                : "Orbit camera: the cursor is back, and a right drag circles the point in front.");
         }
 
         /// <summary>Esc in free mode gives the cursor back instead of closing the window.</summary>
@@ -387,6 +413,7 @@ namespace ValheimTomrer.Editor.Ui
             var document = EditorState.Document;
             var signature = ((long)EditorState.Version * 1000003L)
                 + ((document != null ? document.Revision : 0) * 1009L)
+                + (EditorState.PieceBoxesOn ? 131071L : 0L)
                 + _aimPiece;
             if (signature == _boxSignature)
             {
@@ -424,6 +451,31 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             _boxes.Show(BoxList, group, aim);
+            ShowPieceBoxes(document);
+        }
+
+        /// <summary>The Boxes view: the models stop drawing and a wire box stands in for each.</summary>
+        private static void ShowPieceBoxes(Doc.BlueprintDocument document)
+        {
+            if (_pieces == null)
+            {
+                return;
+            }
+
+            _pieces.SetBoxes(EditorState.PieceBoxesOn);
+            if (!EditorState.PieceBoxesOn || document == null)
+            {
+                _boxes.ShowAll(null);
+                return;
+            }
+
+            var all = new List<Bounds>(document.Pieces.Count);
+            foreach (var piece in document.Pieces)
+            {
+                all.Add(EditorState.BoxOf(piece));
+            }
+
+            _boxes.ShowAll(all);
         }
 
         /// <summary>The lines over the picture: the hint, the place HUD, the aimed piece, the status.</summary>
@@ -550,15 +602,14 @@ namespace ValheimTomrer.Editor.Ui
             }
         }
 
+        /// <summary>The pad and the free camera's mouse. The keys are all in <see cref="Bindings"/>.</summary>
         private static void ReadInput()
         {
             var dt = Mathf.Min(EditorInput.Dt, 0.1f);
-
-            var wish = Vector3.zero;
-            wish.z += Key(KeyCode.W) - Key(KeyCode.S);
-            wish.x += Key(KeyCode.D) - Key(KeyCode.A);
-            wish.y += Key(KeyCode.E) - Key(KeyCode.Q);
-            _camera.FlyKeys(wish, Key(KeyCode.LeftShift) + Key(KeyCode.RightShift) > 0f, dt);
+            if (Dialogs.IsOpen)
+            {
+                return;
+            }
 
             var pad = EditorInput.Pad;
             if (pad != null)
@@ -572,111 +623,6 @@ namespace ValheimTomrer.Editor.Ui
             if (_camera.Mode == CameraMode.Free && Mouse.current != null)
             {
                 _camera.MouseLook(Mouse.current.delta.ReadValue());
-            }
-        }
-
-        /// <summary>The editing keys. Silent while a text field has the keyboard.</summary>
-        private static void EditorKeys()
-        {
-            if (EditorState.Document == null || ModUi.Typing)
-            {
-                return;
-            }
-
-            var shift = Key(KeyCode.LeftShift) + Key(KeyCode.RightShift) > 0f;
-            var ctrl = Key(KeyCode.LeftControl) + Key(KeyCode.RightControl)
-                + Key(KeyCode.LeftCommand) + Key(KeyCode.RightCommand) > 0f;
-
-            if (ctrl && Down(KeyCode.Z))
-            {
-                if (shift)
-                {
-                    EditorState.Redo();
-                }
-                else
-                {
-                    EditorState.Undo();
-                }
-            }
-            else if (ctrl && Down(KeyCode.Y))
-            {
-                EditorState.Redo();
-            }
-            else if (ctrl && Down(KeyCode.A))
-            {
-                EditorState.SelectAll();
-            }
-            else if (ctrl && Down(KeyCode.D))
-            {
-                EditorState.StartDuplicate();
-            }
-            else if (Down(KeyCode.Delete) || Down(KeyCode.Backspace))
-            {
-                EditorState.DeleteSelection();
-            }
-            else if (!ctrl && Down(KeyCode.G))
-            {
-                EditorState.StartMove();
-            }
-            else if (!ctrl && Down(KeyCode.R))
-            {
-                EditorState.RotateSelection(shift ? -1 : 1);
-            }
-
-            // Q and E walk the chosen snap point, but only where they are not the fly keys.
-            if (EditorState.Mode == EditMode.Place && _camera.Mode == CameraMode.Orbit)
-            {
-                if (Down(KeyCode.Q))
-                {
-                    EditorState.SetManualSnap(EditorState.Manual - 1);
-                }
-
-                if (Down(KeyCode.E))
-                {
-                    EditorState.SetManualSnap(EditorState.Manual + 1);
-                }
-            }
-
-            NudgeKeys(shift);
-        }
-
-        private static void NudgeKeys(bool shift)
-        {
-            _raycast.GroundAxes(out var forward, out var right);
-            var delta = Vector3.zero;
-            if (Down(KeyCode.UpArrow))
-            {
-                delta += forward;
-            }
-
-            if (Down(KeyCode.DownArrow))
-            {
-                delta -= forward;
-            }
-
-            if (Down(KeyCode.RightArrow))
-            {
-                delta += right;
-            }
-
-            if (Down(KeyCode.LeftArrow))
-            {
-                delta -= right;
-            }
-
-            if (Down(KeyCode.PageUp))
-            {
-                delta += Vector3.up;
-            }
-
-            if (Down(KeyCode.PageDown))
-            {
-                delta -= Vector3.up;
-            }
-
-            if (delta != Vector3.zero)
-            {
-                EditorState.Nudge(delta.normalized * (shift ? 1f : EditorState.NudgeStep));
             }
         }
 
@@ -756,7 +702,7 @@ namespace ValheimTomrer.Editor.Ui
         }
 
         /// <summary>A click on the picture: drop what is in hand, or pick what is under the cursor.</summary>
-        private static void ClickAt(Vector2 screen, bool additive)
+        public static void ClickAt(Vector2 screen, bool additive)
         {
             if (_raycast == null || !_raycast.ScreenToViewport(screen, out var at))
             {
@@ -786,7 +732,7 @@ namespace ValheimTomrer.Editor.Ui
         }
 
         /// <summary>Everything whose box centre shows inside the dragged rectangle.</summary>
-        private static void BoxSelect(Vector2 from, Vector2 to, bool additive)
+        public static void BoxSelect(Vector2 from, Vector2 to, bool additive)
         {
             var document = EditorState.Document;
             if (document == null || _raycast == null)
@@ -874,25 +820,12 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
-            // While something is in hand the wheel turns it, the way the game's build wheel does.
-            if (EditorState.Mode == EditMode.Place)
-            {
-                var notches = Mathf.RoundToInt(Mathf.Sign(data.scrollDelta.y) * Mathf.Ceil(Mathf.Abs(data.scrollDelta.y)));
-                if (notches != 0)
-                {
-                    EditorState.SetPlaceSteps(EditorState.Steps + notches);
-                }
-
-                return;
-            }
-
-            // The UI module reports one notch as 1; Tomrer's zoom curve is written for the browser's 100.
             if (!_raycast.ScreenToViewport(data.position, out var at))
             {
                 at = new Vector2(0.5f, 0.5f);
             }
 
-            _camera.Zoom(-data.scrollDelta.y * 100f, at);
+            Bindings.Wheel(data.scrollDelta.y, at);
         }
 
         private static float PaneHeight()

@@ -21,6 +21,7 @@ namespace ValheimTomrer.Editor.View
         private readonly Transform _root;
         private readonly int _layer;
         private int _revision = -1;
+        private bool _boxes;
 
         public SceneModel(Transform root, int layer)
         {
@@ -75,6 +76,13 @@ namespace ValheimTomrer.Editor.View
             }
 
             _revision = document.Revision;
+            if (_boxes)
+            {
+                foreach (var pair in _live)
+                {
+                    Paint(pair.Value.Object);
+                }
+            }
         }
 
         /// <summary>Builds what the document gained, drops what it lost, moves what changed.</summary>
@@ -179,6 +187,37 @@ namespace ValheimTomrer.Editor.View
             }
         }
 
+        /// <summary>
+        /// The Boxes view: the models stop drawing and the wire boxes stand in for them. The
+        /// copies stay where they are, so the pane's ray still picks the right piece.
+        /// </summary>
+        public void SetBoxes(bool on)
+        {
+            if (_boxes == on)
+            {
+                return;
+            }
+
+            _boxes = on;
+            foreach (var pair in _live)
+            {
+                Paint(pair.Value.Object);
+            }
+        }
+
+        private void Paint(GameObject copy)
+        {
+            if (copy == null)
+            {
+                return;
+            }
+
+            foreach (var renderer in copy.GetComponentsInChildren<Renderer>(true))
+            {
+                renderer.enabled = !_boxes;
+            }
+        }
+
         public void Clear()
         {
             _live.Clear();
@@ -207,6 +246,7 @@ namespace ValheimTomrer.Editor.View
             var copy = BlueprintPreview.Build(prefab, _root, PreviewStyle.Solid(_layer), null);
             copy.transform.localPosition = piece.Position;
             copy.transform.localRotation = piece.Rotation;
+            Paint(copy);
             return new Standing
             {
                 Object = copy,
