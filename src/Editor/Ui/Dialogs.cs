@@ -238,9 +238,10 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             Dim(scroll.content,
-                "The pad does not reach the side panels or the top bar: the sticks fly and the D-pad undoes, "
-                + "so there is nothing left to move a cursor with. Save, Open, the name field and the piece "
-                + "list need the mouse.");
+                "The pad reaches the panels too. L3 with an empty hand opens the walk, the D-pad or the left "
+                + "stick moves, L1 and R1 change panel, cross presses, circle goes back to the view. Tab does "
+                + "the same from the keyboard. The piece grid, the piece list and the problem list stay "
+                + "mouse-only: pick pieces with the cross menu instead.");
 
             Dim(scroll.content,
                 "Placing works like the game: the piece touches the surface you aim at, then snaps to the "

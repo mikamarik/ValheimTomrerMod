@@ -71,12 +71,12 @@ namespace ValheimTomrer.Editor.Input
             }
 
             // A held direction repeats only where it is used; elsewhere it starts fresh.
-            if (Dialogs.IsOpen || PiecePicker.IsOpen)
+            if (Dialogs.IsOpen || PiecePicker.IsOpen || FocusNav.Active)
             {
                 Turn.Step(0, dt);
             }
 
-            if (!PiecePicker.IsOpen)
+            if (!PiecePicker.IsOpen && !FocusNav.Active)
             {
                 NavX.Step(0, dt);
                 NavY.Step(0, dt);
@@ -107,7 +107,15 @@ namespace ValheimTomrer.Editor.Input
                 return;
             }
 
-            // 5. L1 held: no snapping, like Shift on the keyboard. The keys put it back.
+            // 5. The panel walk has the pad while it is on. Circle is not read here: it falls
+            //    through to the Esc ladder, which leaves the walk.
+            if (FocusNav.Active)
+            {
+                Focus(pad, dt);
+                return;
+            }
+
+            // 6. L1 held: no snapping, like Shift on the keyboard. The keys put it back.
             var alt = pad.Held(PadButton.L1);
             if (alt)
             {
@@ -118,7 +126,7 @@ namespace ValheimTomrer.Editor.Input
             var moving = placing && EditorState.Action == PlaceAction.Move;
             var l2 = pad.Held(PadButton.L2);
 
-            // 6. L2 and the right stick turn 22.5 degrees; on its own the stick turns the camera.
+            // 7. L2 and the right stick turn 22.5 degrees; on its own the stick turns the camera.
             var turn = l2 && Mathf.Abs(pad.Rs.x) > TurnStick ? (pad.Rs.x < 0f ? 1 : -1) : 0;
             if (Turn.Step(turn, dt))
             {
@@ -138,7 +146,7 @@ namespace ValheimTomrer.Editor.Input
                 camera.TurnPad(pad.Rs, dt);
             }
 
-            // 7. R2: copy the aimed kind, drop what is in hand, or take the aimed piece.
+            // 8. R2: copy the aimed kind, drop what is in hand, or take the aimed piece.
             if (pad.Pressed(PadButton.R2))
             {
                 if (l2)
@@ -155,7 +163,7 @@ namespace ValheimTomrer.Editor.Input
                 }
             }
 
-            // 8. Cross opens the piece menu. Not while moving: those pieces are out of the
+            // 9. Cross opens the piece menu. Not while moving: those pieces are out of the
             //    blueprint until they are dropped. Not while a button is selected either, or the
             //    UI would press that button with the same press.
             if (pad.Pressed(PadButton.Cross) && !moving && !selected)
@@ -163,9 +171,9 @@ namespace ValheimTomrer.Editor.Input
                 PiecePicker.Open();
             }
 
-            // 9. Circle: the Esc ladder, in EditorSession.
+            // 10. Circle: the Esc ladder, in EditorSession.
 
-            // 10. Square moves the selection, triangle copies it.
+            // 11. Square moves the selection, triangle copies it.
             if (pad.Pressed(PadButton.Square) && !placing)
             {
                 EditorState.StartMove();
@@ -176,7 +184,7 @@ namespace ValheimTomrer.Editor.Input
                 EditorState.StartDuplicate();
             }
 
-            // 11. R1 removes the aimed piece, or clones it with L2.
+            // 12. R1 removes the aimed piece, or clones it with L2.
             if (pad.Pressed(PadButton.R1) && !moving)
             {
                 if (l2)
@@ -189,7 +197,7 @@ namespace ValheimTomrer.Editor.Input
                 }
             }
 
-            // 12. L3 and R3: the snap point while placing, else R3 frames the selection.
+            // 13. L3 and R3: the snap point while placing, else R3 frames the selection.
             var back = pad.Pressed(PadButton.L3);
             var next = pad.Pressed(PadButton.R3);
             if (back || next)
@@ -204,11 +212,12 @@ namespace ValheimTomrer.Editor.Input
                 }
                 else
                 {
-                    // L3 with an empty hand does nothing yet. Phase 2 gives it panel focus.
+                    // L3 with an empty hand opens the panel walk.
+                    FocusNav.Enter();
                 }
             }
 
-            // 13. The D-pad left and right: undo and redo.
+            // 14. The D-pad left and right: undo and redo.
             if (pad.Pressed(PadButton.Left))
             {
                 EditorState.Undo();
@@ -219,7 +228,7 @@ namespace ValheimTomrer.Editor.Input
                 EditorState.Redo();
             }
 
-            // 14. The left stick flies, L1 three times faster, the D-pad up and down.
+            // 15. The left stick flies, L1 three times faster, the D-pad up and down.
             Fly(pad, dt);
         }
 
@@ -229,6 +238,41 @@ namespace ValheimTomrer.Editor.Input
             Turn.Reset();
             NavX.Reset();
             NavY.Reset();
+        }
+
+        /// <summary>
+        /// In the panel walk: the D-pad and the left stick move, L1 and R1 change panel, cross
+        /// presses. Everything else does nothing, the way the piece menu holds the pad.
+        /// </summary>
+        private static void Focus(PadFrame pad, float dt)
+        {
+            var down = Dir(pad.Held(PadButton.Up) || pad.Ls.y > NavStick,
+                pad.Held(PadButton.Down) || pad.Ls.y < -NavStick);
+            var right = Dir(pad.Held(PadButton.Left), pad.Held(PadButton.Right));
+            if (NavY.Step(down, dt))
+            {
+                FocusNav.Move(down);
+            }
+
+            if (NavX.Step(right, dt))
+            {
+                FocusNav.Move(right);
+            }
+
+            if (pad.Pressed(PadButton.L1))
+            {
+                FocusNav.NextRegion(-1);
+            }
+
+            if (pad.Pressed(PadButton.R1))
+            {
+                FocusNav.NextRegion(1);
+            }
+
+            if (pad.Pressed(PadButton.Cross))
+            {
+                FocusNav.Press();
+            }
         }
 
         /// <summary>In the piece menu: the D-pad or the left stick moves, L1 and R1 change the tab.</summary>
@@ -379,7 +423,11 @@ namespace ValheimTomrer.Editor.Input
                 new HelpRow($"{l2} + {g.Rs} left, right", "Turn 22.5 degrees: the piece being placed, else the selection"),
                 new HelpRow($"{l1} (hold)", "No snapping while held, like in the game"),
                 new HelpRow($"{l3}, {r3}",
-                    $"While placing: the snap point, like Q and E. Else: {r3} looks at the selection."),
+                    $"While placing: the snap point, like Q and E. Else: {l3} walks the panels, "
+                    + $"{r3} looks at the selection."),
+                new HelpRow($"{l3} (in the panels)",
+                    $"{g.Dpad} or {g.Ls} moves, {l1} {r1} change panel, {cross} presses, "
+                    + $"{circle} goes back to the view"),
                 new HelpRow(cross,
                     $"Pieces menu: {g.Dpad} to choose, {l1} {r1} for the tab, {cross} to place, {circle} to close"),
                 new HelpRow(circle, "Stop placing, or clear the selection, or close the editor"),

@@ -55,6 +55,7 @@ namespace ValheimTomrer.Editor.Input
             KeyCode.F, KeyCode.H, KeyCode.Slash, KeyCode.Question,
             KeyCode.UpArrow, KeyCode.DownArrow, KeyCode.LeftArrow, KeyCode.RightArrow,
             KeyCode.PageUp, KeyCode.PageDown, KeyCode.Delete, KeyCode.Backspace,
+            KeyCode.Tab, KeyCode.Return, KeyCode.KeypadEnter,
         };
 
         private static readonly HashSet<KeyCode> Held = new HashSet<KeyCode>();
@@ -96,9 +97,9 @@ namespace ValheimTomrer.Editor.Input
                 return;
             }
 
-            if (PiecePicker.IsOpen)
+            if (PiecePicker.IsOpen || FocusNav.Active)
             {
-                // The piece menu still reads keys, but nothing flies behind it.
+                // The piece menu and the panel walk still read keys, but nothing flies behind them.
                 Held.Clear();
             }
 
@@ -152,6 +153,29 @@ namespace ValheimTomrer.Editor.Input
             if (PiecePicker.IsOpen)
             {
                 PiecePicker.Key(key);
+                return true;
+            }
+
+            // Tab opens the panel walk and steps through it, Shift+Tab steps back.
+            if (key == KeyCode.Tab)
+            {
+                if (FocusNav.Active)
+                {
+                    FocusNav.Move(Shift ? -1 : 1);
+                }
+                else
+                {
+                    FocusNav.Enter();
+                }
+
+                return true;
+            }
+
+            // The walk owns the keyboard while it is on, the same way the piece menu does: the
+            // arrows move, Enter presses, and the editing keys stand back. Esc leaves it.
+            if (FocusNav.Active)
+            {
+                FocusKey(key);
                 return true;
             }
 
@@ -262,8 +286,8 @@ namespace ValheimTomrer.Editor.Input
 
         /// <summary>
         /// Esc (and the pad's circle), one step back at a time: a dialog, the piece menu, what is
-        /// in hand, the mouse the pane took, then the selection. False means there was nothing
-        /// left, so the window closes.
+        /// in hand, the mouse the pane took, the panel walk, then the selection. False means there
+        /// was nothing left, so the window closes.
         /// </summary>
         public static bool Cancel()
         {
@@ -288,7 +312,11 @@ namespace ValheimTomrer.Editor.Input
                 return true;
             }
 
-            // Phase 2 puts leaving panel focus here, between the pane and the selection.
+            if (FocusNav.Active)
+            {
+                FocusNav.Leave();
+                return true;
+            }
 
             if (EditorState.SelectionCount > 0)
             {
@@ -338,6 +366,26 @@ namespace ValheimTomrer.Editor.Input
                     return true;
                 default:
                     return false;
+            }
+        }
+
+        /// <summary>The keys the panel walk uses. The rest are swallowed while it is on.</summary>
+        private static void FocusKey(KeyCode key)
+        {
+            switch (key)
+            {
+                case KeyCode.UpArrow:
+                case KeyCode.LeftArrow:
+                    FocusNav.Move(-1);
+                    break;
+                case KeyCode.DownArrow:
+                case KeyCode.RightArrow:
+                    FocusNav.Move(1);
+                    break;
+                case KeyCode.Return:
+                case KeyCode.KeypadEnter:
+                    FocusNav.Press();
+                    break;
             }
         }
 
@@ -516,7 +564,12 @@ namespace ValheimTomrer.Editor.Input
             new HelpRow("F", "Look at the selection, or at everything"),
             new HelpRow("Ctrl+S", "Save"),
             new HelpRow("H, ?", "This help"),
-            new HelpRow("Esc", "Stop placing, else give the mouse back, else clear the selection, else close the editor"),
+            new HelpRow("Tab, Shift+Tab", "Walk the top bar and the two side panels, on and back"),
+            new HelpRow("Arrows, Enter (while walking)",
+                "Step to the next widget, and press it. A text box starts typing, Esc gives it back."),
+            new HelpRow("Esc",
+                "Stop placing, else give the mouse back, else leave the walk, else clear the "
+                + "selection, else close the editor"),
         };
 
         /// <summary>The controller half, in the wording of the pad in hand (<see cref="PadBindings"/>).</summary>

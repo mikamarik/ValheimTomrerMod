@@ -100,7 +100,8 @@ namespace ValheimTomrer.Editor
             }
 
             // Esc walks back one step at a time: a dialog, then what is in hand, then the mouse
-            // the pane took, then the selection. Nothing left to step back from and it closes.
+            // the pane took, then the panel walk, then the selection. Nothing left to step back
+            // from and it closes.
             var cancel = EditorInput.Cancel;
             if (cancel && Bindings.Cancel())
             {
@@ -217,6 +218,7 @@ namespace ValheimTomrer.Editor
             TopBar.Ensure(EditorWindow.TopBar);
             Dialogs.Ensure(EditorWindow.Root);
             Toasts.Ensure(EditorWindow.Root);
+            FocusNav.Ensure(EditorWindow.Root);
             _syncedSelection = -1;
             ModUi.Open = true;
             EditorInput.Reset();
@@ -230,6 +232,7 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
+            FocusNav.Leave();
             ViewportHost.Close();
             PiecePicker.Close();
             PiecePicker.PieceChosen = null;

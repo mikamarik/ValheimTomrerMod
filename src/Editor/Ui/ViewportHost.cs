@@ -121,6 +121,8 @@ namespace ValheimTomrer.Editor.Ui
                 return;
             }
 
+            // The pane takes over, so the panel walk lets go of its widget.
+            FocusNav.Leave();
             Captured = true;
             ModUi.LockCursor = true;
             GiveAimBack();
@@ -139,9 +141,17 @@ namespace ValheimTomrer.Editor.Ui
             return true;
         }
 
-        /// <summary>The pad woke: the crosshair takes the aim and the UI lets go of its button.</summary>
+        /// <summary>
+        /// The pad woke: the crosshair takes the aim and the UI lets go of its button. While the
+        /// panel walk is on it does nothing at all, or a stick would kill the focus at once.
+        /// </summary>
         public static void TakeAim()
         {
+            if (FocusNav.Active)
+            {
+                return;
+            }
+
             PadAim = true;
             ModUi.ClearSelection();
         }
@@ -254,6 +264,7 @@ namespace ValheimTomrer.Editor.Ui
             Bindings.Tick();
             PadBindings.Tick();
             ReadInput();
+            FocusNav.Refresh();
             ModUi.LockCursor = Captured;
             if (_crosshair != null)
             {

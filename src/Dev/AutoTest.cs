@@ -35,7 +35,8 @@ namespace ValheimTomrer.Dev
     /// "editor_edit" drives placing, selecting, copying, turning, nudging and undo, then draws it;
     /// "editor_panels" checks the right panel: the build card, the selection fields and the problem list;
     /// "editor_keys" drives every key, the wheel and the mouse, plus the top bar and the dialogs;
-    /// "editor_pad" drives every controller button through a made-up pad, plus the piece menu.
+    /// "editor_pad" drives every controller button through a made-up pad, plus the piece menu;
+    /// "editor_focus" walks the top bar and the two panels with the pad, and presses what it finds;
     /// "editor_build" builds a blueprint made in the editor, in the world, and edits it again;
     /// "editor_capture" builds a kit in the world, captures it back, and compares it to the file;
     /// "editor_all" runs every scenario above in one game, then checks the mod wrote no art.
@@ -211,6 +212,9 @@ namespace ValheimTomrer.Dev
                 case "editor_pad":
                     scenario = TestEditorPad(player);
                     break;
+                case "editor_focus":
+                    scenario = TestEditorFocus(player);
+                    break;
                 case "editor_build":
                     scenario = TestEditorBuild(player);
                     break;
@@ -290,7 +294,8 @@ namespace ValheimTomrer.Dev
             // VT_CHAIN cuts the list down while hunting for the scenario that left something behind.
             var names = (Environment.GetEnvironmentVariable("VT_CHAIN")
                 ?? "dump,probe,editor_open,editor_view,editor_files,editor_palette,editor_snap,"
-                + "editor_edit,editor_panels,editor_keys,editor_pad,editor_build,editor_capture,blueprints")
+                + "editor_edit,editor_panels,editor_keys,editor_pad,editor_focus,editor_build,"
+                + "editor_capture,blueprints")
                 .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
 
             foreach (var name in names)
@@ -330,6 +335,7 @@ namespace ValheimTomrer.Dev
                 case "editor_panels": return TestEditorPanels(player);
                 case "editor_keys": return TestEditorKeys(player);
                 case "editor_pad": return TestEditorPad(player);
+                case "editor_focus": return TestEditorFocus(player);
                 case "editor_build": return TestEditorBuild(player);
                 case "editor_capture": return TestEditorCapture(player);
                 default: return null;
@@ -340,6 +346,7 @@ namespace ValheimTomrer.Dev
         private static IEnumerator Reset(Player player)
         {
             EditorSession.Close();
+            FocusNav.Leave();
             BlueprintMode.Exit();
             PadReader.Fake = null;
             BlueprintLibrary.UserFolder = null;
@@ -3610,7 +3617,7 @@ namespace ValheimTomrer.Dev
                 + $"{ps.Of(PadButton.Square)} {ps.Of(PadButton.Triangle)}");
 
             var rows = Bindings.Pad;
-            Check(rows.Length == 18, $"the help table has the whole controller half: {rows.Length} rows");
+            Check(rows.Length == 19, $"the help table has the whole controller half: {rows.Length} rows");
             Check(Array.Exists(rows, r => r.Keys == "×") && Array.Exists(rows, r => r.Keys == "L2 + R1"),
                 "and the rows are written in those names");
 
@@ -4005,6 +4012,285 @@ namespace ValheimTomrer.Dev
             ViewportHost.MouseMoved(screen + new Vector2(9f, 0f));
             Check(wobble && !ViewportHost.PadAim,
                 "a 2 px wobble keeps the crosshair, a 7 px move gives the aim back to the mouse");
+        }
+
+
+        // ---------- scenario: editor_focus ----------
+
+        /// <summary>How many presses left one of our widgets selected in the EventSystem.</summary>
+        private static int _focusSelected;
+
+        /// <summary>
+        /// The panel walk: L3 opens it, the D-pad and L1/R1 move it, cross presses, circle gives
+        /// the pane back. Driven through the made-up pad, against the counts the focus probe
+        /// measured. It opens the same blueprint as that probe, one piece and one undo step, so
+        /// the numbers line up.
+        ///
+        /// The one thing it cannot prove: a real controller's cross also reaches whatever the
+        /// EventSystem has selected. The fake pad is invisible to the game's input module, so the
+        /// double press has to be checked by hand. What is checked here is the rule that prevents
+        /// it: nothing of ours is ever selected while the ring is on a button.
+        /// </summary>
+        private static IEnumerator TestEditorFocus(Player player)
+        {
+            yield return new WaitForSeconds(1f);
+            _focusSelected = 0;
+
+            PieceCatalog.Ensure();
+            var wall = PieceCatalog.Find("woodwall") ?? (PieceCatalog.All.Count > 0 ? PieceCatalog.All[0] : null);
+            Check(PieceCatalog.Ready && wall != null, "the catalog is built and has a piece for the blueprint");
+            if (wall == null)
+            {
+                yield break;
+            }
+
+            var document = BlueprintDocument.New("focus test");
+            document.AddPiece(wall.PrefabName, Vector3.zero, Quaternion.identity);
+            EditorSession.OpenDocument(document);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open && ViewportHost.Ready,
+                $"the window is open on a blueprint of {document.Pieces.Count} piece, undo={document.CanUndo}");
+
+            _pad = new PadState();
+            PadReader.Fake = _pad;
+            yield return null;
+            yield return null;
+
+            yield return FocusEnter();
+            yield return FocusRegions(document);
+            yield return FocusPress(document);
+            yield return FocusLeave();
+
+            Check(_focusSelected == 0,
+                $"the EventSystem never held one of our buttons: {_focusSelected} presses left one selected");
+
+            PadReader.Fake = null;
+            _pad = null;
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
+            Check(!ModUi.Open && !FocusNav.Active, "the editor closed and the walk went with it");
+        }
+
+        /// <summary>L3 opens the walk on the top bar, and a pad wake does not kill it.</summary>
+        private static IEnumerator FocusEnter()
+        {
+            Check(!FocusNav.Active, "the walk is off while the 3D pane has the focus");
+            yield return FocusTap(PadButton.L3);
+            Check(FocusNav.Active && FocusNav.Current == FocusRegion.TopBar,
+                $"L3 with an empty hand opens the walk on the {FocusNav.Current} region, "
+                + $"widget '{WidgetName(FocusNav.Focused)}'");
+
+            var live = Interactable(EditorWindow.TopBar);
+            Check(FocusNav.Count == live && FocusNav.Count == 10,
+                $"the top bar's walk holds every button that can be pressed and no more: "
+                + $"{FocusNav.Count} of {live} interactable (the probe measured 10, Redo is off)");
+
+            // The L3 press itself woke the pad, so start from the mouse having the aim again.
+            ViewportHost.GiveAimBack();
+            yield return null;
+            ViewportHost.TakeAim();
+            yield return null;
+            Check(FocusNav.Active && !ViewportHost.PadAim,
+                "a pad wake does nothing at all while the walk is on: it still holds "
+                + $"'{WidgetName(FocusNav.Focused)}'");
+
+            var gap = RingGap();
+            Check(gap < 4f, $"the ring sits on the focused widget: {gap:0.0} px between the two centres");
+
+            var steps = new List<int>();
+            var widgets = FocusNav.Count;
+            for (var i = 0; i < widgets; i++)
+            {
+                yield return FocusTap(PadButton.Down);
+                steps.Add(FocusNav.Index);
+            }
+
+            Check(steps.Count > 1 && steps[0] == 1 && steps[steps.Count - 2] == steps.Count - 1
+                && FocusNav.Index == 0,
+                $"the D-pad walks the bar one step at a time and wraps: 0 -> {steps[0]} -> ... -> "
+                + $"{steps[steps.Count - 2]} -> {FocusNav.Index}");
+
+            var moved = RingGap();
+            Check(moved < 4f, $"and the ring follows it: {moved:0.0} px on '{WidgetName(FocusNav.Focused)}'");
+        }
+
+        /// <summary>L1 and R1 walk the three regions, and the left panel's list follows its tab.</summary>
+        private static IEnumerator FocusRegions(BlueprintDocument document)
+        {
+            yield return FocusTap(PadButton.R1);
+            var left = FocusNav.Current;
+            yield return FocusTap(PadButton.R1);
+            var right = FocusNav.Current;
+            yield return FocusTap(PadButton.R1);
+            Check(left == FocusRegion.Left && right == FocusRegion.Right
+                && FocusNav.Current == FocusRegion.TopBar,
+                $"R1 walks the regions and wraps: TopBar -> {left} -> {right} -> {FocusNav.Current}");
+
+            yield return FocusTap(PadButton.L1);
+            Check(FocusNav.Current == FocusRegion.Right,
+                $"L1 walks them the other way: TopBar -> {FocusNav.Current}");
+
+            // The right panel with nothing selected: the name, the description and the two icons.
+            var rightCount = FocusNav.Count;
+            Check(rightCount == Interactable(EditorWindow.RightPanel) && rightCount == 4,
+                $"the right panel's walk with nothing selected: {rightCount} widgets (the probe measured 4)");
+
+            yield return FocusTap(PadButton.L1);
+            EditorWindow.SetLeftTab(0);
+            yield return null;
+            yield return null;
+            var tab0 = FocusNav.Count;
+            var tabs = FocusNav.Count >= 3
+                && WidgetName(FocusNav.Widgets[0]) == "Pieces"
+                && WidgetName(FocusNav.Widgets[1]) == "In blueprint"
+                && FocusNav.Widgets[2] is TMPro.TMP_InputField;
+            Check(tab0 == Interactable(EditorWindow.LeftPanel) && tabs && tab0 >= 20,
+                $"the left panel's walk is the two tabs, the search box and the chips: {tab0} widgets "
+                + $"({Palette.TagChipCount} tag chips, the probe measured 22)");
+
+            // Down four times: the two tabs, the search box, then the first chip.
+            for (var i = 0; i < 4; i++)
+            {
+                yield return FocusTap(PadButton.Down);
+            }
+
+            Check(RingGap() < 4f, $"the ring follows it into the chips, on '{WidgetName(FocusNav.Focused)}'");
+            yield return Screenshot("editor-focus-1-ring");
+
+            EditorWindow.SetLeftTab(1);
+            yield return null;
+            yield return null;
+            var tab1 = FocusNav.Count;
+            var hidden = 0;
+            foreach (var widget in FocusNav.Widgets)
+            {
+                if (EditorWindow.PalettePane != null && widget.transform.IsChildOf(EditorWindow.PalettePane))
+                {
+                    hidden++;
+                }
+            }
+
+            Check(tab1 == 2 && tab1 != tab0 && hidden == 0,
+                $"the In blueprint tab changes the walk: {tab0} -> {tab1} widgets, {hidden} of them "
+                + "belong to the hidden pane");
+
+            EditorWindow.SetLeftTab(0);
+            yield return null;
+            yield return null;
+        }
+
+        /// <summary>Cross on a button fires it, cross on a text box starts typing.</summary>
+        private static IEnumerator FocusPress(BlueprintDocument document)
+        {
+            yield return FocusTap(PadButton.L1);
+            Check(FocusNav.Current == FocusRegion.TopBar, $"back on the {FocusNav.Current}");
+
+            var steps = 0;
+            while (WidgetName(FocusNav.Focused) != "Undo" && steps < 20)
+            {
+                yield return FocusTap(PadButton.Down);
+                steps++;
+            }
+
+            Check(WidgetName(FocusNav.Focused) == "Undo", $"the walk reaches the Undo button in {steps} steps");
+            var before = document.Pieces.Count;
+            yield return FocusTap(PadButton.Cross);
+            Check(document.CanRedo && document.Pieces.Count == before - 1,
+                $"cross on Undo really undoes: {before} -> {document.Pieces.Count} pieces, redo is now on");
+            EditorState.Redo();
+            yield return null;
+            yield return null;
+
+            // The right panel's first widget is the blueprint's name box.
+            yield return FocusTap(PadButton.L1);
+            var field = FocusNav.Focused as TMPro.TMP_InputField;
+            Check(FocusNav.Current == FocusRegion.Right && field != null,
+                $"L1 lands on the right panel's first widget, the '{WidgetName(FocusNav.Focused)}' box");
+            if (field == null)
+            {
+                yield break;
+            }
+
+            yield return FocusTap(PadButton.Cross);
+            var waited = 0f;
+            while (!ModUi.Typing && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(ModUi.Typing, $"cross on the box starts typing after {waited:0.00} s");
+            var at = FocusNav.Index;
+            var text = field.text;
+            yield return FocusTap(PadButton.Down);
+            Check(FocusNav.Index == at && ModUi.Typing && field.text == text,
+                $"and the pad does nothing on the next tick: still widget {FocusNav.Index} of {FocusNav.Count}");
+
+            // Esc's job, straight on the box: it stops typing but the walk keeps it.
+            field.DeactivateInputField();
+            yield return null;
+            yield return null;
+            Check(FocusNav.Active && FocusNav.Focused == field && !ModUi.Typing && !ModUi.HasSelection,
+                "the box lets go of the keyboard, the walk keeps it, and nothing is selected in the UI");
+        }
+
+        /// <summary>Circle gives the pane back, and the sticks fly again.</summary>
+        private static IEnumerator FocusLeave()
+        {
+            var camera = ViewportHost.Camera;
+            var from = camera.Position;
+            yield return FocusTap(PadButton.Circle);
+            Check(!FocusNav.Active && FocusNav.Focused == null, "circle leaves the walk");
+            Check(FocusNav.Ring == null || !FocusNav.Ring.gameObject.activeSelf, "and the ring goes with it");
+
+            _pad.Ls = new Vector2(1f, 0f);
+            yield return Wait(0.25f);
+            _pad.Ls = Vector2.zero;
+            yield return null;
+            var moved = Vector3.Distance(camera.Position, from);
+            Check(moved > 0.5f, $"the left stick flies the camera again: {moved:0.0} m");
+        }
+
+        /// <summary>A tap that also watches the rule the double-press trap hangs on.</summary>
+        private static IEnumerator FocusTap(PadButton button)
+        {
+            yield return Tap(button);
+            if (ModUi.HasSelection && !ModUi.Typing)
+            {
+                _focusSelected++;
+            }
+        }
+
+        private static string WidgetName(UnityEngine.UI.Selectable widget)
+        {
+            return widget != null ? widget.name : "none";
+        }
+
+        private static int Interactable(RectTransform region)
+        {
+            return region == null
+                ? 0
+                : region.GetComponentsInChildren<UnityEngine.UI.Selectable>(false).Count(s => s.interactable);
+        }
+
+        /// <summary>How far the ring's middle is from the focused widget's, in canvas pixels.</summary>
+        private static float RingGap()
+        {
+            var ring = FocusNav.Ring;
+            var target = FocusNav.Focused != null ? (RectTransform)FocusNav.Focused.transform : null;
+            if (ring == null || target == null || !ring.gameObject.activeInHierarchy)
+            {
+                return 999f;
+            }
+
+            return Vector3.Distance(Middle(ring), Middle(target));
+        }
+
+        private static Vector3 Middle(RectTransform rect)
+        {
+            var corners = new Vector3[4];
+            rect.GetWorldCorners(corners);
+            return (corners[0] + corners[2]) * 0.5f;
         }
 
         // ---------- scenario: editor_build ----------
