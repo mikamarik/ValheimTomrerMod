@@ -30,6 +30,7 @@ namespace ValheimTomrer.Dev
     /// "probe_build" measures what building from chests and partial builds rest on, to probe-build.txt
     /// (a probe like "probe", but left out of editor_all: it places and removes chests and floors);
     /// "build_sources" builds a kit paid from the inventory and the chests in range, nearest first;
+    /// "build_partial" builds what the materials pay for and what would stand, bottom to top;
     /// "editor_open" opens the editor window with its key and checks the input takeover;
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
@@ -196,6 +197,9 @@ namespace ValheimTomrer.Dev
                 case "build_sources":
                     scenario = TestBuildSources(player);
                     break;
+                case "build_partial":
+                    scenario = TestBuildPartial(player);
+                    break;
                 case "editor_open":
                     scenario = TestEditorOpen(player);
                     break;
@@ -344,6 +348,7 @@ namespace ValheimTomrer.Dev
                 case "probe": return Probe(player);
                 case "probe_build": return ProbeBuild(player);
                 case "build_sources": return TestBuildSources(player);
+                case "build_partial": return TestBuildPartial(player);
                 case "blueprints": return TestBlueprints(player);
                 case "editor_open": return TestEditorOpen(player);
                 case "editor_view": return TestEditorView(player);
@@ -381,6 +386,7 @@ namespace ValheimTomrer.Dev
             {
                 player.SetGodMode(true);
                 player.m_lastToolUseTime = 0f;
+                player.m_noPlacementCost = false;
             }
 
             yield return new WaitForSeconds(0.5f);
@@ -1330,9 +1336,16 @@ namespace ValheimTomrer.Dev
             var center = root != null ? root.position : player.transform.position;
             if (withRefusals)
             {
+                // Materials never refuse a click any more: it builds what they pay for, here nothing.
                 var before = PiecesAround(player, center).Count;
-                Check(!BlueprintMode.TryBuild(player), "refused without materials");
-                Check(PiecesAround(player, center).Count == before, "nothing built when refused");
+                var bagBefore = player.GetInventory().GetAllItems().Sum(i => i.m_stack);
+                Check(!BlueprintMode.TryBuild(player), "without materials the click builds nothing");
+                Check(PiecesAround(player, center).Count == before
+                    && player.GetInventory().GetAllItems().Sum(i => i.m_stack) == bagBefore,
+                    "without materials nothing is built and nothing is taken");
+                var said = BlueprintMode.LastMessage ?? "";
+                var named = resolved.TotalCost.All(c => said.Contains(Localization.instance.Localize(c.m_resItem.m_itemData.m_shared.m_name)));
+                Check(said.Contains("Missing") && named, $"and the message names what is missing: '{said}'");
             }
 
             foreach (var cost in resolved.TotalCost)
@@ -3066,10 +3079,11 @@ namespace ValheimTomrer.Dev
 
             BuildConfig.UseChests.Value = false;
             var bagOnly = MaterialSources.Around(player);
-            var refused = BlueprintRules.CheckCanBuild(player, resolved);
+            var bagShort = PartialBuild.Missing(resolved, null, bagOnly);
             Check(bagOnly.ChestCount == 0 && bagOnly.Range == 0f && shares.All(s => bagOnly.Count(s.Name) == Bag(s.Name)),
                 "UseChests off: the bag only, " + string.Join(", ", shares.Select(s => $"{s.Name} {bagOnly.Count(s.Name)}")));
-            Check(refused != null && refused.StartsWith("Missing"), "and the rules refuse the kit: " + (refused ?? "no reason"));
+            Check(bagShort.Count > 0 && BlueprintRules.CheckCanBuild(player, resolved) == null,
+                "and the bag alone is short (" + PartialBuild.MissingText(bagShort) + "), which no longer refuses the kit");
 
             // ---- the click: the whole kit, paid bag first, then nearest chest first ----
             player.m_lookYaw = BuildFacing;
@@ -3082,10 +3096,12 @@ namespace ValheimTomrer.Dev
             var root = BlueprintMode.PreviewRoot;
             var middleOfKit = root != null ? root.position : centre;
 
-            player.m_lastToolUseTime = 0f;
-            var standing = PiecesAround(player, middleOfKit).Count;
-            Check(!BlueprintMode.TryBuild(player) && PiecesAround(player, middleOfKit).Count == standing,
-                "with chests off the click is refused and builds nothing");
+            // No click here: it would build what the bag pays for and leave the chests too little.
+            var bagPlan = root != null
+                ? PartialBuild.Plan(resolved, root.position, root.eulerAngles.y, null, bagOnly, false).Count
+                : -1;
+            Check(bagPlan >= 0 && bagPlan < resolved.Parts.Count,
+                $"with chests off a click would build only part of the kit: {bagPlan} of {resolved.Parts.Count} pieces");
             Default(BuildConfig.UseChests);
 
             player.m_lastToolUseTime = 0f;
@@ -3288,6 +3304,531 @@ namespace ValheimTomrer.Dev
             {
                 inventory.AddItem(prefab, amount, 1, 0, 0L, "", false);
             }
+        }
+
+        // ---------- scenario: build_partial ----------
+
+        /// <summary>Solve on the kit repeated 5 x 5 (400 pieces), from Phase 0 (probe-build.txt).</summary>
+        private const double GridSolveMs = 10.76;
+
+        /// <summary>
+        /// A click builds every piece the materials pay for and that would stand, bottom to top. The
+        /// Workshop with half its wood, a made-up two-storey house with wood for one and a half
+        /// storeys, nothing at all, everything, costs off, and the planner's time on 400 pieces.
+        /// First: the hammer preview's own workbench copy is not a crafting station.
+        /// </summary>
+        private static IEnumerator TestBuildPartial(Player player)
+        {
+            var stationErrors = new List<string>();
+            void OnLog(string message, string stack, LogType type)
+            {
+                if ((type == LogType.Exception || type == LogType.Error) && (message + stack).Contains("CraftingStation"))
+                {
+                    stationErrors.Add(message);
+                }
+            }
+
+            Application.logMessageReceived += OnLog;
+
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(0.5f);
+            PieceCatalog.Ensure();
+            Check(PieceCatalog.Ready, "the piece catalog is built");
+
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Name == "Workshop");
+            ResolvedBlueprint resolved = null;
+            var error = "no Workshop kit";
+            if (kit == null || !ResolvedBlueprint.TryResolve(kit, out resolved, out error))
+            {
+                Check(false, "the workshop kit resolves: " + error);
+                Application.logMessageReceived -= OnLog;
+                yield break;
+            }
+
+            Unlock(player, resolved);
+            ClearInventoryExceptHammer(player);
+            yield return EquipHammer(player);
+            Log("the kit's parts: " + string.Join(", ", resolved.Parts.Select((p, i) =>
+                $"{i} {p.Prefab.name} y {p.Source.Position.y:0.00} costs "
+                + string.Join("+", PartialBuild.CostOf(p.Piece).Select(c => $"{c.Value} {c.Key}")))));
+
+            yield return PartialStationCopy(player, resolved);
+            yield return PartialNothing(player, resolved);
+            yield return PartialHalfWood(player, resolved);
+            yield return PartialTwoStoreys(player);
+            yield return PartialEverything(player, resolved, false);
+            yield return PartialEverything(player, resolved, true);
+            PartialTiming(player, resolved);
+
+            BlueprintMode.Exit();
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(1f);
+            Application.logMessageReceived -= OnLog;
+            Check(stationErrors.Count == 0, stationErrors.Count == 0
+                ? "no CraftingStation error in the log during the whole scenario"
+                : $"{stationErrors.Count} CraftingStation errors in the log: {stationErrors[0]}");
+            var left = new List<Piece>();
+            Piece.GetAllPiecesInRadius(player.transform.position, 60f, left);
+            var mine = left.Count(p => p != null && p.GetCreator() == player.GetPlayerID());
+            Check(mine == 0, $"nothing of the test is left standing: {mine}");
+        }
+
+        private static void Unlock(Player player, ResolvedBlueprint blueprint)
+        {
+            foreach (var part in blueprint.Parts)
+            {
+                player.m_knownRecipes.Add(part.Piece.m_name);
+            }
+
+            player.UpdateAvailablePiecesList();
+        }
+
+        /// <summary>The blueprint in the hammer, the player facing the build way, the aim on free ground.</summary>
+        private static IEnumerator AimBlueprint(Player player, ResolvedBlueprint blueprint)
+        {
+            player.m_lookYaw = BuildFacing;
+            player.transform.rotation = BuildFacing;
+            player.m_body.rotation = BuildFacing;
+            yield return new WaitForSeconds(0.3f);
+            BlueprintMode.Select(player, blueprint);
+            yield return AimAtGround(player);
+            var ok = BlueprintMode.HasTarget && BlueprintMode.Blocked == null && BlueprintMode.PreviewRoot != null;
+            if (!ok)
+            {
+                var tool = player.GetRightItem();
+                Log($"aim failed: active={BlueprintMode.Active} placeMode={player.InPlaceMode()} dead={player.IsDead()}"
+                    + $" tool={(tool != null ? tool.m_shared.m_name + " " + tool.m_durability.ToString("0.#") : "none")}"
+                    + $" target={BlueprintMode.HasTarget} blocked={BlueprintMode.Blocked ?? "none"} at {V(player.transform.position)}"
+                    + $" teleporting={player.IsTeleporting()} menu={Hud.IsPieceSelectionVisible()}");
+            }
+
+            Check(ok, $"the {blueprint.Name} preview stands on a free spot: " + (BlueprintMode.Blocked ?? "ok"));
+            player.m_lastToolUseTime = 0f;
+        }
+
+        /// <summary>
+        /// The world pieces the click put down, matched to the blueprint's parts: same prefab, pivot
+        /// within 0.05 m of where the root puts the part.
+        /// </summary>
+        private static Dictionary<int, Piece> MatchParts(ResolvedBlueprint blueprint, Vector3 rootPos, Quaternion rootRot, List<Piece> built)
+        {
+            var matched = new Dictionary<int, Piece>();
+            var free = new List<Piece>(built);
+            for (var i = 0; i < blueprint.Parts.Count; i++)
+            {
+                var part = blueprint.Parts[i];
+                var at = rootPos + (rootRot * part.Source.Position);
+                var piece = free.FirstOrDefault(p => p != null && Utils.GetPrefabName(p.gameObject) == part.Prefab.name
+                    && Vector3.Distance(p.transform.position, at) < 0.05f);
+                if (piece != null)
+                {
+                    matched[i] = piece;
+                    free.Remove(piece);
+                }
+            }
+
+            return matched;
+        }
+
+        /// <summary>The support model on pieces standing in the world, in the blueprint's space, on the real ground.</summary>
+        private static SupportMap ModelOf(IEnumerable<Piece> pieces, Vector3 rootPos, Quaternion rootRot)
+        {
+            var back = Quaternion.Inverse(rootRot);
+            var scene = pieces.Where(p => p != null).Select((p, i) => new ScenePiece
+            {
+                Id = i,
+                Prefab = Utils.GetPrefabName(p.gameObject),
+                Pos = back * (p.transform.position - rootPos),
+                Rot = back * p.transform.rotation,
+                Entry = PieceCatalog.Find(Utils.GetPrefabName(p.gameObject)),
+            }).ToList();
+            return Support.Solve(scene, PartialBuild.GroundUnder(rootPos, rootRot.eulerAngles.y));
+        }
+
+        private static int Held(Inventory inventory, string item)
+        {
+            return inventory != null ? inventory.CountItems(item) : 0;
+        }
+
+        /// <summary>
+        /// Phase 0 found the hammer preview's workbench copy counted as a real workbench, and threw in
+        /// CraftingStation.GetExtensions on its first range check. The copies no longer carry a station.
+        /// </summary>
+        private static IEnumerator PartialStationCopy(Player player, ResolvedBlueprint kit)
+        {
+            yield return AimBlueprint(player, kit);
+            for (var frame = 0; frame < 5; frame++)
+            {
+                yield return null;
+            }
+
+            var root = BlueprintMode.PreviewRoot;
+            if (root == null)
+            {
+                yield break;
+            }
+
+            var real = CraftingStation.m_allStations.Count(s => s != null && !s.transform.IsChildOf(root)
+                && s.m_name == "$piece_workbench" && s.transform.position.y > -1000f && Flat(s.transform.position, root.position) < 50f);
+            var bench = root.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == "piece_workbench");
+            Check(real == 0 && bench != null && bench.GetComponentsInChildren<Renderer>(true).Length > 0,
+                $"set-up: the preview shows a workbench, and no real one stands within 50 m ({real})");
+
+            var copies = root.GetComponentsInChildren<CraftingStation>(true).Length;
+            var listed = CraftingStation.m_allStations.Count(s => s != null && s.transform.IsChildOf(root));
+            var atPreview = StationInRange("$piece_workbench", root.position, out var throws, out var why);
+            var atPlayer = StationInRange("$piece_workbench", player.transform.position, out var playerThrows, out _);
+            Check(copies == 0 && listed == 0, $"the preview carries no crafting station: {copies} on its copies, {listed} listed by the game");
+            Check(atPreview == null && atPlayer == null && throws == 0 && playerThrows == 0,
+                "HaveBuildStationInRange(\"$piece_workbench\") finds nothing at the preview or the player, and does not throw"
+                + (throws + playerThrows > 0 ? $" ({why})" : ""));
+            var rule = BlueprintRules.CheckCanBuild(player, kit);
+            Check(rule == null, "the kit brings its own workbench, so the rules let it be built: " + (rule ?? "ok"));
+            BlueprintMode.Exit();
+        }
+
+        /// <summary>Check 6: one wood and one resin pay for no piece. Nothing is built, nothing taken, the message says what is missing.</summary>
+        private static IEnumerator PartialNothing(Player player, ResolvedBlueprint kit)
+        {
+            ClearInventoryExceptHammer(player);
+            var items = kit.TotalCost.Select(c => (Prefab: c.m_resItem.gameObject.name, Name: c.m_resItem.m_itemData.m_shared.m_name, Need: c.m_amount)).ToList();
+            foreach (var item in items)
+            {
+                AddTo(player.GetInventory(), item.Prefab, 1);
+            }
+
+            yield return AimBlueprint(player, kit);
+            var root = BlueprintMode.PreviewRoot;
+            var centre = root != null ? root.position : player.transform.position;
+            var before = PiecesAround(player, centre).Count;
+            var built = BlueprintMode.TryBuild(player);
+            yield return null;
+            Check(!built && PiecesAround(player, centre).Count == before, "nothing affordable: the click builds nothing");
+            Check(items.All(i => Held(player.GetInventory(), i.Name) == 1),
+                "and takes nothing: " + string.Join(", ", items.Select(i => $"{i.Name} {Held(player.GetInventory(), i.Name)}")));
+            var said = BlueprintMode.LastMessage ?? "";
+            var named = items.All(i => said.Contains($"{i.Need - 1} {Localization.instance.Localize(i.Name)}"));
+            Check(said.StartsWith("Workshop planned, nothing built yet. Missing:") && named,
+                $"the message names every missing item with its amount: '{said}'");
+            BlueprintMode.Exit();
+            ClearInventoryExceptHammer(player);
+        }
+
+        /// <summary>
+        /// Checks 1 to 4: half the kit's wood (half of it in a chest), the rest in full. Part of the
+        /// kit goes up, paid exactly, it stands in the game and in the model, and it is the lower part.
+        /// </summary>
+        private static IEnumerator PartialHalfWood(Player player, ResolvedBlueprint kit)
+        {
+            var chests = new List<Piece>();
+            yield return PlaceTestPiece(player, "piece_chest_wood", OnGround(player.transform.position, 180f, 5f), 0f, chests);
+            yield return new WaitForSeconds(0.5f);
+            var chest = chests[0] != null ? chests[0].GetComponentInChildren<Container>() : null;
+            Check(chest != null, "a wood chest stands 5 m behind the player");
+            if (chest == null)
+            {
+                yield break;
+            }
+
+            // Half the wood, split between the bag and the chest. Everything else in full, split too.
+            var budget = new Dictionary<string, int>();
+            foreach (var cost in kit.TotalCost)
+            {
+                var name = cost.m_resItem.m_itemData.m_shared.m_name;
+                var have = name == "$item_wood" ? cost.m_amount / 2 : cost.m_amount;
+                budget[name] = have;
+                AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, have - (have / 2));
+                AddTo(chest.GetInventory(), cost.m_resItem.gameObject.name, have / 2);
+            }
+
+            Check(budget.ContainsKey("$item_wood") && budget["$item_wood"] == 20,
+                "the kit needs 40 wood, 20 are there: " + string.Join(", ", budget.Select(b => $"{b.Key} {b.Value}")));
+            int Both(string item) => Held(player.GetInventory(), item) + Held(chest.GetInventory(), item);
+            var before = budget.Keys.ToDictionary(k => k, Both);
+
+            yield return AimBlueprint(player, kit);
+            var root = BlueprintMode.PreviewRoot;
+            if (root == null)
+            {
+                yield break;
+            }
+
+            var rootPos = root.position;
+            var rootRot = root.rotation;
+            var existing = new HashSet<Piece>(PiecesAround(player, rootPos));
+            var clicked = BlueprintMode.TryBuild(player);
+            var said = BlueprintMode.LastMessage ?? "";
+            BlueprintMode.Exit();
+            yield return null;
+            var built = PiecesAround(player, rootPos).Where(p => !existing.Contains(p)).ToList();
+            var total = kit.Parts.Count;
+            Check(clicked && built.Count > 0 && built.Count < total, $"half the wood builds part of the kit: {built.Count} of {total} pieces");
+            Check(said.StartsWith($"Built {built.Count} of {total} pieces of Workshop. Still missing: "),
+                $"and says so: '{said}'");
+
+            // 1. What left the bag and the chest is what the placed pieces cost, item by item.
+            var paid = new Dictionary<string, int>();
+            foreach (var piece in built)
+            {
+                foreach (var item in PartialBuild.CostOf(piece))
+                {
+                    paid.TryGetValue(item.Key, out var had);
+                    paid[item.Key] = had + item.Value;
+                }
+            }
+
+            foreach (var item in budget.Keys)
+            {
+                paid.TryGetValue(item, out var want);
+                var gone = before[item] - Both(item);
+                Check(gone == want, $"{item}: {gone} left the bag and the chest, the placed pieces cost {want}");
+            }
+
+            Check(paid.Keys.All(budget.ContainsKey), "the placed pieces cost nothing the kit does not list");
+
+            var matched = MatchParts(kit, rootPos, rootRot, built);
+            Check(matched.Count == built.Count, $"every placed piece is a part of the kit, where the preview showed it: {matched.Count} of {built.Count}");
+            Log("built parts: " + string.Join(", ", matched.Keys.OrderBy(i => i).Select(i => $"{i} {kit.Parts[i].Prefab.name}")));
+
+            // 3. The model, on the built pieces alone, on the real ground.
+            var model = ModelOf(built, rootPos, rootRot);
+            Check(model.Fallen.Count == 0, $"the support model on the {built.Count} built pieces alone: none falls ({model.Fallen.Count})");
+
+            // 4. Bottom to top: no built piece is higher than the lowest unbuilt one the budget paid
+            //    for on its own and that would stand on what was built.
+            var ground = PartialBuild.GroundUnder(rootPos, rootRot.eulerAngles.y);
+            var builtScene = matched.Keys.Select(i => new ScenePiece
+            {
+                Id = i,
+                Prefab = kit.Parts[i].Prefab.name,
+                Pos = kit.Parts[i].Source.Position,
+                Rot = kit.Parts[i].Source.Rotation,
+                Entry = PieceCatalog.Find(kit.Parts[i].Prefab.name),
+            }).ToList();
+            var builtMap = Support.Solve(builtScene, ground);
+            var lowest = float.MaxValue;
+            var lowestName = "none";
+            for (var i = 0; i < kit.Parts.Count; i++)
+            {
+                if (matched.ContainsKey(i))
+                {
+                    continue;
+                }
+
+                var part = kit.Parts[i];
+                var alone = PartialBuild.CostOf(part.Piece).All(c => budget.TryGetValue(c.Key, out var b) && b >= c.Value);
+                var placed = new[]
+                {
+                    new PlacedPiece { Id = 1000 + i, Prefab = part.Prefab.name, Pos = part.Source.Position, Rot = part.Source.Rotation, Entry = PieceCatalog.Find(part.Prefab.name) },
+                };
+                var falls = new bool[1];
+                Support.Evaluate(builtMap, placed, new float[1], falls);
+                if (alone && !falls[0] && part.Source.Position.y < lowest)
+                {
+                    lowest = part.Source.Position.y;
+                    lowestName = $"{i} {part.Prefab.name}";
+                }
+            }
+
+            var highest = matched.Keys.Select(i => kit.Parts[i].Source.Position.y).DefaultIfEmpty(0f).Max();
+            Check(highest <= lowest + 0.01f,
+                $"bottom to top: the highest built piece is at {highest:0.00} m, the lowest unbuilt one that was paid for on its own"
+                + $" and would stand is at {(lowest == float.MaxValue ? "none" : lowest.ToString("0.00"))} m ({lowestName})");
+
+            // 2. The game agrees: after 15 s, everything still stands.
+            yield return new WaitForSeconds(15f);
+            var standing = built.Count(p => p != null);
+            Check(standing == built.Count, $"after 15 s every built piece still stands: {standing} of {built.Count}");
+
+            player.m_lookPitch = 10f;
+            yield return new WaitForSeconds(0.5f);
+            yield return Screenshot("build-partial-1");
+
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>
+        /// A made-up house, 4 x 4 m: floors on the ground, walls, a second floor on the walls, walls.
+        /// Where a player snapping pieces would put them.
+        /// </summary>
+        private static Blueprint TwoStoreys()
+        {
+            var house = new Blueprint { Name = "Two storeys", IconPrefab = "woodwall" };
+            void Add(string prefab, float x, float y, float z, float yaw)
+            {
+                house.Pieces.Add(new BlueprintPiece { PrefabName = prefab, Position = new Vector3(x, y, z), Rotation = Quaternion.Euler(0f, yaw, 0f) });
+            }
+
+            foreach (var floorY in new[] { 0f, 2f })
+            {
+                foreach (var x in new[] { -1f, 1f })
+                {
+                    foreach (var z in new[] { -1f, 1f })
+                    {
+                        Add("wood_floor", x, floorY, z, 0f);
+                    }
+                }
+
+                var wallY = floorY + 1f;
+                foreach (var along in new[] { -1f, 1f })
+                {
+                    Add("woodwall", along, wallY, -2f, 0f);
+                    Add("woodwall", along, wallY, 2f, 0f);
+                    Add("woodwall", -2f, wallY, along, -90f);
+                    Add("woodwall", 2f, wallY, along, 90f);
+                }
+            }
+
+            return house;
+        }
+
+        /// <summary>Check 5: wood for one and a half storeys. Nothing floats, and after 15 s nothing fell.</summary>
+        private static IEnumerator PartialTwoStoreys(Player player)
+        {
+            if (!ResolvedBlueprint.TryResolve(TwoStoreys(), out var house, out var error))
+            {
+                Check(false, "the two-storey house resolves: " + error);
+                yield break;
+            }
+
+            Unlock(player, house);
+            ClearInventoryExceptHammer(player);
+            var wood = house.TotalCost.First(c => c.m_resItem.m_itemData.m_shared.m_name == "$item_wood");
+            var storey = wood.m_amount / 2;
+            AddTo(player.GetInventory(), wood.m_resItem.gameObject.name, storey + (storey / 2));
+
+            // Its walls and floors need a workbench, which the house does not bring.
+            var benches = new List<Piece>();
+            yield return PlaceTestPiece(player, "piece_workbench", OnGround(player.transform.position, 180f, 4f), 0f, benches);
+            yield return new WaitForSeconds(0.5f);
+
+            yield return AimBlueprint(player, house);
+            var root = BlueprintMode.PreviewRoot;
+            if (root == null)
+            {
+                yield break;
+            }
+
+            var rootPos = root.position;
+            var rootRot = root.rotation;
+            var existing = new HashSet<Piece>(PiecesAround(player, rootPos));
+            var clicked = BlueprintMode.TryBuild(player);
+            var said = BlueprintMode.LastMessage ?? "";
+            BlueprintMode.Exit();
+            yield return null;
+            var built = PiecesAround(player, rootPos).Where(p => !existing.Contains(p)).ToList();
+            var matched = MatchParts(house, rootPos, rootRot, built);
+            var upper = matched.Keys.Count(i => house.Parts[i].Source.Position.y > 1.5f);
+            Check(clicked && built.Count > 12 && built.Count < house.Parts.Count && matched.Count == built.Count,
+                $"wood for {storey + (storey / 2)} of {wood.m_amount}: {built.Count} of {house.Parts.Count} pieces, {upper} of them upstairs: '{said}'");
+            var model = ModelOf(built, rootPos, rootRot);
+            Check(model.Fallen.Count == 0, $"nothing floats: the support model on the built pieces has {model.Fallen.Count} falling");
+
+            yield return new WaitForSeconds(15f);
+            var standing = built.Count(p => p != null);
+            Check(standing == built.Count, $"after 15 s nothing fell: {standing} of {built.Count}");
+            player.m_lookPitch = 10f;
+            yield return new WaitForSeconds(0.5f);
+            yield return Screenshot("build-partial-2-storeys");
+
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>Checks 7 and 8: with every material, or with costs off, the whole kit goes up, as before.</summary>
+        private static IEnumerator PartialEverything(Player player, ResolvedBlueprint kit, bool costsOff)
+        {
+            ClearInventoryExceptHammer(player);
+            if (costsOff)
+            {
+                player.m_noPlacementCost = true;
+            }
+            else
+            {
+                foreach (var cost in kit.TotalCost)
+                {
+                    AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, cost.m_amount);
+                }
+            }
+
+            yield return AimBlueprint(player, kit);
+            var root = BlueprintMode.PreviewRoot;
+            var centre = root != null ? root.position : player.transform.position;
+            var existing = new HashSet<Piece>(PiecesAround(player, centre));
+            var clicked = BlueprintMode.TryBuild(player);
+            var said = BlueprintMode.LastMessage ?? "";
+            BlueprintMode.Exit();
+            player.m_noPlacementCost = false;
+            yield return null;
+            var built = PiecesAround(player, centre).Where(p => !existing.Contains(p)).ToList();
+            var left = kit.TotalCost.Sum(c => Held(player.GetInventory(), c.m_resItem.m_itemData.m_shared.m_name));
+            Check(clicked && built.Count == kit.Parts.Count && left == 0 && said == "Built Workshop",
+                (costsOff ? "costs off, an empty bag" : "every material there")
+                + $": every piece built, {built.Count} of {kit.Parts.Count}, {left} left over: '{said}'");
+
+            yield return new WaitForSeconds(2f);
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>
+        /// Check 9: Plan on the kit repeated 5 x 5 (400 pieces). The limit is 3 x the Solve time
+        /// Phase 0 measured on it, times the rounds the plan took. The JIT is warmed first.
+        /// </summary>
+        private static void PartialTiming(Player player, ResolvedBlueprint kit)
+        {
+            var grid = new Blueprint { Name = "Workshop grid" };
+            for (var gx = 0; gx < 5; gx++)
+            {
+                for (var gz = 0; gz < 5; gz++)
+                {
+                    var offset = new Vector3((gx - 2) * 8f, 0f, (gz - 2) * 8f);
+                    foreach (var part in kit.Parts)
+                    {
+                        grid.Pieces.Add(new BlueprintPiece { PrefabName = part.Prefab.name, Position = part.Source.Position + offset, Rotation = part.Source.Rotation });
+                    }
+                }
+            }
+
+            if (!ResolvedBlueprint.TryResolve(grid, out var big, out var error))
+            {
+                Check(false, "the 400-piece grid resolves: " + error);
+                return;
+            }
+
+            var spot = player.transform.position;
+            spot.y = ZoneSystem.instance.GetGroundHeight(spot);
+            var full = big.TotalCost.ToDictionary(c => c.m_resItem.m_itemData.m_shared.m_name, c => c.m_amount);
+
+            // All but one torch's resin: everything is looked at, round after round. And half the wood.
+            var budgets = new List<(string Name, Dictionary<string, int> Budget)>
+            {
+                ("all but one torch's resin", full.ToDictionary(p => p.Key, p => p.Key == "$item_resin" ? p.Value - 2 : p.Value)),
+                ("half the wood", full.ToDictionary(p => p.Key, p => p.Key == "$item_wood" ? p.Value / 2 : p.Value)),
+            };
+
+            PartialBuild.Plan(big, spot, 0f, null, budgets[0].Budget, false, null);
+            foreach (var (name, budget) in budgets)
+            {
+                var stats = new PlanStats();
+                var chosen = PartialBuild.Plan(big, spot, 0f, null, budget, false, stats);
+                var limit = 3.0 * GridSolveMs * Math.Max(1, stats.Passes);
+                Log($"plan on {big.Parts.Count} pieces, {name}: {chosen.Count} chosen in {stats.Milliseconds:0.0} ms, route {stats.Route},"
+                    + $" {stats.Passes} rounds, {stats.Solves} solves, {stats.Evaluates} evaluates, {stats.Exempt} exempt");
+                Check(stats.Route == "passes" && chosen.Count > 0 && chosen.Count < big.Parts.Count && stats.Milliseconds < limit,
+                    $"Plan on {big.Parts.Count} pieces with {name}: {chosen.Count} chosen in {stats.Milliseconds:0.0} ms,"
+                    + $" under 3 x {GridSolveMs} ms x {stats.Passes} rounds = {limit:0} ms");
+            }
+
+            var all = new PlanStats();
+            var every = PartialBuild.Plan(big, spot, 0f, null, full, false, all);
+            Check(all.Route == "all paid" && every.Count == big.Parts.Count, $"with all of it paid, Plan takes every piece: {every.Count}, {all.Milliseconds:0.00} ms");
         }
 
         // ---------- scenario: editor_open ----------
@@ -8198,6 +8739,10 @@ namespace ValheimTomrer.Dev
             var inventory = player.GetInventory();
             var hammer = inventory.GetAllItems().FirstOrDefault(i => i.m_dropPrefab && i.m_dropPrefab.name == "Hammer")
                 ?? inventory.AddItem("Hammer", 1, 1, 0, 0L, "", false);
+
+            // The test character is saved on quit, so its hammer wears down run after run. At 0 the
+            // game will not equip it, and blueprint mode quietly never starts.
+            hammer.m_durability = hammer.GetMaxDurability();
             if (!player.IsItemEquiped(hammer))
             {
                 player.EquipItem(hammer);

@@ -1,12 +1,11 @@
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 
 namespace ValheimTomrer.Blueprints
 {
     /// <summary>
     /// Blueprint mode of the build tool. The blueprint key cycles through the blueprints the
-    /// player can build with the tool in hand; a click builds the whole blueprint at once.
+    /// player can build with the tool in hand; a click builds every piece the materials pay for.
     /// While active, this replaces the vanilla single-piece preview and click.
     /// </summary>
     internal static class BlueprintMode
@@ -213,7 +212,11 @@ namespace ValheimTomrer.Blueprints
             }
         }
 
-        /// <summary>Builds the whole blueprint where the preview is. Returns false and tells the player why when it can't.</summary>
+        /// <summary>
+        /// Builds every piece the materials pay for and that would stand, bottom to top, where the
+        /// preview is (<see cref="PartialBuild"/>). With enough for all of it, the whole blueprint.
+        /// Returns false and tells the player why when nothing goes up.
+        /// </summary>
         public static bool TryBuild(Player player)
         {
             if (!Active || _preview == null || !_preview.IsAlive)
@@ -223,20 +226,20 @@ namespace ValheimTomrer.Blueprints
 
             if (!_hasTarget)
             {
-                player.Message(MessageHud.MessageType.Center, "$msg_invalidplacement");
+                Say(player, MessageHud.MessageType.Center, "$msg_invalidplacement");
                 return false;
             }
 
             if (_blockedReason != null)
             {
-                player.Message(MessageHud.MessageType.Center, _blockedReason);
+                Say(player, MessageHud.MessageType.Center, _blockedReason);
                 return false;
             }
 
             var error = BlueprintRules.CheckCanBuild(player, Current);
             if (error != null)
             {
-                player.Message(MessageHud.MessageType.Center, error);
+                Say(player, MessageHud.MessageType.Center, error);
                 return false;
             }
 
@@ -252,22 +255,46 @@ namespace ValheimTomrer.Blueprints
                 return false;
             }
 
-            // Bottom-up, so nothing waits for support from a piece that does not exist yet.
             var root = _preview.Root;
+            var noCost = player.PlacementCostDisabled;
+            var sources = noCost ? null : MaterialSources.Around(player);
+            var plan = PartialBuild.Plan(Current, root.position, root.eulerAngles.y, null, sources, noCost);
+
+            // In plan order: bottom-up, so nothing waits for support from a piece that does not exist yet.
             var cheated = player.NoCostCheat() && !PlayerProfile.s_bypassCheatChecks;
-            foreach (var part in Current.Parts.OrderBy(p => p.Source.Position.y))
+            var built = new bool[Current.Parts.Count];
+            var placed = 0;
+            foreach (var index in plan)
             {
+                var part = Current.Parts[index];
+
+                // The plan counted these materials, so this only fails if a chest emptied since.
+                if (!noCost && !BlueprintRules.PayFor(sources, part.Piece))
+                {
+                    continue;
+                }
+
                 player.PlacePiece(
                     part.Piece,
                     root.TransformPoint(part.Source.Position),
                     root.rotation * part.Source.Rotation,
                     doAttack: false,
                     cheated);
+                built[index] = true;
+                placed++;
             }
 
-            BlueprintRules.Pay(player, Current);
+            var total = Current.Parts.Count;
+            if (placed == 0)
+            {
+                var missing = PartialBuild.MissingText(PartialBuild.Missing(Current, null, sources));
+                Say(player, MessageHud.MessageType.Center,
+                    $"{Current.Name} planned, nothing built yet." + (missing.Length > 0 ? " Missing: " + missing : ""));
+                ValheimTomrerPlugin.Log.LogInfo($"built nothing of {Current.Name}: {(missing.Length > 0 ? "missing " + missing : "no piece would stand")}");
+                return false;
+            }
 
-            // One hammer swing for the whole blueprint, same costs as placing a single piece.
+            // One hammer swing for the whole click, same costs as placing a single piece.
             player.FaceLookDirection();
             player.m_zanim.SetTrigger(tool.m_shared.m_attack.m_attackAnimation);
             player.UseStamina(player.GetBuildStamina());
@@ -283,9 +310,29 @@ namespace ValheimTomrer.Blueprints
 
             tool.m_shared.m_buildEffect.Create(player.transform.position, Quaternion.identity, null, 1f, -1, player.GetZDOID());
             player.m_lastToolUseTime = Time.time;
-            player.Message(MessageHud.MessageType.TopLeft, $"Built {Current.Name}");
-            ValheimTomrerPlugin.Log.LogInfo($"built blueprint {Current.Name}: {Current.Parts.Count} pieces at {root.position}");
+
+            var from = sources == null ? "nothing, costs are off"
+                : "the inventory" + (sources.ChestCount > 0 ? $" and {sources.ChestCount} chests within {sources.Range:0} m" : "");
+            ValheimTomrerPlugin.Log.LogInfo($"built blueprint {Current.Name}: {placed} of {total} pieces at {root.position}, paid from {from}");
+            if (placed == total)
+            {
+                Say(player, MessageHud.MessageType.TopLeft, $"Built {Current.Name}");
+                return true;
+            }
+
+            var still = PartialBuild.MissingText(PartialBuild.Missing(Current, built, sources));
+            Say(player, MessageHud.MessageType.TopLeft,
+                $"Built {placed} of {total} pieces of {Current.Name}." + (still.Length > 0 ? $" Still missing: {still}." : ""));
             return true;
+        }
+
+        /// <summary>The last thing <see cref="TryBuild"/> told the player, localized. For the tests.</summary>
+        public static string LastMessage { get; private set; }
+
+        private static void Say(Player player, MessageHud.MessageType type, string text)
+        {
+            LastMessage = Localization.instance.Localize(text);
+            player.Message(type, text);
         }
 
         private static List<ResolvedBlueprint> UsableBlueprints(Player player)

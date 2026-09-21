@@ -305,6 +305,22 @@ namespace ValheimTomrer.Blueprints
             // shadows in the world. Kill the projector and they are never made.
             DestroyAll<CircleProjector>(copy);
 
+            // CraftingStation.Start lists any station whose ZNetView is gone as a real one, and the
+            // copy's ZNetView removes itself. So a preview workbench let the hammer build with no
+            // real bench near, and its first range check threw (no CircleProjector, see above).
+            // Switched off, Start never runs (Unity skips it on a disabled script), and the
+            // component is gone at the end of the frame. Start also hid the area marker; do that here.
+            foreach (var station in copy.GetComponentsInChildren<CraftingStation>(true))
+            {
+                if (station.m_areaMarker != null)
+                {
+                    station.m_areaMarker.SetActive(false);
+                }
+
+                station.enabled = false;
+                Object.Destroy(station);
+            }
+
             // The aim preview never needs collisions; the editor keeps them so a piece can be clicked.
             if (!style.Colliders)
             {

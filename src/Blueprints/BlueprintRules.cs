@@ -4,8 +4,8 @@ using System.Linq;
 namespace ValheimTomrer.Blueprints
 {
     /// <summary>
-    /// The same rules the hammer applies to one piece, applied to a whole blueprint:
-    /// unlocked pieces, materials in the inventory and the chests in range, crafting stations in range.
+    /// The same rules the hammer applies to one piece, applied to a whole blueprint: unlocked
+    /// pieces, crafting stations in range, and paying for a piece from the inventory and the chests.
     /// </summary>
     internal static class BlueprintRules
     {
@@ -35,7 +35,11 @@ namespace ValheimTomrer.Blueprints
             return UnavailablePieces(player, blueprint).Count == 0;
         }
 
-        /// <summary>Returns null when the player can build the blueprint right now, else the reason.</summary>
+        /// <summary>
+        /// Returns null when the player may build from the blueprint right now, else the reason:
+        /// a piece not unlocked, or a station the blueprint does not bring that is not in range.
+        /// Materials never refuse a build: a click builds what they pay for (<see cref="PartialBuild"/>).
+        /// </summary>
         public static string CheckCanBuild(Player player, ResolvedBlueprint blueprint)
         {
             var unavailable = UnavailablePieces(player, blueprint);
@@ -47,22 +51,6 @@ namespace ValheimTomrer.Blueprints
             if (player.PlacementCostDisabled)
             {
                 return null;
-            }
-
-            var sources = MaterialSources.Around(player);
-            var missing = new List<string>();
-            foreach (var need in MaterialNeeds(blueprint))
-            {
-                var have = sources.Count(need.Key);
-                if (have < need.Value)
-                {
-                    missing.Add($"{need.Value - have} {Localize(need.Key)}");
-                }
-            }
-
-            if (missing.Count > 0)
-            {
-                return "Missing: " + string.Join(", ", missing);
             }
 
             if (!ZoneSystem.instance.GetGlobalKey(GlobalKeys.NoWorkbench))
@@ -81,69 +69,26 @@ namespace ValheimTomrer.Blueprints
         }
 
         /// <summary>
-        /// Takes the materials of every piece that is not free in this world, piece by piece: the
-        /// inventory first, then the chests in range, nearest first. Call it after CheckCanBuild.
+        /// Takes one piece's materials: the inventory first, then the chests in range, nearest first.
+        /// Nothing for a piece the world makes free. False and nothing taken when any item is short.
         /// </summary>
-        public static void Pay(Player player, ResolvedBlueprint blueprint)
+        public static bool PayFor(MaterialSources sources, Piece piece)
         {
-            if (player.PlacementCostDisabled)
+            var cost = PartialBuild.CostOf(piece);
+            foreach (var item in cost)
             {
-                return;
-            }
-
-            var sources = MaterialSources.Around(player);
-            var unpaid = 0;
-            foreach (var part in blueprint.Parts)
-            {
-                if (ZoneSystem.instance.GetGlobalKey(part.Piece.FreeBuildKey()))
+                if (sources.Count(item.Key) < item.Value)
                 {
-                    continue;
-                }
-
-                foreach (var requirement in part.Piece.m_resources)
-                {
-                    if (requirement.m_resItem == null || requirement.m_amount <= 0)
-                    {
-                        continue;
-                    }
-
-                    if (!sources.Take(requirement.m_resItem.m_itemData.m_shared.m_name, requirement.m_amount))
-                    {
-                        unpaid++;
-                    }
+                    return false;
                 }
             }
 
-            var from = sources.ChestCount > 0 ? $" and {sources.ChestCount} chests within {sources.Range:0} m" : "";
-            ValheimTomrerPlugin.Log.LogInfo($"paid for {blueprint.Name} from the inventory{from}"
-                + (unpaid > 0 ? $", {unpaid} costs could not be paid" : ""));
-        }
-
-        /// <summary>Item name to amount, skipping pieces the world makes free.</summary>
-        private static Dictionary<string, int> MaterialNeeds(ResolvedBlueprint blueprint)
-        {
-            var needs = new Dictionary<string, int>();
-            foreach (var part in blueprint.Parts)
+            foreach (var item in cost)
             {
-                if (ZoneSystem.instance.GetGlobalKey(part.Piece.FreeBuildKey()))
-                {
-                    continue;
-                }
-
-                foreach (var requirement in part.Piece.m_resources)
-                {
-                    if (requirement.m_resItem == null || requirement.m_amount <= 0)
-                    {
-                        continue;
-                    }
-
-                    var item = requirement.m_resItem.m_itemData.m_shared.m_name;
-                    needs.TryGetValue(item, out var amount);
-                    needs[item] = amount + requirement.m_amount;
-                }
+                sources.Take(item.Key, item.Value);
             }
 
-            return needs;
+            return true;
         }
 
         private static string Localize(string token)

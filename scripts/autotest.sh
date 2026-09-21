@@ -8,6 +8,9 @@
 #                                      .devtest/probe-build.txt (not part of editor_all)
 #   ./scripts/autotest.sh build_sources  build a kit paid from the inventory and chests at 5, 15 and 30 m
 #                                      (not part of editor_all yet)
+#   ./scripts/autotest.sh build_partial  build what the materials pay for and what would stand, bottom to
+#                                      top: half the wood, a two-storey house, nothing, everything, costs
+#                                      off, and the planner's time on 400 pieces (not part of editor_all yet)
 #   ./scripts/autotest.sh editor_open  open the editor window with its key, check the input takeover
 #   ./scripts/autotest.sh editor_view  fill the 3D pane with a kit and drive the camera
 #   ./scripts/autotest.sh editor_files round-trip every blueprint and run the file commands
