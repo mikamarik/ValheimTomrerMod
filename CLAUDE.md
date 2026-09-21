@@ -115,8 +115,8 @@ ValheimTomrer.csproj              netstandard2.1, local refs, publicizer, embeds
                                   auto-deploys the DLL into BepInEx/plugins after every build
 Directory.Build.props             finds the install: ValheimInstall, ValheimManaged, BepInExDir
 README.md                         the player-facing readme: features, install, keys
-.gitignore                        ignores bin, obj, .devtest, and CLAUDE.md + .claude/, so the
-                                  search tools skip this file unless you cat it by name
+.gitignore                        ignores bin, obj, .devtest and .claude/ (open files there by
+                                  exact path, the search tools skip them)
 scripts/dev.sh                    build, deploy, launch, tail our log lines (--debug adds the debugger)
 scripts/autotest.sh               run one AutoTest scenario, output lands in .devtest/
 blueprints/workshop.blueprint     the only shipped kit, embedded in the DLL as ValheimTomrer.Kits.*
