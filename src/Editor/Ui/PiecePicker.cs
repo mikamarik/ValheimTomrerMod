@@ -33,7 +33,6 @@ namespace ValheimTomrer.Editor.Ui
         private const float TabPadX = 16f;
         private const float TabPadY = 7f;
         private const float InfoHeight = 74f;
-        private const float HintHeight = 20f;
         private const float Width = 860f;
         private const float Height = 620f;
 
@@ -46,7 +45,6 @@ namespace ValheimTomrer.Editor.Ui
         private static TextMeshProUGUI _name;
         private static TextMeshProUGUI _cost;
         private static TextMeshProUGUI _station;
-        private static TextMeshProUGUI _hint;
         private static int _generation = -1;
 
         private static readonly List<Tile> Pool = new List<Tile>();
@@ -80,8 +78,6 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>Tiles that exist as objects, for the test.</summary>
         public static int LiveTiles => Pool.Count;
-
-        public static string HintText => _hint != null ? _hint.text : "";
 
         public static void Ensure(RectTransform host)
         {
@@ -155,7 +151,7 @@ namespace ValheimTomrer.Editor.Ui
             return true;
         }
 
-        /// <summary>Once a frame: notice a new catalog and keep the hint in the pad's wording.</summary>
+        /// <summary>Once a frame: notice a new catalog.</summary>
         public static void Tick()
         {
             if (!IsOpen)
@@ -168,11 +164,6 @@ namespace ValheimTomrer.Editor.Ui
             {
                 BuildTabs();
                 Show(Tab, Index);
-            }
-
-            if (_hint != null)
-            {
-                _hint.text = Hint();
             }
         }
 
@@ -363,7 +354,7 @@ namespace ValheimTomrer.Editor.Ui
             var grid = (RectTransform)_scroll.transform;
             grid.anchorMin = Vector2.zero;
             grid.anchorMax = Vector2.one;
-            grid.offsetMin = new Vector2(Pad, Pad + HintHeight + InfoHeight);
+            grid.offsetMin = new Vector2(Pad, Pad + InfoHeight);
             grid.offsetMax = new Vector2(-Pad, -top);
 
             _tileSize = Mathf.Max(24f, (width - ((Columns - 1) * TileGap)) / Columns);
@@ -401,7 +392,6 @@ namespace ValheimTomrer.Editor.Ui
             _cost.text = entry == null ? "" : CostLine(entry);
             _station.text = entry == null ? ""
                 : string.IsNullOrEmpty(entry.StationName) ? "No station needed" : "Needs a " + entry.StationName;
-            _hint.text = Hint();
         }
 
         private static string CostLine(PieceEntry entry)
@@ -418,13 +408,6 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             return string.Join(", ", parts.ToArray());
-        }
-
-        private static string Hint()
-        {
-            var g = EditorInput.Glyphs;
-            return $"{g.Of(PadButton.Cross)}: place it   |   {g.Of(PadButton.Circle)}: close   |   "
-                + $"{g.Dpad}: choose   |   {g.Of(PadButton.L1)} {g.Of(PadButton.R1)}: tab";
         }
 
         /// <summary>Keeps the highlighted row inside the scrolled view.</summary>
@@ -481,17 +464,14 @@ namespace ValheimTomrer.Editor.Ui
             _content.pivot = new Vector2(0.5f, 1f);
 
             _name = UiBuild.Label("Name", _panel, "", 19f, TextAlignmentOptions.TopLeft, UiTheme.Accent);
-            Bottom(_name.rectTransform, Pad + HintHeight + 46f, 24f);
+            Bottom(_name.rectTransform, Pad + 46f, 24f);
 
             _cost = UiBuild.Label("Cost", _panel, "", 15f, TextAlignmentOptions.TopLeft);
-            Bottom(_cost.rectTransform, Pad + HintHeight + 24f, 22f);
+            Bottom(_cost.rectTransform, Pad + 24f, 22f);
             _cost.overflowMode = TextOverflowModes.Ellipsis;
 
             _station = UiBuild.Label("Station", _panel, "", 14f, TextAlignmentOptions.TopLeft, UiTheme.TextDim);
-            Bottom(_station.rectTransform, Pad + HintHeight + 4f, 20f);
-
-            _hint = UiBuild.Label("Hint", _panel, "", 14f, TextAlignmentOptions.TopLeft, UiTheme.TextDim);
-            Bottom(_hint.rectTransform, Pad, HintHeight);
+            Bottom(_station.rectTransform, Pad + 4f, 20f);
 
             _root.gameObject.SetActive(false);
         }
