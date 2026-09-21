@@ -9,7 +9,11 @@ Directory.Build.props.user
 # Build output staged for Thunderstore
 thunderstore/build/
 
-.claude/
+# .claude/ is local working state (plans, handoffs, research), except the design
+# rationale CLAUDE.md points at. `.claude/*` rather than `.claude/` so git still
+# looks inside far enough to see the exception.
+.claude/*
+!.claude/design-decisions.md
 
 # Automatic test output (scripts/autotest.sh)
 .devtest/
