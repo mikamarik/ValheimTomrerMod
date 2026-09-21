@@ -26,6 +26,7 @@
   <ItemGroup>
     <Publicize Include="assembly_valheim" />
     <Publicize Include="assembly_utils" />
+    <Publicize Include="assembly_guiutils" />
   </ItemGroup>
 
   <!-- BepInEx runtime. Referenced from the install so versions can never drift. -->
@@ -82,6 +83,22 @@
       <HintPath>$(ValheimManaged)/UnityEngine.ScreenCaptureModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(ValheimManaged)/UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ValheimManaged)/UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(ValheimManaged)/UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.InputSystem">
+      <HintPath>$(ValheimManaged)/Unity.InputSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.UI">
       <HintPath>$(ValheimManaged)/UnityEngine.UI.dll</HintPath>
       <Private>false</Private>
@@ -90,11 +107,21 @@
       <HintPath>$(ValheimManaged)/Unity.TextMeshPro.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- Glyph and GlyphRect, needed to cut a controller icon out of the game's sprite sheet. -->
+    <Reference Include="UnityEngine.TextCoreFontEngineModule">
+      <HintPath>$(ValheimManaged)/UnityEngine.TextCoreFontEngineModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <!-- Ready-made blueprints ship inside the DLL. -->
   <ItemGroup>
     <EmbeddedResource Include="blueprints/*.blueprint" LogicalName="ValheimTomrer.Kits.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- What the writer has to produce, written by Tomrer. Debug only: the autotest reads it in game. -->
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <EmbeddedResource Include="tests/fixtures/*.blueprint" LogicalName="ValheimTomrer.Fixtures.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- Build straight into the game so the loop is: dotnet build -> launch. -->

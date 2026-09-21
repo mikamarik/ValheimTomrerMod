@@ -1,0 +1,1217 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using TMPro;
+using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
+using UnityEngine.UI;
+using ValheimTomrer.Blueprints;
+using ValheimTomrer.Editor.Input;
+using ValheimTomrer.Editor.Placement;
+using ValheimTomrer.Editor.View;
+
+namespace ValheimTomrer.Editor.Ui
+{
+    /// <summary>
+    /// The 3D pane in the middle of the window: a RawImage showing what the preview camera draws,
+    /// the crosshair and the text over the picture, plus the once-a-frame work behind it (keep the
+    /// model and the document in step, aim, draw the ghost, the snap dots and the selection boxes,
+    /// read input, render).
+    ///
+    /// <see cref="Captured"/> says who has the mouse. The cursor stays free: a click selects, the
+    /// right button drags the view round and the middle one pans. C hands the mouse to the pane
+    /// for looking, and Esc gives it back.
+    ///
+    /// Closing the window puts the pane to sleep (<see cref="Sleep"/>): the scene and the camera
+    /// stay, switched off, and only the texture goes. The next open switches them back on, so the
+    /// pane is exactly as it was left. A world change kills the scene; <see cref="Wake"/> then
+    /// builds it again from the document and puts the camera back where it was.
+    /// <see cref="Close"/> destroys all of it.
+    /// </summary>
+    internal static class ViewportHost
+    {
+        private const float Inset = 6f;          // lets the sunken frame show around the picture
+        private const float BoxSelectThreshold = 4f;
+        private const float MessageSeconds = 6f;
+
+        /// <summary>How far the mouse has to move over the pane to take the aim back from the pad.</summary>
+        private const float MouseTakeOver = 3f;
+
+        private static RectTransform _host;
+        private static RawImage _image;
+        private static GameObject _crosshair;
+        private static HintBar _hints;
+        private static TextMeshProUGUI _placeLine;
+        private static TextMeshProUGUI _stateLine;
+        private static TextMeshProUGUI _aimName;
+        private static Image _selectRect;
+        private static int _generation = -1;
+
+        private static EditorScene _scene;
+        private static PreviewCamera _preview;
+        private static ViewportRaycast _raycast;
+        private static EditorCamera _camera;
+        private static BlueprintPreview _model;
+        private static Transform _modelRoot;
+        private static SceneModel _pieces;
+        private static GhostRenderer _ghost;
+        private static SnapDots _dots;
+        private static SelectionBoxes _boxes;
+        private static IEnumerator _fill;
+        private static float _panDepth = 10f;
+
+        private static MovingSet _ghostSet;
+        private static Vector2 _aimAt = new Vector2(0.5f, 0.5f);
+        private static int _aimPiece = -1;
+        private static Vector2 _dragStart;
+        private static Vector2 _lastMouse;
+        private static bool _hasLastMouse;
+        private static bool _boxSelecting;
+        private static long _boxSignature = -1;
+        private static readonly List<Bounds> BoxList = new List<Bounds>();
+
+        // Kept after closing, only so the autotest can prove nothing was left behind.
+        private static EditorScene _closedScene;
+        private static PreviewCamera _closedCamera;
+
+        /// <summary>True once every piece stands and the bounds are known.</summary>
+        public static bool Ready => _scene != null && _fill == null && (_model == null || _model.Done);
+
+        public static EditorCamera Camera => _camera;
+
+        public static EditorScene Scene => _scene;
+
+        public static PreviewCamera Preview => _preview;
+
+        public static BlueprintPreview Model => _model;
+
+        public static ViewportRaycast Raycast => _raycast;
+
+        /// <summary>The copies standing in the pane, kept in step with the document.</summary>
+        public static SceneModel Pieces => _pieces;
+
+        /// <summary>The see-through copy of what is in hand.</summary>
+        public static GhostRenderer Ghost => _ghost;
+
+        public static SnapDots Dots => _dots;
+
+        public static SelectionBoxes Boxes => _boxes;
+
+        /// <summary>Where in the pane the placing rule is aiming, 0..1.</summary>
+        public static Vector2 AimAt => _aimAt;
+
+        /// <summary>The piece the aim is on, or -1.</summary>
+        public static int AimPiece => _aimPiece;
+
+        /// <summary>
+        /// The controller aims, with the crosshair in the middle of the view, like the game.
+        /// A real mouse move over the pane gives the aim back.
+        /// </summary>
+        public static bool PadAim { get; private set; }
+
+        /// <summary>
+        /// True while the pane has the mouse: the cursor is held, the mouse turns the view and the
+        /// crosshair aims. C takes it, Esc gives it back. It is not a camera setting, the camera
+        /// always flies free, and a plain click never turns this on.
+        /// </summary>
+        public static bool Captured { get; private set; }
+
+        /// <summary>C: the pane takes the mouse, so it looks around and the crosshair aims.</summary>
+        public static void Capture()
+        {
+            if (_camera == null)
+            {
+                return;
+            }
+
+            // The pane takes over, so the panel walk lets go of its widget.
+            FocusNav.Leave();
+            Captured = true;
+            ModUi.LockCursor = true;
+            GiveAimBack();
+        }
+
+        /// <summary>Esc: the cursor goes back to the window. False means the pane did not have it.</summary>
+        public static bool Release()
+        {
+            if (!Captured)
+            {
+                return false;
+            }
+
+            Captured = false;
+            ModUi.LockCursor = false;
+            return true;
+        }
+
+        /// <summary>
+        /// The pad woke: the crosshair takes the aim and the UI lets go of its button. While the
+        /// panel walk is on it does nothing at all, or a stick would kill the focus at once.
+        /// </summary>
+        public static void TakeAim()
+        {
+            if (FocusNav.Active)
+            {
+                return;
+            }
+
+            PadAim = true;
+            ModUi.ClearSelection();
+        }
+
+        /// <summary>The mouse is in charge again: a click on the pane, or a real move over it.</summary>
+        public static void GiveAimBack()
+        {
+            PadAim = false;
+        }
+
+        /// <summary>
+        /// The mouse moved to a screen point. Over the pane, a move of more than 3 px takes the
+        /// aim back from the pad, the way the Tomrer editor does it.
+        /// </summary>
+        public static void MouseMoved(Vector2 screen)
+        {
+            if (_raycast == null || Captured)
+            {
+                // The pane has the mouse: the cursor is held, so there is no real move to read.
+                return;
+            }
+
+            if (!_raycast.ScreenToViewport(screen, out _))
+            {
+                // Off the pane: the next move back onto it counts as a real one.
+                _hasLastMouse = false;
+                return;
+            }
+
+            if (PadAim && (!_hasLastMouse || Vector2.Distance(screen, _lastMouse) > MouseTakeOver))
+            {
+                GiveAimBack();
+            }
+
+            _lastMouse = screen;
+            _hasLastMouse = true;
+        }
+
+        /// <summary>Builds the pane's widgets. Called after the window itself is built.</summary>
+        public static void Ensure(RectTransform host)
+        {
+            if (host == null)
+            {
+                return;
+            }
+
+            if (_host == host && _image != null && _generation == UiTheme.Generation)
+            {
+                return;
+            }
+
+            _host = host;
+            _generation = UiTheme.Generation;
+            Build(host);
+        }
+
+        /// <summary>
+        /// Puts a blueprint in the pane and starts building it, a few pieces a frame. A null
+        /// blueprint opens an empty scene, which is what a new blueprint starts from.
+        /// </summary>
+        public static void Show(ResolvedBlueprint blueprint)
+        {
+            Close();
+            if (_image == null)
+            {
+                return;
+            }
+
+            _scene = new EditorScene(EditorConfig.Layer);
+            _preview = new PreviewCamera(_scene.Root, EditorConfig.Layer);
+            _raycast = new ViewportRaycast(_preview, _image.rectTransform, _scene);
+            _camera = new EditorCamera(_preview);
+            _ghost = new GhostRenderer(_scene.Root, EditorConfig.Layer);
+            _dots = new SnapDots(_scene.Root, EditorConfig.Layer);
+            _boxes = new SelectionBoxes(_scene.Root, EditorConfig.Layer);
+
+            if (blueprint != null)
+            {
+                _model = BlueprintPreview.Empty(blueprint, PreviewStyle.Solid(EditorConfig.Layer));
+                _model.Root.SetParent(_scene.Root, false);
+                _modelRoot = _model.Root;
+                _fill = _model.Fill();
+            }
+            else
+            {
+                var root = new GameObject("ValheimTomrer_Blueprint") { layer = EditorConfig.Layer };
+                root.transform.SetParent(_scene.Root, false);
+                _modelRoot = root.transform;
+                _pieces = new SceneModel(_modelRoot, EditorConfig.Layer);
+                Frame();
+            }
+
+            Fit();
+            Release();   // the window opens with the mouse on the panels, not trapped in the pane
+            ValheimTomrerPlugin.Log.LogInfo(blueprint != null
+                ? $"editor view opened on '{blueprint.Name}' ({_model.Total} pieces)"
+                : "editor view opened on an empty blueprint");
+        }
+
+        /// <summary>
+        /// The window closed. The scene and the camera stay, switched off, so nothing in them draws,
+        /// lights or can be hit, and the next open finds the pane as it was. Only the texture goes:
+        /// it is memory on the graphics card.
+        /// </summary>
+        public static void Sleep()
+        {
+            Release();
+            PadAim = false;
+            _hasLastMouse = false;
+            _boxSelecting = false;
+            HideSelectRect();
+            if (_scene != null && _scene.IsAlive)
+            {
+                _scene.Root.gameObject.SetActive(false);
+            }
+
+            if (_preview != null && _preview.IsAlive)
+            {
+                _preview.DropTexture();
+            }
+
+            if (_image != null)
+            {
+                _image.texture = null;
+                _image.color = new Color(0f, 0f, 0f, 0f);
+            }
+        }
+
+        /// <summary>
+        /// The window is back. The pane that went to sleep switches on as it was left. When a world
+        /// change killed it, it is built again from the document, on the same view.
+        /// </summary>
+        public static void Wake()
+        {
+            if (_image == null)
+            {
+                return;
+            }
+
+            if (_scene != null && _scene.IsAlive && _preview != null && _preview.IsAlive)
+            {
+                _scene.Root.gameObject.SetActive(true);
+
+                // The window may have been built again since, with a new picture to aim through.
+                _raycast = new ViewportRaycast(_preview, _image.rectTransform, _scene);
+                _boxSignature = -1;
+                Fit();
+                Release();
+                ValheimTomrerPlugin.Log.LogInfo("editor view woke as it was left");
+                return;
+            }
+
+            var pose = _camera;
+            Show(null);
+            if (pose != null && _camera != null)
+            {
+                _camera.TakePose(pose);
+            }
+
+            ValheimTomrerPlugin.Log.LogInfo("editor view built again for the open blueprint, on the same view");
+        }
+
+        /// <summary>Everything the pane does once a frame, while the window is open.</summary>
+        public static void Tick()
+        {
+            if (_scene == null || !_scene.IsAlive || _preview == null)
+            {
+                return;
+            }
+
+            StepFill();
+            Fit();
+            Bindings.Tick();
+            PadBindings.Tick();
+            ReadInput();
+            FocusNav.Refresh();
+            ModUi.LockCursor = Captured;
+            if (_crosshair != null)
+            {
+                _crosshair.SetActive(Captured || PadAim);
+            }
+
+            UpdateModel();
+            UpdateAim();
+            UpdateBoxes();
+            UpdateOverlays();
+
+            _dots.Show(EditorState.SnapDotsOn ? EditorState.Aimed : null);
+            _preview.Render();
+        }
+
+        /// <summary>F: looks at the selection, or at the whole blueprint when nothing is selected.</summary>
+        public static void Frame()
+        {
+            if (_camera == null)
+            {
+                return;
+            }
+
+            var selected = EditorState.SelectedPieces();
+            if (selected.Count > 0)
+            {
+                var box = EditorState.BoxOf(selected);
+                if (box.HasValue)
+                {
+                    _camera.Frame(box.Value);
+                    return;
+                }
+            }
+
+            if (_model != null && _model.Done)
+            {
+                _camera.Frame(_model.LocalBounds);
+                return;
+            }
+
+            var pieces = new List<Doc.DocPiece>();
+            if (EditorState.Document != null)
+            {
+                pieces.AddRange(EditorState.Document.Pieces);
+            }
+
+            _camera.Frame(EditorState.BoxOf(pieces) ?? new Bounds(Vector3.zero, Vector3.one * 4f));
+        }
+
+        public static void Close()
+        {
+            ModUi.LockCursor = false;
+            _ghost?.Destroy();
+            _dots?.Destroy();
+            _boxes?.Destroy();
+            _pieces?.Clear();
+
+            if (_model != null)
+            {
+                _model.Destroy();
+            }
+            else if (_modelRoot != null)
+            {
+                UnityEngine.Object.Destroy(_modelRoot.gameObject);
+            }
+
+            if (_scene != null)
+            {
+                _scene.Destroy();
+                _closedScene = _scene;
+            }
+
+            if (_preview != null)
+            {
+                _preview.Destroy();
+                _closedCamera = _preview;
+            }
+
+            _model = null;
+            _modelRoot = null;
+            _pieces = null;
+            _ghost = null;
+            _ghostSet = null;
+            _dots = null;
+            _boxes = null;
+            _boxSignature = -1;
+            _aimPiece = -1;
+            _boxSelecting = false;
+            Captured = false;
+            PadAim = false;
+            _hasLastMouse = false;
+            _fill = null;
+            _scene = null;
+            _preview = null;
+            _raycast = null;
+            _camera = null;
+            HideSelectRect();
+            if (_image != null)
+            {
+                _image.texture = null;
+                _image.color = new Color(0f, 0f, 0f, 0f);
+            }
+        }
+
+        /// <summary>Objects from the last closed view that Unity has not destroyed. Must be 0.</summary>
+        public static int Leaked()
+        {
+            var leaked = 0;
+            if (_closedScene != null)
+            {
+                leaked += _closedScene.AliveOwned() + (_closedScene.IsAlive ? 1 : 0);
+            }
+
+            if (_closedCamera != null)
+            {
+                leaked += (_closedCamera.IsAlive ? 1 : 0) + (_closedCamera.TextureAlive ? 1 : 0);
+            }
+
+            return leaked;
+        }
+
+        // ---------- the once-a-frame work ----------
+
+        private static void StepFill()
+        {
+            if (_fill == null)
+            {
+                return;
+            }
+
+            if (_fill.MoveNext())
+            {
+                Status($"building {_model.Built}/{_model.Total} pieces");
+                return;
+            }
+
+            _fill = null;
+            _scene.SetFront(_model.LocalBounds);
+            _pieces = new SceneModel(_modelRoot, EditorConfig.Layer);
+            _pieces.Adopt(EditorState.Document, _model);
+            Frame();
+        }
+
+        /// <summary>The copies follow the document: a new piece appears, a deleted one goes.</summary>
+        private static void UpdateModel()
+        {
+            if (_pieces == null)
+            {
+                return;
+            }
+
+            _pieces.Sync(EditorState.Document);
+            _pieces.Hide(EditorState.Carrying);
+        }
+
+        /// <summary>
+        /// Where the placing rule is aiming, and what is under it. The ray is turned into the
+        /// editor scene's own space, where y = 0 is the grid the rule works against.
+        /// </summary>
+        private static void UpdateAim()
+        {
+            _aimAt = AimPoint();
+            _aimPiece = -1;
+            if (_pieces != null && _raycast.Pick(_aimAt, out var hit))
+            {
+                _aimPiece = _pieces.IdOf(hit.collider != null ? hit.collider.transform : null);
+            }
+
+            // The game's hammer tints the piece it points at with how well it is held up
+            // (Player.UpdateWearNTearHover), with a piece in hand or not.
+            if (_pieces != null)
+            {
+                _pieces.Tint(_aimPiece, _aimPiece >= 0 ? EditorState.Stability.ColorOf(_aimPiece) : Color.clear);
+            }
+
+            if (EditorState.Mode != EditMode.Place || EditorState.Moving == null)
+            {
+                if (_ghostSet != null)
+                {
+                    _ghost.Show(null);
+                    _ghostSet = null;
+                }
+
+                EditorState.ClearAim();
+                return;
+            }
+
+            if (!ReferenceEquals(_ghostSet, EditorState.Moving))
+            {
+                _ghost.Show(EditorState.Moving);
+                _ghostSet = EditorState.Moving;
+            }
+
+            var ray = _raycast.RayAt(_aimAt);
+            var origin = _scene.Root.InverseTransformPoint(ray.origin);
+            var direction = _scene.Root.InverseTransformDirection(ray.direction);
+            if (EditorState.Aim(origin, direction, out var result))
+            {
+                _ghost.Place(result);
+            }
+            else
+            {
+                _ghost.Hide();
+            }
+        }
+
+        /// <summary>The gold boxes. Rebuilt only when the selection, the document or the aim changed.</summary>
+        private static void UpdateBoxes()
+        {
+            var document = EditorState.Document;
+            var signature = ((long)EditorState.Version * 1000003L)
+                + ((document != null ? document.Revision : 0) * 1009L)
+                + (EditorState.PieceBoxesOn ? 131071L : 0L)
+                + _aimPiece;
+            if (signature == _boxSignature)
+            {
+                return;
+            }
+
+            _boxSignature = signature;
+            BoxList.Clear();
+            var selected = EditorState.SelectedPieces();
+            foreach (var piece in selected)
+            {
+                BoxList.Add(EditorState.BoxOf(piece));
+            }
+
+            Bounds? group = null;
+            if (BoxList.Count > 1)
+            {
+                var box = BoxList[0];
+                for (var i = 1; i < BoxList.Count; i++)
+                {
+                    box.Encapsulate(BoxList[i]);
+                }
+
+                group = box;
+            }
+
+            Bounds? aim = null;
+            if (_aimPiece >= 0 && document != null && !EditorState.IsSelected(_aimPiece))
+            {
+                var piece = document.Find(_aimPiece);
+                if (piece != null)
+                {
+                    aim = EditorState.BoxOf(piece);
+                }
+            }
+
+            _boxes.Show(BoxList, group, aim);
+            ShowPieceBoxes(document);
+        }
+
+        /// <summary>The Boxes view: the models stop drawing and a wire box stands in for each.</summary>
+        private static void ShowPieceBoxes(Doc.BlueprintDocument document)
+        {
+            if (_pieces == null)
+            {
+                return;
+            }
+
+            _pieces.SetBoxes(EditorState.PieceBoxesOn);
+            if (!EditorState.PieceBoxesOn || document == null)
+            {
+                _boxes.ShowAll(null);
+                return;
+            }
+
+            var all = new List<Bounds>(document.Pieces.Count);
+            foreach (var piece in document.Pieces)
+            {
+                all.Add(EditorState.BoxOf(piece));
+            }
+
+            _boxes.ShowAll(all);
+        }
+
+        /// <summary>The lines over the picture: the hint, the place HUD, the aimed piece, the status.</summary>
+        private static void UpdateOverlays()
+        {
+            var placing = EditorState.Mode == EditMode.Place;
+            ShowHints(placing);
+
+            if (_placeLine != null)
+            {
+                _placeLine.gameObject.SetActive(placing);
+                _stateLine.gameObject.SetActive(placing);
+                if (placing)
+                {
+                    _placeLine.text = PlaceHud();
+                    _stateLine.text = PlaceState();
+                }
+            }
+
+            if (_aimName != null)
+            {
+                var document = EditorState.Document;
+                var piece = _aimPiece >= 0 && document != null ? document.Find(_aimPiece) : null;
+                var entry = piece != null ? Catalog.PieceCatalog.Find(piece.PrefabName) : null;
+                _aimName.text = piece == null ? "" : entry != null ? entry.DisplayName : piece.PrefabName;
+                if (piece != null && EditorState.Stability.TryGet(piece.Id, out var held, out _))
+                {
+                    _aimName.text += EditorState.Stability.Falls(piece.Id)
+                        ? "   (falls down)"
+                        : "   (support: " + SupportWords(held, entry) + ")";
+                }
+                _aimName.rectTransform.anchoredPosition =
+                    new Vector2(0f, Captured || PadAim ? -18f : -80f);
+            }
+
+            if (_fill == null)
+            {
+                Status(DocumentLine());
+            }
+        }
+
+        /// <summary>
+        /// The row of controls along the bottom of the pane. Four sets: the mouse on the loose,
+        /// the mouse held for looking, the controller flying, and the controller walking the
+        /// panels. It is only rebuilt when the set changes, so this can run every frame.
+        /// </summary>
+        private static void ShowHints(bool placing)
+        {
+            if (_hints == null)
+            {
+                return;
+            }
+
+            _hints.SetActive(!placing);
+            if (placing)
+            {
+                return;
+            }
+
+            var set = FocusNav.Active ? "focus" : PadAim ? "pad" : Captured ? "held" : "mouse";
+            var key = set + (EditorInput.Pad != null && EditorInput.Pad.Ps ? "|ps" : "|xbox");
+            if (_hints.Is(key))
+            {
+                return;
+            }
+
+            switch (set)
+            {
+                case "focus":
+                    _hints.Show(key,
+                        new Hint("move",
+                            HintIcon.Pad(PadGlyphs.Dpad, EditorInput.Glyphs.Dpad),
+                            HintIcon.Pad(PadGlyphs.Stick(false), EditorInput.Glyphs.Ls)),
+                        new Hint("change panel", Pad(PadButton.R1), Pad(PadButton.L1)),
+                        new Hint("select", Pad(PadButton.Cross)),
+                        new Hint("back to the view", Pad(PadButton.Circle)));
+                    return;
+
+                case "pad":
+                    _hints.Show(key,
+                        new Hint("pieces menu", Pad(PadButton.Cross)),
+                        new Hint("place or select", Pad(PadButton.R2)),
+                        new Hint("move the piece", Pad(PadButton.Square)),
+                        new Hint("copy the piece", Pad(PadButton.Triangle)),
+                        new Hint("delete the piece", Pad(PadButton.R1)),
+                        new Hint("the panels", Pad(PadButton.L3)),
+                        new Hint("back", Pad(PadButton.Circle)),
+                        new Hint("help", Pad(PadButton.Options)));
+                    return;
+
+                case "held":
+                    _hints.Show(key,
+                        new Hint("look", HintIcon.Key("Mouse")),
+                        new Hint("select", HintIcon.Key("LMB")),
+                        new Hint("fly", HintIcon.Key("W"), HintIcon.Key("A"), HintIcon.Key("S"), HintIcon.Key("D")),
+                        new Hint("zoom", HintIcon.Key("Wheel")),
+                        new Hint("free the cursor", HintIcon.Key("Esc")));
+                    return;
+
+                default:
+                    _hints.Show(key,
+                        new Hint("select", HintIcon.Key("LMB")),
+                        new Hint("look", HintIcon.Key("RMB")),
+                        new Hint("pan", HintIcon.Key("MMB")),
+                        new Hint("zoom", HintIcon.Key("Wheel")),
+                        new Hint("fly", HintIcon.Key("W"), HintIcon.Key("A"), HintIcon.Key("S"), HintIcon.Key("D")),
+                        new Hint("mouse look", HintIcon.Key("C")),
+                        new Hint("help", HintIcon.Key("H")));
+                    return;
+            }
+        }
+
+        /// <summary>A controller button as a picture, or as its name when the game has no icon.</summary>
+        private static HintIcon Pad(PadButton button) =>
+            HintIcon.Pad(PadGlyphs.Of(button), EditorInput.Glyphs.Of(button));
+
+        private static string PlaceHud()
+        {
+            var what = EditorState.Held != null
+                ? EditorState.Held.DisplayName
+                : EditorState.Action == PlaceAction.Move
+                    ? Count(EditorState.Moving != null ? EditorState.Moving.Count : 0)
+                    : "a copy of " + Count(EditorState.Moving != null ? EditorState.Moving.Count : 0);
+
+            var line = "Placing " + what;
+            if (EditorState.Steps != 0)
+            {
+                line += $" - turned {EditorState.Steps * Placer.RotateStep:0.#} deg";
+            }
+
+            var snap = EditorState.ManualName();
+            if (snap != null)
+            {
+                line += " - snap point " + snap;
+            }
+
+            return line;
+        }
+
+        private static string PlaceState()
+        {
+            var result = EditorState.Aimed;
+            if (result == null)
+            {
+                return "nothing under the aim";
+            }
+
+            if (result.Duplicate)
+            {
+                return "a piece of this kind is already there";
+            }
+
+            if (result.WouldFall)
+            {
+                return EditorState.FallText(result);
+            }
+
+            var line = result.Snapped
+                ? result.Assisted ? "snapped (helped)" : "snapped"
+                : result.SnapSkipped ? "snap refused: the same piece is there" : "free";
+            return line + "   |   support: " + Weakest(result);
+        }
+
+        /// <summary>The support of the weakest piece in hand, in words and as a share of its most.</summary>
+        private static string Weakest(PlaceResult result)
+        {
+            var worst = -1;
+            var worstLevel = float.PositiveInfinity;
+            for (var i = 0; result.Support != null && i < result.Support.Length; i++)
+            {
+                var entry = result.World[i].Entry;
+                var info = entry != null ? entry.Support : null;
+                var level = info == null || !info.CanFall ? 2f : result.Support[i] >= info.Max ? 1.5f : Support.Level(result.Support[i], info);
+                if (level < worstLevel)
+                {
+                    worstLevel = level;
+                    worst = i;
+                }
+            }
+
+            return worst < 0 ? "never falls" : SupportWords(result.Support[worst], result.World[worst].Entry);
+        }
+
+        /// <summary>"on the ground", or a word and a share of the most it could have: "good (62 %)".</summary>
+        public static string SupportWords(float value, Catalog.PieceEntry entry)
+        {
+            var info = entry != null ? entry.Support : null;
+            if (info == null || !info.CanFall)
+            {
+                return "never falls";
+            }
+
+            if (value >= info.Max)
+            {
+                return "on the ground";
+            }
+
+            var level = Support.Level(value, info);
+            var word = level >= 0.75f ? "strong" : level >= 0.4f ? "good" : level > 0f ? "weak" : "about to break";
+            return $"{word} ({Mathf.RoundToInt(value / info.Max * 100f)} %)";
+        }
+
+        private static string DocumentLine()
+        {
+            var document = EditorState.Document;
+            if (document == null)
+            {
+                return "no blueprint open";
+            }
+
+            var name = string.IsNullOrEmpty(document.Name) ? "New blueprint" : document.Name;
+            var line = $"{name}: {Count(document.Pieces.Count)}";
+            if (EditorState.SelectionCount > 0)
+            {
+                line += $"   |   {EditorState.SelectionCount} selected";
+            }
+
+            if (EditorState.Message != null && Time.unscaledTime - EditorState.MessageAt < MessageSeconds)
+            {
+                line += "   |   " + EditorState.Message;
+            }
+
+            return line;
+        }
+
+        private static string Count(int n)
+        {
+            return n == 1 ? "1 piece" : n + " pieces";
+        }
+
+        /// <summary>
+        /// Keeps the texture the size of the pane in real pixels. A window resize or a GUI-scale
+        /// change makes a new one; the old one is released, not left on the graphics card.
+        /// </summary>
+        private static void Fit()
+        {
+            var rect = _image.rectTransform.rect;
+            var canvas = _image.canvas;
+            var scale = canvas != null ? canvas.scaleFactor : 1f;
+            if (_preview.Resize(Mathf.RoundToInt(rect.width * scale), Mathf.RoundToInt(rect.height * scale)))
+            {
+                _image.texture = _preview.Texture;
+                _image.color = Color.white;
+            }
+        }
+
+        /// <summary>
+        /// The mouse, while the pane has it. The keys are in <see cref="Bindings"/> and the pad is
+        /// in <see cref="PadBindings"/>, both already run this frame.
+        /// </summary>
+        private static void ReadInput()
+        {
+            if (Dialogs.IsOpen)
+            {
+                return;
+            }
+
+            // The cursor is held, so there are no drag events left to read.
+            if (Captured && Mouse.current != null)
+            {
+                _camera.MouseLook(Mouse.current.delta.ReadValue());
+            }
+        }
+
+        private static float Key(KeyCode key)
+        {
+            return ZInput.GetKey(key, false) ? 1f : 0f;
+        }
+
+        private static bool Down(KeyCode key)
+        {
+            return ZInput.GetKeyDown(key, false);
+        }
+
+        private static void Status(string text)
+        {
+            if (EditorWindow.StatusText != null)
+            {
+                EditorWindow.StatusText.text = text + "   |   F7 or Esc closes";
+            }
+        }
+
+        // ---------- mouse, from the UI event system ----------
+
+        private static Vector2 AimPoint()
+        {
+            // The crosshair aims once the pane has the mouse, and while the controller is in charge.
+            if (Captured || PadAim)
+            {
+                return new Vector2(0.5f, 0.5f);
+            }
+
+            var mouse = Mouse.current;
+            if (mouse != null && _raycast.ScreenToViewport(mouse.position.ReadValue(), out var at))
+            {
+                return at;
+            }
+
+            return new Vector2(0.5f, 0.5f);
+        }
+
+        private static void OnPointerDown(PointerEventData data)
+        {
+            if (data.button != PointerEventData.InputButton.Left)
+            {
+                return;
+            }
+
+            // A click on the pane puts the mouse in charge, like the browser editor does.
+            GiveAimBack();
+            _dragStart = data.position;
+            _boxSelecting = false;
+            HideSelectRect();
+        }
+
+        private static void OnPointerUp(PointerEventData data)
+        {
+            if (data.button != PointerEventData.InputButton.Left || !_boxSelecting)
+            {
+                return;
+            }
+
+            BoxSelect(_dragStart, data.position, Key(KeyCode.LeftShift) + Key(KeyCode.RightShift) > 0f);
+            HideSelectRect();
+        }
+
+        private static void OnPointerClick(PointerEventData data)
+        {
+            if (data.button != PointerEventData.InputButton.Left)
+            {
+                return;
+            }
+
+            if (_boxSelecting)
+            {
+                _boxSelecting = false;
+                return;
+            }
+
+            // A click selects or places, always. It used to hand the mouse to the pane instead,
+            // which hid the cursor and started swinging the view on the click that was meant to
+            // pick a piece. Looking around is the right button, or C to hold the mouse.
+            ClickAt(data.position, Key(KeyCode.LeftShift) + Key(KeyCode.RightShift) > 0f);
+        }
+
+        /// <summary>A click on the picture: drop what is in hand, or pick what is under the cursor.</summary>
+        public static void ClickAt(Vector2 screen, bool additive)
+        {
+            if (_raycast == null || !_raycast.ScreenToViewport(screen, out var at))
+            {
+                return;
+            }
+
+            if (EditorState.Mode == EditMode.Place)
+            {
+                EditorState.CommitPlacement(EditorState.Aimed);
+                return;
+            }
+
+            if (_pieces != null && _raycast.Pick(at, out var hit))
+            {
+                var id = _pieces.IdOf(hit.collider != null ? hit.collider.transform : null);
+                if (id >= 0)
+                {
+                    EditorState.Select(id, additive ? SelectHow.Toggle : SelectHow.Set);
+                    return;
+                }
+            }
+
+            if (!additive)
+            {
+                EditorState.Select(Array.Empty<int>());
+            }
+        }
+
+        /// <summary>Everything whose box centre shows inside the dragged rectangle.</summary>
+        public static void BoxSelect(Vector2 from, Vector2 to, bool additive)
+        {
+            var document = EditorState.Document;
+            if (document == null || _raycast == null)
+            {
+                return;
+            }
+
+            var min = Vector2.Min(from, to);
+            var max = Vector2.Max(from, to);
+            var ids = new List<int>();
+            foreach (var piece in document.Pieces)
+            {
+                var centre = _scene.Root.TransformPoint(EditorState.BoxOf(piece).center);
+                if (!_raycast.Project(centre, out var screen))
+                {
+                    continue;
+                }
+
+                if (screen.x >= min.x && screen.x <= max.x && screen.y >= min.y && screen.y <= max.y)
+                {
+                    ids.Add(piece.Id);
+                }
+            }
+
+            EditorState.Select(ids, additive ? SelectHow.Add : SelectHow.Set);
+        }
+
+        private static void OnDragStart(PointerEventData data)
+        {
+            // Pan grabs whatever is under the cursor, and the point in front when nothing is.
+            var depth = _camera != null ? _camera.Distance : 10f;
+            if (_raycast != null && _raycast.ScreenToViewport(data.position, out var at))
+            {
+                depth = _raycast.SurfaceDistance(at) ?? depth;
+            }
+
+            _panDepth = Mathf.Min(depth, 500f);
+        }
+
+        private static void OnDrag(PointerEventData data)
+        {
+            if (_camera == null)
+            {
+                return;
+            }
+
+            // Left drag is the selection rectangle, not a camera move.
+            if (data.button == PointerEventData.InputButton.Left)
+            {
+                if (Captured)
+                {
+                    return;
+                }
+
+                if (!_boxSelecting && Vector2.Distance(data.position, _dragStart) >= BoxSelectThreshold)
+                {
+                    _boxSelecting = true;
+                }
+
+                if (_boxSelecting)
+                {
+                    ShowSelectRect(_dragStart, data.position);
+                }
+
+                return;
+            }
+
+            var pan = data.button == PointerEventData.InputButton.Middle
+                || Key(KeyCode.LeftShift) + Key(KeyCode.RightShift) > 0f;
+            var height = PaneHeight();
+            if (pan)
+            {
+                _camera.Pan(data.delta, _panDepth, height);
+            }
+            else
+            {
+                _camera.Drag(data.delta, height);
+            }
+        }
+
+        private static void OnScroll(PointerEventData data)
+        {
+            if (_camera == null)
+            {
+                return;
+            }
+
+            if (Captured || !_raycast.ScreenToViewport(data.position, out var at))
+            {
+                // With the cursor held there is nothing to aim with, so the middle it is.
+                at = new Vector2(0.5f, 0.5f);
+            }
+
+            Bindings.Wheel(data.scrollDelta.y, at);
+        }
+
+        private static float PaneHeight()
+        {
+            var canvas = _image != null ? _image.canvas : null;
+            return _image.rectTransform.rect.height * (canvas != null ? canvas.scaleFactor : 1f);
+        }
+
+        // ---------- widgets ----------
+
+        private static void ShowSelectRect(Vector2 from, Vector2 to)
+        {
+            if (_selectRect == null || _image == null)
+            {
+                return;
+            }
+
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_image.rectTransform, from, null, out var a)
+                || !RectTransformUtility.ScreenPointToLocalPointInRectangle(_image.rectTransform, to, null, out var b))
+            {
+                return;
+            }
+
+            var rect = _selectRect.rectTransform;
+            rect.anchoredPosition = Vector2.Min(a, b);
+            rect.sizeDelta = new Vector2(Mathf.Abs(a.x - b.x), Mathf.Abs(a.y - b.y));
+            _selectRect.gameObject.SetActive(true);
+        }
+
+        private static void HideSelectRect()
+        {
+            if (_selectRect != null && _selectRect.gameObject.activeSelf)
+            {
+                _selectRect.gameObject.SetActive(false);
+            }
+        }
+
+        private static void Build(RectTransform host)
+        {
+            _image = UiBuild.Rect("View", host).gameObject.AddComponent<RawImage>();
+            UiBuild.Stretch(_image.rectTransform, Inset, Inset, Inset, Inset);
+            _image.color = new Color(0f, 0f, 0f, 0f);   // nothing to show until the first render
+            _image.raycastTarget = true;
+            _image.gameObject.AddComponent<ViewportPointer>();
+
+            _crosshair = UiBuild.Rect("Crosshair", _image.rectTransform).gameObject;
+            UiBuild.Stretch((RectTransform)_crosshair.transform);
+            Bar("H", _crosshair.transform, new Vector2(14f, 2f));
+            Bar("V", _crosshair.transform, new Vector2(2f, 14f));
+            _crosshair.SetActive(false);
+
+            _aimName = UiBuild.OverPicture(
+                UiBuild.Label("AimName", _image.rectTransform, "", 15f, TextAlignmentOptions.Top, UiTheme.Text));
+            Centre(_aimName.rectTransform, new Vector2(0f, -80f), new Vector2(420f, 22f));
+
+            _hints = HintBar.Create("Hints", _image.rectTransform);
+            Strip(_hints.Rect, false, 8f, HintBar.Height);
+
+            _placeLine = UiBuild.OverPicture(
+                UiBuild.Label("Placing", _image.rectTransform, "", 17f, TextAlignmentOptions.TopLeft, UiTheme.Accent));
+            Strip(_placeLine.rectTransform, true, 10f, 24f);
+
+            _stateLine = UiBuild.OverPicture(
+                UiBuild.Label("PlaceState", _image.rectTransform, "", 14f, TextAlignmentOptions.TopLeft, UiTheme.TextDim));
+            Strip(_stateLine.rectTransform, true, 36f, 20f);
+            _placeLine.gameObject.SetActive(false);
+            _stateLine.gameObject.SetActive(false);
+
+            _selectRect = UiBuild.Panel("SelectRect", _image.rectTransform, null, new Color(1f, 0.71f, 0.3f, 0.22f));
+            _selectRect.type = Image.Type.Simple;
+            _selectRect.raycastTarget = false;
+            _selectRect.rectTransform.anchorMin = _selectRect.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+            _selectRect.rectTransform.pivot = Vector2.zero;
+            _selectRect.gameObject.SetActive(false);
+        }
+
+        /// <summary>A label pinned to the middle of the pane.</summary>
+        private static void Centre(RectTransform rect, Vector2 offset, Vector2 size)
+        {
+            rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = offset;
+            rect.sizeDelta = size;
+        }
+
+        /// <summary>A line of text across the pane, a set distance from its top or its bottom.</summary>
+        private static void Strip(RectTransform rect, bool fromTop, float distance, float height)
+        {
+            var y = fromTop ? 1f : 0f;
+            rect.anchorMin = new Vector2(0f, y);
+            rect.anchorMax = new Vector2(1f, y);
+            rect.pivot = new Vector2(0.5f, y);
+            if (fromTop)
+            {
+                rect.offsetMin = new Vector2(12f, -distance - height);
+                rect.offsetMax = new Vector2(-12f, -distance);
+            }
+            else
+            {
+                rect.offsetMin = new Vector2(12f, distance);
+                rect.offsetMax = new Vector2(-12f, distance + height);
+            }
+        }
+
+        private static void Bar(string name, Transform parent, Vector2 size)
+        {
+            var bar = UiBuild.Panel(name, parent, null, new Color(1f, 1f, 1f, 0.7f)).rectTransform;
+            bar.anchorMin = bar.anchorMax = new Vector2(0.5f, 0.5f);
+            bar.pivot = new Vector2(0.5f, 0.5f);
+            bar.anchoredPosition = Vector2.zero;
+            bar.sizeDelta = size;
+        }
+
+        /// <summary>
+        /// The mouse over the picture. uGUI only sends drag, click and wheel events to a component
+        /// that asks for them, so the pane has this little one of its own.
+        /// </summary>
+        private sealed class ViewportPointer : MonoBehaviour,
+            IBeginDragHandler, IDragHandler, IScrollHandler,
+            IPointerDownHandler, IPointerUpHandler, IPointerClickHandler, IPointerMoveHandler
+        {
+            public void OnBeginDrag(PointerEventData eventData) => OnDragStart(eventData);
+
+            public void OnPointerMove(PointerEventData eventData) => MouseMoved(eventData.position);
+
+            public void OnDrag(PointerEventData eventData) => ViewportHost.OnDrag(eventData);
+
+            public void OnScroll(PointerEventData eventData) => ViewportHost.OnScroll(eventData);
+
+            public void OnPointerDown(PointerEventData eventData) => ViewportHost.OnPointerDown(eventData);
+
+            public void OnPointerUp(PointerEventData eventData) => ViewportHost.OnPointerUp(eventData);
+
+            public void OnPointerClick(PointerEventData eventData) => ViewportHost.OnPointerClick(eventData);
+        }
+    }
+}
