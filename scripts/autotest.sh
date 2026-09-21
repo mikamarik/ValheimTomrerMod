@@ -17,6 +17,9 @@
 #   ./scripts/autotest.sh build_continue  continue an unfinished build: the key offers it first, the ghost stays put,
 #                                      a click builds what the materials pay for, Remove twice forgets it
 #                                      (not part of editor_all yet)
+#   ./scripts/autotest.sh card_materials  the hammer card's materials list: a row per item and station, have / need,
+#                                      colours, the footer, Continue, 12 items in two columns, a normal piece
+#                                      (not part of editor_all yet)
 #   ./scripts/autotest.sh editor_open  open the editor window with its key, check the input takeover
 #   ./scripts/autotest.sh editor_view  fill the 3D pane with a kit and drive the camera
 #   ./scripts/autotest.sh editor_files round-trip every blueprint and run the file commands

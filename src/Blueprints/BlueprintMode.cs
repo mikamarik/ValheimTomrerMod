@@ -384,6 +384,15 @@ namespace ValheimTomrer.Blueprints
         /// </summary>
         public static bool TryBuild(Player player)
         {
+            var built = Build(player);
+
+            // The card's materials list shows what is left right away, not half a second later.
+            BlueprintInfoCard.RefreshSoon();
+            return built;
+        }
+
+        private static bool Build(Player player)
+        {
             if (CurrentSite != null)
             {
                 return TryContinue(player, CurrentSite);

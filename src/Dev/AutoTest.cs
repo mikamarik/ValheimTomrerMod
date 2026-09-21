@@ -34,6 +34,7 @@ namespace ValheimTomrer.Dev
     /// "build_partial" builds what the materials pay for and what would stand, bottom to top;
     /// "build_sites" keeps what a click left unbuilt in a file, and shows its missing parts as ghosts;
     /// "build_continue" continues an unfinished build: locked preview, the finishing click, Remove twice;
+    /// "card_materials" checks the hammer card's materials list: rows, numbers, colours, footer, Continue, two columns;
     /// "editor_open" opens the editor window with its key and checks the input takeover;
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
@@ -213,6 +214,9 @@ namespace ValheimTomrer.Dev
                 case "build_continue":
                     scenario = TestBuildContinue(player);
                     break;
+                case "card_materials":
+                    scenario = TestCardMaterials(player);
+                    break;
                 case "editor_open":
                     scenario = TestEditorOpen(player);
                     break;
@@ -364,6 +368,7 @@ namespace ValheimTomrer.Dev
                 case "build_partial": return TestBuildPartial(player);
                 case "build_sites": return TestBuildSites(player);
                 case "build_continue": return TestBuildContinue(player);
+                case "card_materials": return TestCardMaterials(player);
                 case "blueprints": return TestBlueprints(player);
                 case "editor_open": return TestEditorOpen(player);
                 case "editor_view": return TestEditorView(player);
@@ -4693,6 +4698,532 @@ namespace ValheimTomrer.Dev
             yield return new WaitForSeconds(0.5f);
             yield return Screenshot("build-continue-3-inside");
             BlueprintMode.Exit();
+        }
+
+        // ---------- scenario: card_materials ----------
+
+        /// <summary>
+        /// The hammer card's materials list: a readable row per item and station, have / need, a bar,
+        /// and a footer. The Workshop with half its wood, then Continue on the build that click left,
+        /// then a made-up blueprint with 12 items in two columns, then a normal piece: the list goes
+        /// and the game's own slots come back.
+        /// </summary>
+        private static IEnumerator TestCardMaterials(Player player)
+        {
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            ClearSites();
+            yield return new WaitForSeconds(0.5f);
+            PieceCatalog.Ensure();
+
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Name == "Workshop");
+            ResolvedBlueprint resolved = null;
+            var error = "no Workshop kit";
+            if (kit == null || !ResolvedBlueprint.TryResolve(kit, out resolved, out error))
+            {
+                Check(false, "the workshop kit resolves: " + error);
+                yield break;
+            }
+
+            Unlock(player, resolved);
+            ClearInventoryExceptHammer(player);
+            yield return EquipHammer(player);
+            Check(MaterialList.Short(9999) == "9999" && MaterialList.Short(10000) == "10k" && MaterialList.Short(12345) == "12.3k",
+                $"big numbers: 9999 -> {MaterialList.Short(9999)}, 10000 -> {MaterialList.Short(10000)}, 12345 -> {MaterialList.Short(12345)}");
+
+            var chests = new List<Piece>();
+            yield return PlaceTestPiece(player, "piece_chest_wood", OnGround(player.transform.position, 180f, 5f), 0f, chests);
+            yield return new WaitForSeconds(0.5f);
+            var chest = chests[0] != null ? chests[0].GetComponentInChildren<Container>() : null;
+            Check(chest != null, "a wood chest stands 5 m behind the player");
+            if (chest == null)
+            {
+                yield break;
+            }
+
+            yield return CardHalfWood(player, resolved, chest);
+            yield return CardContinue(player, resolved);
+            RemoveOldTestBuildings(player);
+            ClearSites();
+            ClearInventoryExceptHammer(player);
+            yield return new WaitForSeconds(0.5f);
+            yield return CardTwelveItems(player);
+            yield return CardBigBlueprint(player, resolved);
+            yield return CardNormalPiece(player);
+
+            BlueprintMode.Exit();
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            ClearSites();
+            player.m_lastToolUseTime = 0f;
+            yield return new WaitForSeconds(1f);
+            var left = new List<Piece>();
+            Piece.GetAllPiecesInRadius(player.transform.position, 60f, left);
+            var mine = left.Count(p => p != null && p.GetCreator() == player.GetPlayerID());
+            Check(mine == 0 && SiteStore.All.Count == 0, $"nothing of the test is left standing ({mine}) and no site is kept ({SiteStore.All.Count})");
+        }
+
+        /// <summary>Waits for the card's next refresh, then two frames so the texts are drawn.</summary>
+        private static IEnumerator CardRefreshed()
+        {
+            BlueprintInfoCard.RefreshSoon();
+            var before = BlueprintInfoCard.Refreshes;
+            var waited = 0f;
+            while (BlueprintInfoCard.Refreshes == before && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            yield return null;
+            yield return null;
+        }
+
+        /// <summary>
+        /// Check 1: half the wood in the bag, the resin in the chest. One row per item and station, the
+        /// texts are MaterialTally's numbers, wood in Warn and resin in Good, the footer's count is the
+        /// plan's. Then the click: the list shows what is left in the very next frames.
+        /// </summary>
+        private static IEnumerator CardHalfWood(Player player, ResolvedBlueprint kit, Container chest)
+        {
+            ClearInventoryExceptHammer(player);
+            foreach (var cost in kit.TotalCost)
+            {
+                var name = cost.m_resItem.m_itemData.m_shared.m_name;
+                if (name == "$item_wood")
+                {
+                    AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, cost.m_amount / 2);
+                }
+                else
+                {
+                    AddTo(chest.GetInventory(), cost.m_resItem.gameObject.name, cost.m_amount);
+                }
+            }
+
+            yield return AimBlueprint(player, kit);
+            yield return CardRefreshed();
+            var hud = Hud.instance;
+            LogCard(hud);
+            var list = BlueprintInfoCard.List;
+            Check(BlueprintInfoCard.Visible && list != null && list.Visible, "blueprint mode: the materials list is on the card");
+            if (list == null)
+            {
+                yield break;
+            }
+
+            var slotsOn = hud.m_requirementItems.Count(s => s != null && s.activeInHierarchy);
+            Check(slotsOn == 0, $"the game's requirement slots are hidden: {slotsOn} on");
+
+            var sources = MaterialSources.Around(player);
+            var tally = MaterialTally.For(kit, null, sources);
+            var rows = list.ShownRows.ToList();
+            var want = kit.TotalCost.Count + kit.Stations.Count;
+            Check(rows.Count == want && tally.Rows.Count == kit.TotalCost.Count && tally.Stations.Count == kit.Stations.Count,
+                $"one row per item and station: {rows.Count} rows, the kit has {kit.TotalCost.Count} items and {kit.Stations.Count} stations");
+            CheckRowsMatch(rows, tally, "the Workshop");
+
+            var wood = rows.FirstOrDefault(r => r.Key == "$item_wood");
+            var full = rows.FirstOrDefault(r => !r.IsStation && r.Key != "$item_wood");
+            Check(wood != null && wood.Have.color == UiTheme.Warn && wood.Fill.color == UiTheme.Warn,
+                $"the wood row is short: its number and bar are Warn ({(wood != null ? wood.Have.text + wood.Need.text : "no row")})");
+            Check(full != null && full.Have.color == UiTheme.Good && full.Fill.color == UiTheme.Good,
+                $"a full item is Good: {(full != null ? full.Name.text + " " + full.Have.text + full.Need.text : "no row")}");
+            var bench = rows.FirstOrDefault(r => r.IsStation);
+            Check(bench != null && bench.State.text == "in blueprint" && bench.State.color == UiTheme.Accent,
+                $"the workbench row says the kit brings its own: '{(bench != null ? bench.State.text : "no row")}'");
+
+            var root = BlueprintMode.PreviewRoot;
+            var plan = root != null ? PartialBuild.Plan(kit, root.position, root.eulerAngles.y, null, sources, false).Count : -1;
+            var footer = list.Footer.text;
+            Check(plan > 0 && plan < kit.Parts.Count && footer == $"Can build now: {plan} of {kit.Parts.Count} pieces"
+                && list.Footer.color == UiTheme.Accent, $"the footer counts what the plan builds ({plan}): '{footer}'");
+            Check(list.Source.text == $"From: bag + {sources.ChestCount} {(sources.ChestCount == 1 ? "chest" : "chests")} within {sources.Range:0} m"
+                && sources.ChestCount >= 1, $"and where it comes from: '{list.Source.text}'");
+            CheckLabels(list);
+            CheckOnScreen("the Workshop's list");
+
+            var description = hud.m_pieceDescription.text;
+            Check(description.Contains("Wheel: rotate."), $"the normal hint line stays: '{description}'");
+
+            // Still: a refresh every 0.5 s, and the plan is not worked out again.
+            var refreshes = BlueprintInfoCard.Refreshes;
+            var plans = BlueprintInfoCard.PlanRuns;
+            var planAt = BlueprintInfoCard.LastPlanAt;
+            var previewAt = BlueprintMode.PreviewRoot != null ? BlueprintMode.PreviewRoot.position : Vector3.zero;
+            yield return new WaitForSeconds(1.6f);
+            var made = BlueprintInfoCard.Refreshes - refreshes;
+            Check(made >= 2 && made <= 4 && BlueprintInfoCard.PlanRuns == plans,
+                $"held still for 1.6 s: {made} refreshes, the plan ran {BlueprintInfoCard.PlanRuns - plans} more times"
+                + $" (last one {BlueprintInfoCard.LastPlanMs:0.00} ms, because: {BlueprintInfoCard.LastPlanReason}; made at {V4(planAt)}, the preview at {V4(previewAt)})");
+
+            // Ctrl+F3 hides the game's HUD, and the list with it.
+            hud.m_userHidden = true;
+            yield return null;
+            yield return null;
+            var hidden = !OnScreen(BlueprintInfoCard.Panel);
+            hud.m_userHidden = false;
+            yield return null;
+            yield return null;
+            Check(hidden && OnScreen(BlueprintInfoCard.Panel), $"the list hides with the HUD (Ctrl+F3) and comes back: hidden {hidden}");
+
+            yield return new WaitForSeconds(0.6f);
+            yield return Screenshot("card-materials-1");
+
+            // The click: part of it goes up, and the list says what is left in the next frames.
+            yield return AimBlueprint(player, kit);
+            refreshes = BlueprintInfoCard.Refreshes;
+            var clicked = BlueprintMode.TryBuild(player);
+            yield return null;
+            yield return null;
+            var after = MaterialSources.Around(player);
+            wood = list.ShownRows.FirstOrDefault(r => r.Key == "$item_wood");
+            Check(clicked && BlueprintInfoCard.Refreshes > refreshes && wood != null
+                && wood.Have.text == MaterialList.Short(after.Count("$item_wood")),
+                $"right after the click the list shows the wood left: '{(wood != null ? wood.Have.text : "no row")}', {after.Count("$item_wood")} in the bag");
+        }
+
+        /// <summary>
+        /// Check 2: Continue on the build the click left. The need column is what the missing pieces
+        /// cost, the footer starts "Built", and the hint line says what Continue does.
+        /// </summary>
+        private static IEnumerator CardContinue(Player player, ResolvedBlueprint kit)
+        {
+            var site = BlueprintMode.LastSite;
+            BlueprintMode.Exit();
+            yield return null;
+            if (site == null || !SiteStore.All.Contains(site))
+            {
+                Check(false, "the half-wood click kept an unfinished build");
+                yield break;
+            }
+
+            // Some wood, so the next click can build a little: the footer shows the "some" colour.
+            AddTo(player.GetInventory(), "Wood", 6);
+            SiteTracker.Refresh(player);
+            yield return WaitForGhosts(1);
+            FirstEntry(player);
+            yield return CardRefreshed();
+            var list = BlueprintInfoCard.List;
+            Check(BlueprintMode.CurrentSite == site && list != null && list.Visible, "Continue on it: the list is on the card");
+            if (list == null || BlueprintMode.CurrentSite != site)
+            {
+                yield break;
+            }
+
+            // What the parts not built yet cost, worked out here without MaterialTally.
+            var missing = new Dictionary<string, int>();
+            var stations = new HashSet<string>();
+            for (var i = 0; i < site.Total; i++)
+            {
+                if (site.Built[i])
+                {
+                    continue;
+                }
+
+                foreach (var cost in PartialBuild.CostOf(site.Resolved.Parts[i].Piece))
+                {
+                    missing.TryGetValue(cost.Key, out var had);
+                    missing[cost.Key] = had + cost.Value;
+                }
+
+                var station = site.Resolved.Parts[i].Piece.m_craftingStation;
+                if (station != null)
+                {
+                    stations.Add(station.m_name);
+                }
+            }
+
+            var rows = list.ShownRows.ToList();
+            var items = rows.Where(r => !r.IsStation).ToList();
+            Check(items.Count == missing.Count && rows.Count(r => r.IsStation) == stations.Count,
+                $"one row per item the missing pieces need: {items.Count} (want {missing.Count}), stations {rows.Count(r => r.IsStation)} (want {stations.Count})");
+            foreach (var row in items)
+            {
+                missing.TryGetValue(row.Key, out var need);
+                Check(row.Need.text == " / " + MaterialList.Short(need),
+                    $"{row.Name.text}: need is the missing pieces' cost, {need}: '{row.Need.text.Trim()}' (the whole kit: {kit.TotalCost.First(c => c.m_resItem.m_itemData.m_shared.m_name == row.Key).m_amount})");
+            }
+
+            CheckRowsMatch(rows, MaterialTally.For(site.Resolved, site.Built, MaterialSources.Around(player)), "Continue");
+            var footer = list.Footer.text;
+            Check(footer.StartsWith($"Built {site.BuiltCount} of {site.Total}.") && footer.EndsWith($"Can build now: {site.ReadyCount} more."),
+                $"the footer starts \"Built\" and counts the next click ({site.ReadyCount}): '{footer}'");
+            var description = Hud.instance.m_pieceDescription.text;
+            Check(description.Contains("Click: build what you can.") && description.Contains("twice: forget the plan.")
+                && !description.Contains("Wheel"), $"the hint line says what Continue does: '{description}'");
+            CheckLabels(list);
+            CheckOnScreen("the Continue list");
+
+            player.m_lookPitch = 10f;
+            yield return new WaitForSeconds(0.6f);
+            yield return Screenshot("card-materials-2");
+            BlueprintMode.Exit();
+        }
+
+        /// <summary>A made-up blueprint whose four pieces need 12 different items, all from the workbench.</summary>
+        private static Blueprint TwelveItems()
+        {
+            var twelve = new Blueprint { Name = "Twelve items", IconPrefab = "piece_bed02" };
+            void Add(string prefab, float x, float z, float yaw)
+            {
+                twelve.Pieces.Add(new BlueprintPiece { PrefabName = prefab, Position = new Vector3(x, 0f, z), Rotation = Quaternion.Euler(0f, yaw, 0f) });
+            }
+
+            Add("piece_bed02", -2.5f, 0f, 0f);
+            Add("piece_bathtub", 2f, 0f, 0f);
+            Add("piece_banner01", 0f, 2.5f, 0f);
+            Add("piece_groundtorch_wood", 0f, -1.5f, 0f);
+            return twelve;
+        }
+
+        /// <summary>Check 3: 12 items in two columns, every row on the screen and inside the list.</summary>
+        private static IEnumerator CardTwelveItems(Player player)
+        {
+            if (!ResolvedBlueprint.TryResolve(TwelveItems(), out var twelve, out var error))
+            {
+                Check(false, "the twelve-item blueprint resolves: " + error);
+                yield break;
+            }
+
+            Check(twelve.TotalCost.Count == 12, $"set-up: the made-up blueprint needs 12 items: {twelve.TotalCost.Count}");
+
+            // A third in full, a third half, a third none: all three looks at once.
+            ClearInventoryExceptHammer(player);
+            for (var i = 0; i < twelve.TotalCost.Count; i++)
+            {
+                var cost = twelve.TotalCost[i];
+                AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, i % 3 == 0 ? cost.m_amount : i % 3 == 1 ? cost.m_amount / 2 : 0);
+            }
+
+            yield return AimBlueprint(player, twelve);
+            yield return CardRefreshed();
+            var list = BlueprintInfoCard.List;
+            if (list == null)
+            {
+                Check(false, "the list exists");
+                yield break;
+            }
+
+            var rows = list.ShownRows.ToList();
+            var items = rows.Where(r => !r.IsStation).ToList();
+            Check(items.Count == 12 && rows.Count == 12 + twelve.Stations.Count && list.Columns == 2,
+                $"12 item rows and {twelve.Stations.Count} station rows, in {list.Columns} columns");
+            Check(rows.All(r => r.Rect.gameObject.activeInHierarchy) && rows.Count(r => r.Column == 0) > 0 && rows.Count(r => r.Column == 1) > 0,
+                $"every row is on: {rows.Count(r => r.Column == 0)} in the left column, {rows.Count(r => r.Column == 1)} in the right");
+            CheckRowsMatch(rows, MaterialTally.For(twelve, null, MaterialSources.Around(player)), "twelve items");
+
+            // Inside the list's background, not on top of each other, and not cut.
+            var panel = BlueprintInfoCard.Panel;
+            var inside = rows.All(r => Contains(panel, r.Rect));
+            var overlaps = 0;
+            for (var a = 0; a < rows.Count; a++)
+            {
+                for (var b = a + 1; b < rows.Count; b++)
+                {
+                    if (ScreenRect(rows[a].Rect).Overlaps(ScreenRect(rows[b].Rect)))
+                    {
+                        overlaps++;
+                    }
+                }
+            }
+
+            Check(inside && overlaps == 0, $"every row sits inside the list ({inside}) and none overlaps another ({overlaps})");
+            var cut = rows.Where(r => r.Name.isTextTruncated || (!r.IsStation && (r.Have.isTextTruncated || r.Need.isTextTruncated))).Select(r => r.Name.text).ToList();
+            Check(cut.Count == 0, "no name or number is cut short: " + (cut.Count == 0 ? "none" : string.Join(", ", cut)));
+            var footer = list.Footer;
+            Check(Contains(panel, footer.rectTransform) && Contains(panel, list.Source.rectTransform),
+                $"the footer sits inside the list: '{footer.text}' / '{list.Source.text}'");
+            CheckLabels(list);
+            CheckOnScreen("the twelve-item list");
+            Log("twelve items: " + string.Join(", ", rows.Select(r => $"{r.Name.text} {(r.IsStation ? r.State.text : r.Have.text + r.Need.text)}")));
+
+            yield return new WaitForSeconds(0.6f);
+            yield return Screenshot("card-materials-3");
+        }
+
+        /// <summary>
+        /// Not in the plan's list, but the choice it asks for: the Workshop 5 x 5 (400 pieces) with half
+        /// its wood. Its plan is slow, so while the preview moves it is not worked out again, and once the
+        /// preview holds still it is, once.
+        /// </summary>
+        private static IEnumerator CardBigBlueprint(Player player, ResolvedBlueprint kit)
+        {
+            var grid = new Blueprint { Name = "Workshop grid", IconPrefab = "piece_workbench" };
+            for (var gx = 0; gx < 5; gx++)
+            {
+                for (var gz = 0; gz < 5; gz++)
+                {
+                    var offset = new Vector3((gx - 2) * 8f, 0f, (gz - 2) * 8f);
+                    foreach (var part in kit.Parts)
+                    {
+                        grid.Pieces.Add(new BlueprintPiece { PrefabName = part.Prefab.name, Position = part.Source.Position + offset, Rotation = part.Source.Rotation });
+                    }
+                }
+            }
+
+            if (!ResolvedBlueprint.TryResolve(grid, out var big, out var error))
+            {
+                Check(false, "the 400-piece grid resolves: " + error);
+                yield break;
+            }
+
+            ClearInventoryExceptHammer(player);
+            foreach (var cost in big.TotalCost)
+            {
+                var name = cost.m_resItem.m_itemData.m_shared.m_name;
+                AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, name == "$item_wood" ? cost.m_amount / 2 : cost.m_amount);
+            }
+
+            yield return AimBlueprint(player, big);
+            yield return CardRefreshed();
+            yield return new WaitForSeconds(1.2f);
+            var first = BlueprintInfoCard.LastPlanMs;
+            var list = BlueprintInfoCard.List;
+            Log($"400-piece plan for the card: {first:0.0} ms ({BlueprintInfoCard.LastPlanReason}), footer '{(list != null ? list.Footer.text : "none")}'");
+
+            // Turn the view 20 degrees over 1.5 s: the preview slides across the ground to a new spot.
+            var runs = BlueprintInfoCard.PlanRuns;
+            var start = player.m_lookYaw.eulerAngles.y;
+            var moving = 0f;
+            var travelled = 0f;
+            var root = BlueprintMode.PreviewRoot;
+            var was = root != null ? root.position : Vector3.zero;
+            while (moving < 1.5f)
+            {
+                moving += Time.deltaTime;
+                var yaw = Quaternion.Euler(0f, start + (Mathf.Min(moving / 1.5f, 1f) * 20f), 0f);
+                player.m_lookYaw = yaw;
+                player.transform.rotation = yaw;
+                player.m_body.rotation = yaw;
+                yield return null;
+                root = BlueprintMode.PreviewRoot;
+                if (root != null)
+                {
+                    travelled += (root.position - was).magnitude;
+                    was = root.position;
+                }
+            }
+
+            var whileMoving = BlueprintInfoCard.PlanRuns - runs;
+            yield return new WaitForSeconds(1.5f);
+            var afterStill = BlueprintInfoCard.PlanRuns - runs - whileMoving;
+            Check(first > 5.0 && travelled > 2f && whileMoving == 0 && afterStill == 1 && BlueprintInfoCard.LastPlanReason == "moved",
+                $"a slow plan ({first:0.0} ms) waits while the preview moves ({travelled:0.0} m in 1.5 s: {whileMoving} runs),"
+                + $" then runs once when it holds still ({afterStill}, because: {BlueprintInfoCard.LastPlanReason}, {BlueprintInfoCard.LastPlanMs:0.0} ms)");
+            ClearInventoryExceptHammer(player);
+        }
+
+        /// <summary>Check 4: a normal piece picked. The list goes, and the game fills its own slots again.</summary>
+        private static IEnumerator CardNormalPiece(Player player)
+        {
+            var before = BlueprintMode.Active && BlueprintInfoCard.Visible;
+            var wall = PiecePrefab("woodwall");
+            var picked = wall != null && player.SetSelectedPiece(wall);
+            yield return null;
+            yield return null;
+            var hud = Hud.instance;
+            var slotsOn = hud.m_requirementItems.Count(s => s != null && s.activeInHierarchy);
+            var want = wall != null ? wall.m_resources.Length + (wall.m_craftingStation != null ? 1 : 0) : -1;
+            Check(before && picked && !BlueprintMode.Active && !BlueprintInfoCard.Visible,
+                $"from blueprint mode with the list up ({before}), picking the wood wall leaves it and hides the list ({BlueprintInfoCard.Visible})");
+            Check(slotsOn == want && hud.m_buildSelection.text == Localization.instance.Localize(wall.m_name),
+                $"the game's own slots are back: {slotsOn} on, the wall has {wall.m_resources.Length} resources and a station; card '{hud.m_buildSelection.text}'");
+        }
+
+        /// <summary>Every shown row's texts are the tally's numbers, row by row.</summary>
+        private static void CheckRowsMatch(List<MaterialList.Row> rows, Tally tally, string what)
+        {
+            var wrong = new List<string>();
+            foreach (var item in tally.Rows)
+            {
+                var row = rows.FirstOrDefault(r => !r.IsStation && r.Key == item.Item);
+                if (row == null || row.Have.text != MaterialList.Short(item.Have) || row.Need.text != " / " + MaterialList.Short(item.Need)
+                    || row.Name.text != item.Name || row.Icon.sprite != item.Icon || row.Icon.sprite == null)
+                {
+                    wrong.Add(row == null ? item.Name + " has no row" : $"{item.Name}: '{row.Have.text}{row.Need.text}' want {item.Have} / {item.Need}");
+                }
+            }
+
+            foreach (var station in tally.Stations)
+            {
+                var row = rows.FirstOrDefault(r => r.IsStation && r.Key == station.Station);
+                if (row == null || row.Icon.sprite != station.Icon || row.Name.text != station.Name)
+                {
+                    wrong.Add(station.Name + (row == null ? " has no row" : " shows the wrong icon or name"));
+                }
+            }
+
+            Check(wrong.Count == 0, $"{what}: every row's icon, name, have and need are MaterialTally's"
+                + (wrong.Count == 0 ? $" ({tally.Rows.Count} items, {tally.Stations.Count} stations)" : ": " + string.Join("; ", wrong)));
+        }
+
+        /// <summary>Every label of the list is on the mod's own text material, never the shared vanilla one.</summary>
+        private static void CheckLabels(MaterialList list)
+        {
+            var labels = list.Root.GetComponentsInChildren<TMPro.TMP_Text>(true);
+            var wrong = labels.Count(l => l.fontSharedMaterial != UiTheme.FontMaterial);
+            Check(labels.Length > 0 && wrong == 0, $"all {labels.Length} labels use UiTheme.FontMaterial ({wrong} do not)");
+        }
+
+        private static void CheckOnScreen(string what)
+        {
+            var rect = ScreenRect(BlueprintInfoCard.Panel);
+            var fits = rect.xMin >= 0f && rect.yMin >= 0f && rect.xMax <= Screen.width && rect.yMax <= Screen.height;
+            Check(fits, $"{what} fits on the screen: pixels ({rect.xMin:0},{rect.yMin:0})-({rect.xMax:0},{rect.yMax:0}) of {Screen.width}x{Screen.height}");
+        }
+
+        private static bool OnScreen(RectTransform rect)
+        {
+            return rect != null && ScreenRect(rect).Overlaps(new Rect(0f, 0f, Screen.width, Screen.height));
+        }
+
+        /// <summary>A rect's box in screen pixels. The HUD is an overlay canvas, so world corners are pixels.</summary>
+        private static Rect ScreenRect(RectTransform rect)
+        {
+            if (rect == null)
+            {
+                return new Rect(-1f, -1f, 0f, 0f);
+            }
+
+            var corners = new Vector3[4];
+            rect.GetWorldCorners(corners);
+            return Rect.MinMaxRect(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
+        }
+
+        private static bool Contains(RectTransform outer, RectTransform inner)
+        {
+            var a = ScreenRect(outer);
+            var b = ScreenRect(inner);
+            return b.xMin >= a.xMin - 0.5f && b.yMin >= a.yMin - 0.5f && b.xMax <= a.xMax + 0.5f && b.yMax <= a.yMax + 0.5f;
+        }
+
+        /// <summary>The build card's children, for the log: where the name, the description and the slots sit.</summary>
+        private static void LogCard(Hud hud)
+        {
+            var panel = BlueprintInfoCard.Panel;
+            var card = panel != null ? panel.parent as RectTransform : null;
+            if (card == null)
+            {
+                return;
+            }
+
+            var text = new StringBuilder("card children:");
+            foreach (RectTransform child in card)
+            {
+                var image = child.GetComponent<UnityEngine.UI.Image>();
+                var label = child.GetComponent<TMPro.TMP_Text>();
+                text.Append($" | '{child.name}' on={child.gameObject.activeSelf} pos {V2(child.anchoredPosition)} size {V2(child.rect.size)}"
+                    + $" anchors {V2(child.anchorMin)}-{V2(child.anchorMax)} pivot {V2(child.pivot)}"
+                    + (image != null ? $" image '{(image.sprite != null ? image.sprite.name : "none")}' {image.color}" : "")
+                    + (label != null ? $" text {label.fontSize}pt '{label.text.Replace("\n", "\\n")}'" : ""));
+            }
+
+            var own = card.GetComponent<UnityEngine.UI.Image>();
+            text.Append($" | card image: {(own != null ? (own.sprite != null ? own.sprite.name : "no sprite") + " " + own.color : "none")}");
+            var screen = ScreenRect(card);
+            text.Append($" | card pixels ({screen.xMin:0},{screen.yMin:0})-({screen.xMax:0},{screen.yMax:0}), list pixels {ScreenRect(panel)}");
+            Log(text.ToString());
         }
 
         // ---------- scenario: editor_open ----------

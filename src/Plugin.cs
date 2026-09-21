@@ -73,6 +73,7 @@ namespace ValheimTomrer
         private void OnDestroy()
         {
             BlueprintMode.Exit();
+            BlueprintInfoCard.Destroy();
             SiteStore.Clear();
             EditorSession.Shutdown();
             _harmony?.UnpatchSelf();

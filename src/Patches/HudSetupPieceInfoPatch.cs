@@ -3,14 +3,20 @@ using HarmonyLib;
 
 namespace ValheimTomrer.Patches
 {
-    /// <summary>Shows the active blueprint in the vanilla build info card instead of the selected piece.</summary>
+    /// <summary>
+    /// Shows the active blueprint in the vanilla build card instead of the selected piece, with its
+    /// materials list. Anything else on the card (a normal piece, the build menu's hovered piece)
+    /// hides the list and keeps the game's own slots.
+    /// </summary>
     [HarmonyPatch(typeof(Hud), nameof(Hud.SetupPieceInfo))]
     internal static class HudSetupPieceInfoPatch
     {
         private static void Postfix(Hud __instance)
         {
-            if (!BlueprintMode.Active || Hud.IsPieceSelectionVisible() || Player.m_localPlayer == null)
+            if (!ValheimTomrerPlugin.ModEnabled.Value || !BlueprintMode.Active || Hud.IsPieceSelectionVisible()
+                || Player.m_localPlayer == null)
             {
+                BlueprintInfoCard.Hide();
                 return;
             }
 
