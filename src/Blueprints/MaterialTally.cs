@@ -84,9 +84,32 @@ namespace ValheimTomrer.Blueprints
         public static Tally For(
             ResolvedBlueprint blueprint, bool[] built, MaterialSources sources, bool costsOff = false, Vector3? stationsAt = null)
         {
+            var pieces = new List<Piece>(blueprint.Parts.Count);
+            foreach (var part in blueprint.Parts)
+            {
+                pieces.Add(part.Piece);
+            }
+
+            return For(pieces, blueprint.OwnStations, built, sources, costsOff, stationsAt);
+        }
+
+        /// <summary>
+        /// The same from a plain list of piece prefabs, for the editor's open document: it is no
+        /// <see cref="ResolvedBlueprint"/>, as it may hold pieces the game does not know.
+        /// </summary>
+        /// <param name="pieces">One entry per part, in part order.</param>
+        /// <param name="ownStations">Station tokens the parts build themselves ("in blueprint").</param>
+        public static Tally For(
+            IReadOnlyList<Piece> pieces,
+            ICollection<string> ownStations,
+            bool[] built,
+            MaterialSources sources,
+            bool costsOff = false,
+            Vector3? stationsAt = null)
+        {
             var tally = new Tally
             {
-                Total = blueprint.Parts.Count,
+                Total = pieces.Count,
                 Continuing = built != null,
                 CostsOff = costsOff,
             };
@@ -95,15 +118,16 @@ namespace ValheimTomrer.Blueprints
             var needs = new Dictionary<string, int>();
             var icons = new Dictionary<string, Sprite>();
             var stations = new List<CraftingStation>();
-            for (var i = 0; i < blueprint.Parts.Count; i++)
+            for (var i = 0; i < pieces.Count; i++)
             {
+                var piece = pieces[i];
+                Icons(piece, icons);
                 if (built != null && i < built.Length && built[i])
                 {
                     tally.BuiltCount++;
                     continue;
                 }
 
-                var piece = blueprint.Parts[i].Piece;
                 foreach (var cost in PartialBuild.CostOf(piece))
                 {
                     needs.TryGetValue(cost.Key, out var amount);
@@ -114,15 +138,6 @@ namespace ValheimTomrer.Blueprints
                 if (station != null && stations.All(s => s.m_name != station.m_name))
                 {
                     stations.Add(station);
-                }
-            }
-
-            foreach (var requirement in blueprint.TotalCost)
-            {
-                var item = requirement.m_resItem.m_itemData.m_shared.m_name;
-                if (!icons.ContainsKey(item))
-                {
-                    icons[item] = requirement.m_resItem.m_itemData.GetIcon();
                 }
             }
 
@@ -150,13 +165,31 @@ namespace ValheimTomrer.Blueprints
                     Name = Localize(station.m_name),
                     Icon = station.m_icon,
                     State = noStations ? StationState.NotNeeded
-                        : blueprint.OwnStations.Contains(station.m_name) ? StationState.InBlueprint
+                        : ownStations != null && ownStations.Contains(station.m_name) ? StationState.InBlueprint
                         : CraftingStation.HaveBuildStationInRange(station.m_name, at) != null ? StationState.InRange
                         : StationState.NotInRange,
                 });
             }
 
             return tally;
+        }
+
+        /// <summary>Each item's icon, from the first piece that costs it (built or not).</summary>
+        private static void Icons(Piece piece, Dictionary<string, Sprite> icons)
+        {
+            foreach (var requirement in piece.m_resources)
+            {
+                if (requirement.m_resItem == null || requirement.m_amount <= 0)
+                {
+                    continue;
+                }
+
+                var item = requirement.m_resItem.m_itemData.m_shared.m_name;
+                if (!icons.ContainsKey(item))
+                {
+                    icons[item] = requirement.m_resItem.m_itemData.GetIcon();
+                }
+            }
         }
 
         private static string Localize(string token)

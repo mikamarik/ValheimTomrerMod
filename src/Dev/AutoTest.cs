@@ -6648,29 +6648,6 @@ namespace ValheimTomrer.Dev
         private static List<Check> CheckProblemList(
             BlueprintDocument document, PieceEntry normal, PieceEntry seasonal, PieceEntry locked, string hoe)
         {
-            // Cost items plus station types, counted here and not by the card, so the card's own
-            // overflow row is checked against something independent.
-            var tokens = new HashSet<string>();
-            var stations = new HashSet<string>();
-            foreach (var entry in new[] { normal, seasonal, locked })
-            {
-                foreach (var cost in entry.Cost)
-                {
-                    if (cost.Amount > 0)
-                    {
-                        tokens.Add(cost.Token);
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(entry.StationToken))
-                {
-                    stations.Add(entry.StationToken);
-                }
-            }
-
-            var slots = BlueprintCard.SlotCount();
-            var needed = tokens.Count + stations.Count;
-
             var want = new List<string>
             {
                 "Error|Unknown piece vt_nosuchpiece (2x). The game skips the whole blueprint.",
@@ -6686,10 +6663,6 @@ namespace ValheimTomrer.Dev
                 + "The blueprint is not offered in build mode.");
             want.Add("Warning|1 piece with a scale other than 1. The mod builds them at normal size.");
             want.Add("Warning|2 pieces sit in the same spot as another piece of the same kind.");
-            if (needed > slots)
-            {
-                want.Add($"Warning|{needed} cost items and stations. The card shows only {slots}.");
-            }
 
             want.Add("Warning|The icon piece vt_missingicon is not in the blueprint. "
                 + "The game shows the first piece's icon.");
@@ -6712,7 +6685,7 @@ namespace ValheimTomrer.Dev
             return got;
         }
 
-        /// <summary>The rows the fixture cannot show: a line that cannot be read, empty, too big, a full card.</summary>
+        /// <summary>The rows the fixture cannot show: a line that cannot be read, empty, too big, and no card row for 12 items.</summary>
         private static void CheckOtherProblems(PieceEntry normal)
         {
             var empty = DocumentStore.New("Empty");
@@ -6744,50 +6717,26 @@ namespace ValheimTomrer.Dev
                     && c.Message == $"{many.Count} pieces. The mod reads at most {BlueprintFormat.MaxPieces}."),
                 $"{many.Count} pieces is one too many: {Row(rows, 0)}");
 
-            // A blueprint with more materials and stations than the card has squares.
-            var slots = BlueprintCard.SlotCount();
-            var full = DocumentStore.New("Full card");
-            var tokens = new HashSet<string>();
-            var stations = new HashSet<string>();
-            var x = 0f;
-            foreach (var entry in PieceCatalog.All)
+            // Twelve items and a station: the card used to show only six squares and warned about
+            // the rest. The list shows them all now, so there is no such row any more.
+            var twelve = TwelveItemsDocument();
+            rows = Checks.Run(twelve);
+            var cardRows = rows.Where(c => c.Message.Contains("card") || c.Message.Contains("cost items")).ToList();
+            Check(twelve.Pieces.Count == 4 && cardRows.Count == 0,
+                $"a 12-item blueprint has no card-slots problem: {cardRows.Count} rows about the card"
+                + (cardRows.Count > 0 ? $" ('{cardRows[0].Message}')" : ""));
+        }
+
+        /// <summary>The four pieces of <see cref="TwelveItems"/> as an editor document: 12 items, all from the workbench.</summary>
+        private static BlueprintDocument TwelveItemsDocument()
+        {
+            var document = DocumentStore.New("Twelve items");
+            foreach (var piece in TwelveItems().Pieces)
             {
-                if (tokens.Count + stations.Count > slots)
-                {
-                    break;
-                }
-
-                var before = tokens.Count + stations.Count;
-                foreach (var cost in entry.Cost)
-                {
-                    if (cost.Amount > 0)
-                    {
-                        tokens.Add(cost.Token);
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(entry.StationToken))
-                {
-                    stations.Add(entry.StationToken);
-                }
-
-                if (tokens.Count + stations.Count > before)
-                {
-                    full.AddPiece(entry.PrefabName, new Vector3(x += 4f, 0f, 0f), Quaternion.identity);
-                }
+                document.AddPiece(piece.PrefabName, piece.Position, piece.Rotation);
             }
 
-            var needed = tokens.Count + stations.Count;
-            var wanted = $"{needed} cost items and stations. The card shows only {slots}.";
-            rows = Checks.Run(full);
-            Check(needed > slots && rows.Any(c => c.Message == wanted),
-                $"{needed} cost items and stations do not fit on {slots} squares: '{wanted}'");
-
-            var card = BlueprintCard.Build(full);
-            Check(card.Slots.Count == slots && card.Hidden.Count == needed - slots,
-                $"the card keeps {card.Slots.Count} and hides {card.Hidden.Count}");
-            Check(card.Slots.Count < 2 || card.Slots[0].Amount >= card.Slots[1].Amount,
-                "the card's cost slots go from the most needed down");
+            return document;
         }
 
         private static string Row(List<Check> rows, int index)
@@ -6829,17 +6778,25 @@ namespace ValheimTomrer.Dev
 
             // ---- the name, with the card watching ----
             var undoBefore = document.UndoDepth;
-            var card = BlueprintCard.Build(document);
             Check(BlueprintPanel.CardText.StartsWith("A blueprint with problems\n")
                 && BlueprintPanel.CardText.Contains($"{document.Pieces.Count} pieces. Wheel: rotate."),
                 $"the card text reads '{BlueprintPanel.CardText.Replace("\n", " / ")}'");
-            Check(BlueprintPanel.FilledSlots == card.Slots.Count,
-                $"the card fills {BlueprintPanel.FilledSlots} of its {card.TotalSlots} squares");
+            CheckEditorMaterials(document, "the problem blueprint");
 
+            // A short list: the region grows to show all of the card, nothing to scroll.
+            yield return new WaitForSeconds(0.2f);
+            var view = BlueprintPanel.Scroll.viewport;
+            Check(Contains(view, BlueprintPanel.CardPanel) && BlueprintPanel.Scroll.content.rect.height <= view.rect.height + 0.5f,
+                $"the whole card is in sight without scrolling: region {EditorWindow.BlueprintBand:0} high, content "
+                + $"{BlueprintPanel.Scroll.content.rect.height:0}, the problem list keeps {EditorWindow.ChecksPane.rect.height:0}");
+
+            var refreshes = BlueprintPanel.MaterialRefreshes;
             BlueprintPanel.NameField.text = "Panel tes";
             BlueprintPanel.NameField.text = "Panel test 2";
             yield return null;
             yield return null;
+            Check(BlueprintPanel.MaterialRefreshes > refreshes,
+                $"a change to the blueprint works the list out again at once: {BlueprintPanel.MaterialRefreshes - refreshes} times");
             Check(document.Dirty && document.Name == "Panel test 2",
                 $"typing a name changed the blueprint: '{document.Name}', dirty={document.Dirty}");
             Check(document.UndoDepth == undoBefore + 1,
@@ -6914,11 +6871,228 @@ namespace ValheimTomrer.Dev
             yield return null;
             yield return Screenshot("editor-panels-1-right-panel");
 
+            yield return PanelsMaterials();
+
             // Esc steps back one thing at a time, so the selection has to go before the window.
             EditorState.Select(Array.Empty<int>());
             yield return PressKey(UnityEngine.InputSystem.Key.Escape);
             yield return new WaitForSeconds(0.5f);
             Check(!ModUi.Open, "Esc closed the editor");
+        }
+
+        /// <summary>
+        /// The materials list in the editor's card, worked out here without the panel: one row per
+        /// item the document's hammer pieces cost and one per station, have = what
+        /// <see cref="MaterialSources.Around"/> counts where the player stands, a station in range of
+        /// the player (not of the blueprint) or in the blueprint itself. No footer, own text material,
+        /// and nothing in the list the panel walk could step into.
+        /// </summary>
+        private static void CheckEditorMaterials(BlueprintDocument document, string what)
+        {
+            var player = Player.m_localPlayer;
+            var list = BlueprintPanel.List;
+            if (list == null || player == null)
+            {
+                Check(false, $"{what}: the editor's card has a materials list");
+                return;
+            }
+
+            var items = new HashSet<string>();
+            var stations = new HashSet<string>();
+            var own = new HashSet<string>();
+            foreach (var piece in document.Pieces)
+            {
+                var entry = PieceCatalog.Find(piece.PrefabName);
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                foreach (var cost in entry.Cost.Where(c => c.Amount > 0))
+                {
+                    items.Add(cost.Token);
+                }
+
+                if (!string.IsNullOrEmpty(entry.StationToken))
+                {
+                    stations.Add(entry.StationToken);
+                }
+
+                if (!string.IsNullOrEmpty(entry.OwnStationToken))
+                {
+                    own.Add(entry.OwnStationToken);
+                }
+            }
+
+            var rows = list.ShownRows.ToList();
+            Check(rows.Count == items.Count + stations.Count && rows.Count(r => !r.IsStation) == items.Count,
+                $"{what}: one row per item and station, {rows.Count} rows for {items.Count} items and {stations.Count} stations");
+
+            var sources = MaterialSources.Around(player);
+            var wrongHave = rows.Where(r => !r.IsStation && r.Have.text != MaterialList.Short(sources.Count(r.Key)))
+                .Select(r => $"{r.Name.text} shows {r.Have.text}, the world has {sources.Count(r.Key)}").ToList();
+            Check(wrongHave.Count == 0, $"{what}: every have is MaterialSources.Around(player).Count"
+                + (wrongHave.Count == 0 ? $" ({string.Join(", ", rows.Where(r => !r.IsStation).Select(r => r.Name.text + " " + r.Have.text + r.Need.text))})"
+                    : ": " + string.Join("; ", wrongHave)));
+            CheckRowsMatch(rows, BlueprintCard.Materials(document, sources, false), what);
+
+            var noStations = ZoneSystem.instance != null && ZoneSystem.instance.GetGlobalKey(GlobalKeys.NoWorkbench);
+            var wrongState = new List<string>();
+            foreach (var row in rows.Where(r => r.IsStation))
+            {
+                var want = noStations ? "not needed"
+                    : own.Contains(row.Key) ? "in blueprint"
+                    : CraftingStation.HaveBuildStationInRange(row.Key, player.transform.position) != null ? "in range"
+                    : "not in range";
+                if (row.State.text != want)
+                {
+                    wrongState.Add($"{row.Name.text} says '{row.State.text}', want '{want}'");
+                }
+            }
+
+            Check(wrongState.Count == 0, $"{what}: a station is in range of the player or in the blueprint: "
+                + (wrongState.Count == 0 ? string.Join(", ", rows.Where(r => r.IsStation).Select(r => r.Name.text + " " + r.State.text)) : string.Join("; ", wrongState)));
+            Check(!list.Footer.gameObject.activeSelf && list.Columns == 1,
+                $"{what}: no footer in the editor, one column (panel {list.Width:0} wide)");
+            CheckLabels(list);
+
+            var texts = BlueprintPanel.CardPanel.GetComponentsInChildren<TMPro.TMP_Text>(true).Select(t => t.text).ToList();
+            Check(texts.All(t => !t.Contains("Not shown") && !t.Contains("slots")),
+                $"{what}: no \"Not shown\" or slots text in the card's {texts.Count} texts");
+            var selectables = list.Root.GetComponentsInChildren<UnityEngine.UI.Selectable>(true).Length;
+            Check(selectables == 0, $"{what}: the list holds nothing the panel walk could step into ({selectables} selectables)");
+        }
+
+        /// <summary>
+        /// A 12-item blueprint in the open window: 12 item rows and the workbench, none cut, none
+        /// overlapping, all inside the card; the region scrolls to show the last one. The list follows
+        /// the bag within a second while the window is open, and reads the chests once a second at most.
+        /// </summary>
+        private static IEnumerator PanelsMaterials()
+        {
+            var player = Player.m_localPlayer;
+            if (!ResolvedBlueprint.TryResolve(TwelveItems(), out var twelve, out var error))
+            {
+                Check(false, "the twelve-item blueprint resolves: " + error);
+                yield break;
+            }
+
+            // A third in full, a third half, a third none: all three looks at once. Taken back at the end.
+            var added = new List<KeyValuePair<string, int>>();
+            for (var i = 0; i < twelve.TotalCost.Count; i++)
+            {
+                var cost = twelve.TotalCost[i];
+                var amount = i % 3 == 0 ? cost.m_amount : i % 3 == 1 ? cost.m_amount / 2 : 0;
+                var before = player.GetInventory().CountItems(cost.m_resItem.m_itemData.m_shared.m_name);
+                AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, amount);
+                added.Add(new KeyValuePair<string, int>(
+                    cost.m_resItem.m_itemData.m_shared.m_name,
+                    player.GetInventory().CountItems(cost.m_resItem.m_itemData.m_shared.m_name) - before));
+            }
+
+            var document = TwelveItemsDocument();
+            EditorState.Select(Array.Empty<int>());
+            EditorSession.Replace(document);
+            yield return null;
+            yield return null;
+            yield return null;
+            Check(EditorSession.Document == document && twelve.TotalCost.Count == 12,
+                $"the window shows the 12-item blueprint ({twelve.TotalCost.Count} items, {twelve.Stations.Count} station)");
+            CheckEditorMaterials(document, "twelve items");
+
+            var list = BlueprintPanel.List;
+            var rows = list.ShownRows.ToList();
+            Check(rows.Count(r => !r.IsStation) == 12 && rows.Count == 12 + twelve.Stations.Count,
+                $"12 item rows and {rows.Count(r => r.IsStation)} station row");
+            Check(!Checks.Run(document).Any(c => c.Message.Contains("card")), "and no card-slots problem in the problem list");
+
+            var card = BlueprintPanel.CardPanel;
+            var inside = rows.All(r => Contains(card, r.Rect));
+            var overlaps = 0;
+            for (var a = 0; a < rows.Count; a++)
+            {
+                for (var b = a + 1; b < rows.Count; b++)
+                {
+                    overlaps += ScreenRect(rows[a].Rect).Overlaps(ScreenRect(rows[b].Rect)) ? 1 : 0;
+                }
+            }
+
+            var cut = rows.Where(r => r.Name.isTextTruncated || (!r.IsStation && (r.Have.isTextTruncated || r.Need.isTextTruncated))
+                || (r.IsStation && r.State.isTextTruncated)).Select(r => r.Name.text).ToList();
+            Check(inside && overlaps == 0 && cut.Count == 0,
+                $"every row inside the card ({inside}), none overlapping ({overlaps}), none cut short ({(cut.Count == 0 ? "none" : string.Join(", ", cut))})");
+
+            // Taller than the window allows: the region grows until the problem list keeps its least,
+            // then scrolls, and at the bottom the last row is in sight.
+            yield return new WaitForSeconds(0.2f);
+            var scroll = BlueprintPanel.Scroll;
+            var view = scroll.viewport;
+            var checksLeft = EditorWindow.ChecksPane.rect.height;
+            var grown = scroll.content.rect.height > view.rect.height + 0.5f
+                ? checksLeft >= 159.5f && checksLeft <= 161f
+                : Contains(view, card);
+            Check(grown && view.rect.height > 360f,
+                $"the region grew to {EditorWindow.BlueprintBand:0} (view {view.rect.height:0}, content {scroll.content.rect.height:0}, "
+                + $"card {card.rect.height:0}, list {list.Height:0}); the problem list keeps {checksLeft:0}");
+            scroll.verticalNormalizedPosition = 0f;
+            yield return null;
+            yield return null;
+            var last = rows[rows.Count - 1];
+            Check(Contains(view, last.Rect),
+                $"scrolled to the bottom, the last row ('{last.Name.text} {last.State.text}') is in sight");
+            // The items above teach the cut-down recipe list "new" recipes, and the game's popups for
+            // them would cover the left panel in the picture. A test artefact: clear them.
+            if (MessageHud.instance != null)
+            {
+                MessageHud.instance.ClearUnlockQueue();
+                MessageHud.instance.HideAll();
+            }
+
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("editor-panels-card");
+
+            // The bag changes with the window open: the list follows within a second.
+            var first = rows.First(r => !r.IsStation);
+            var firstCost = twelve.TotalCost.First(c => c.m_resItem.m_itemData.m_shared.m_name == first.Key);
+            var wasText = first.Have.text;
+            AddTo(player.GetInventory(), firstCost.m_resItem.gameObject.name, 1);
+            added.Add(new KeyValuePair<string, int>(first.Key, 1));
+            var refreshes = BlueprintPanel.MaterialRefreshes;
+            var reads = BlueprintPanel.SourceReads;
+            var waited = 0f;
+            var want = MaterialList.Short(MaterialSources.Around(player).Count(first.Key));
+            while (first.Have.text != want && waited < 3f)
+            {
+                waited += Time.unscaledDeltaTime;
+                yield return null;
+            }
+
+            Check(first.Have.text == want && waited <= BlueprintPanel.MaterialsPeriod + 0.2f,
+                $"one more {first.Name.text} in the bag shows in {waited:0.00} s: '{wasText}' -> '{first.Have.text}'");
+
+            // Held still for 2.5 s: two or three refreshes, never one a frame, and one read of the chests each.
+            refreshes = BlueprintPanel.MaterialRefreshes;
+            reads = BlueprintPanel.SourceReads;
+            var frames = 0;
+            waited = 0f;
+            while (waited < 2.5f)
+            {
+                waited += Time.unscaledDeltaTime;
+                frames++;
+                yield return null;
+            }
+
+            var made = BlueprintPanel.MaterialRefreshes - refreshes;
+            var read = BlueprintPanel.SourceReads - reads;
+            Check(made >= 2 && made <= 3 && read <= made,
+                $"with nothing changing, {made} refreshes in {frames} frames over 2.5 s, {read} reads of the chests");
+
+            foreach (var item in added.Where(a => a.Value > 0))
+            {
+                player.GetInventory().RemoveItem(item.Key, item.Value);
+            }
+
+            scroll.verticalNormalizedPosition = 1f;
         }
 
         private static string Named(PieceEntry entry)

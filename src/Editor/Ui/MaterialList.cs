@@ -9,8 +9,8 @@ namespace ValheimTomrer.Editor.Ui
 {
     /// <summary>
     /// The materials list: one row per item (icon, name, have / need, a bar), one per station, and a
-    /// footer line ("Can build now: 34 of 120 pieces"). More than <see cref="OneColumnRows"/> rows go
-    /// in two columns. Nothing is ever hidden.
+    /// footer line ("Can build now: 34 of 120 pieces", <see cref="FooterShown"/>). More than
+    /// <see cref="OneColumnRows"/> rows go in two columns, when the caller allows two. No row is ever hidden.
     ///
     /// Knows nothing about where it sits: the caller gives the parent, the width, the most columns and
     /// the least height, and reads <see cref="Height"/> back. Rows are pooled, and a text is set only
@@ -47,6 +47,7 @@ namespace ValheimTomrer.Editor.Ui
         private int _columns;
         private float _laidOutWidth = -1f;
         private float _laidOutMinHeight = -1f;
+        private bool _laidOutFooter = true;
         private float _haveWidth;
         private float _needWidth;
 
@@ -67,6 +68,12 @@ namespace ValheimTomrer.Editor.Ui
         /// is left above its line, never under it. 0: only as tall as the rows and the footer.
         /// </summary>
         public float MinHeight { get; set; }
+
+        /// <summary>
+        /// False hides the footer and its line: the list is then only the rows. The editor's panel
+        /// does this, as it has no spot to plan "Can build now" at.
+        /// </summary>
+        public bool FooterShown { get; set; } = true;
 
         /// <summary>What the rows and the footer take, at least <see cref="MinHeight"/>. After <see cref="Show"/>.</summary>
         public float Height { get; private set; }
@@ -169,13 +176,14 @@ namespace ValheimTomrer.Editor.Ui
 
             var columns = ColumnsFor(count, MaxColumns);
             var relaid = numbersChanged || count != _shown || columns != _columns || !Mathf.Approximately(Width, _laidOutWidth)
-                || !Mathf.Approximately(MinHeight, _laidOutMinHeight);
+                || !Mathf.Approximately(MinHeight, _laidOutMinHeight) || FooterShown != _laidOutFooter;
             if (relaid)
             {
                 _shown = count;
                 _columns = columns;
                 _laidOutWidth = Width;
                 _laidOutMinHeight = MinHeight;
+                _laidOutFooter = FooterShown;
                 MeasureNumbers(count);
                 Layout(count);
             }
@@ -232,6 +240,19 @@ namespace ValheimTomrer.Editor.Ui
 
         private void ShowFooter(Tally tally, bool relaid)
         {
+            SetOn(_footer.gameObject, FooterShown);
+            SetOn(_line.gameObject, FooterShown);
+            if (!FooterShown)
+            {
+                if (relaid)
+                {
+                    Height = Mathf.Max(RowsHeight, MinHeight);
+                    Root.sizeDelta = new Vector2(Width, Height);
+                }
+
+                return;
+            }
+
             string text;
             Color colour;
             if (tally.CanBuildNow < 0)
@@ -282,6 +303,14 @@ namespace ValheimTomrer.Editor.Ui
 
             label.text = text;
             return true;
+        }
+
+        private static void SetOn(GameObject go, bool on)
+        {
+            if (go.activeSelf != on)
+            {
+                go.SetActive(on);
+            }
         }
 
         private static void TopLeft(RectTransform rect)

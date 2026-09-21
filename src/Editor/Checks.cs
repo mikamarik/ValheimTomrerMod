@@ -79,7 +79,6 @@ namespace ValheimTomrer.Editor
             Scaled(found, pieces);
             SameSpotPieces(found, pieces);
             Falling(found, pieces);
-            CardSlots(found, document);
             Icon(found, document);
             Origin(found, pieces);
 
@@ -365,17 +364,6 @@ namespace ValheimTomrer.Editor
                     $"{Plural(fallen.Count, "piece")} would fall down in the game. Nothing holds "
                         + (fallen.Count == 1 ? "it" : "them") + " up.",
                     fallen.ToArray());
-            }
-        }
-
-        private static void CardSlots(List<Check> found, BlueprintDocument document)
-        {
-            var card = BlueprintCard.Build(document);
-            if (card.Hidden.Count > 0)
-            {
-                Add(found, CheckLevel.Warning,
-                    $"{card.Slots.Count + card.Hidden.Count} cost items and stations. "
-                        + $"The card shows only {card.TotalSlots}.");
             }
         }
 
