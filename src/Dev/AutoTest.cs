@@ -49,7 +49,8 @@ namespace ValheimTomrer.Dev
     /// "editor_build" builds a blueprint made in the editor, in the world, and edits it again;
     /// "editor_capture" builds a kit turned 45 degrees, captures it with the turned rectangle, and compares it to the file;
     /// "editor_support" holds the editor's support rule against the game's, then checks the ghost's colours;
-    /// "editor_all" runs every scenario above in one game, then checks the mod wrote no art.
+    /// "editor_all" runs every scenario above but probe_build in one game, then checks the mod wrote
+    /// no art, in the unfinished-build folder too.
     /// </summary>
     internal static class AutoTest
     {
@@ -333,7 +334,8 @@ namespace ValheimTomrer.Dev
             var names = (Environment.GetEnvironmentVariable("VT_CHAIN")
                 ?? "dump,probe,editor_open,editor_view,editor_files,editor_palette,editor_snap,"
                 + "editor_edit,editor_panels,editor_keys,editor_pad,editor_focus,editor_keep,editor_build,"
-                + "editor_capture,editor_support,blueprints")
+                + "editor_capture,editor_support,blueprints,build_sources,build_partial,build_sites,"
+                + "build_continue,card_materials")
                 .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
 
             foreach (var name in names)
@@ -438,9 +440,46 @@ namespace ValheimTomrer.Dev
         }
 
         /// <summary>
+        /// What the art walk found before a scenario cleared its unfinished builds. The chain clears
+        /// the sites folder between scenarios, so the walk at the end never sees a site file.
+        /// </summary>
+        private static readonly HashSet<string> StraysSeen = new HashSet<string>();
+
+        private static readonly HashSet<string> SiteFilesSeen = new HashSet<string>();
+
+        /// <summary>The files of the unfinished builds the store held, told by the store, not the walk.</summary>
+        private static readonly HashSet<string> SitesKept = new HashSet<string>();
+
+        /// <summary>One art walk now, kept for the guard at the end of the chain.</summary>
+        private static void NoteWrittenFiles()
+        {
+            foreach (var site in SiteStore.All)
+            {
+                if (!string.IsNullOrEmpty(site.Path) && File.Exists(site.Path))
+                {
+                    SitesKept.Add(Path.GetFullPath(site.Path));
+                }
+            }
+
+            var walk = WalkWrittenFiles();
+            StraysSeen.UnionWith(walk.Strays);
+            SiteFilesSeen.UnionWith(walk.SiteFiles);
+        }
+
+        private sealed class ArtWalk
+        {
+            public readonly List<string> Strays = new List<string>();
+            public readonly List<string> SiteFiles = new List<string>();
+            public int Blueprints;
+        }
+
+        /// <summary>
         /// The one rule the whole mod hangs on: it writes blueprints and nothing else. Walks every
         /// folder the mod can write to and fails on anything that is not a .blueprint text file or
-        /// the autotest's own output (screenshots, .txt reports, the log, the test worlds).
+        /// the autotest's own output (screenshots, .txt reports, the log, the test worlds). Also
+        /// fails when the walks missed an unfinished-build file the store kept, or saw none at all,
+        /// so a change to the folder list cannot drop the sites folder without anyone noticing.
+        /// A VT_CHAIN run in which no scenario kept a site skips that part with a note.
         /// </summary>
         private static void CheckNoArtWritten()
         {
@@ -452,8 +491,51 @@ namespace ValheimTomrer.Dev
                 ".shader", ".shadergraph", ".spriteatlas", ".ttf", ".otf", ".anim", ".controller",
             };
 
-            var strays = new List<string>();
+            var walk = WalkWrittenFiles();
+            var strays = new HashSet<string>(StraysSeen);
+            strays.UnionWith(walk.Strays);
+            var siteFiles = new HashSet<string>(SiteFilesSeen);
+            siteFiles.UnionWith(walk.SiteFiles);
+            var missed = SitesKept.Where(f => !siteFiles.Contains(f)).ToList();
+
+            var artFound = strays.Where(f => art.Contains(Ext(f))).ToList();
+            Check(walk.Blueprints > 0, $"the mod wrote {walk.Blueprints} blueprint files");
+            // The whole chain always keeps sites. A VT_CHAIN run of editor scenarios keeps none, and
+            // then there is nothing the walk could have missed.
+            if (Environment.GetEnvironmentVariable("VT_CHAIN") != null && SitesKept.Count == 0 && siteFiles.Count == 0)
+            {
+                Log("art guard: no scenario in this VT_CHAIN kept an unfinished build, so the sites check has nothing to look for");
+            }
+            else
+            {
+                Check(siteFiles.Count > 0 && missed.Count == 0,
+                    $"the walk saw {siteFiles.Count} unfinished-build files under {SiteStore.Root}, and every one of the {SitesKept.Count} the store kept"
+                    + (missed.Count > 0 ? " | not seen: " + string.Join(", ", missed.Take(5).ToArray()) : ""));
+            }
+
+            Check(artFound.Count == 0, artFound.Count == 0
+                ? "no image, mesh, material or bundle file anywhere the mod writes, sites included"
+                : "the mod wrote game art: " + string.Join(", ", artFound.ToArray()));
+            Check(strays.Count == 0, strays.Count == 0
+                ? "nothing but blueprints and test output on disk"
+                : $"{strays.Count} unexpected files: " + string.Join(", ", strays.Take(10).ToArray()));
+        }
+
+        /// <summary>Every folder the mod can write to, walked once. Changes nothing.</summary>
+        private static ArtWalk WalkWrittenFiles()
+        {
+            var result = new ArtWalk();
+            var strays = result.Strays;
             var blueprints = 0;
+            var sites = Path.GetFullPath(SiteStore.Root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+            void NoteSite(string file)
+            {
+                if (file.StartsWith(sites, StringComparison.Ordinal))
+                {
+                    result.SiteFiles.Add(Path.GetFullPath(file));
+                }
+            }
 
             // 1. The mod's own folder under BepInEx/config: blueprints only, and they must be text.
             var mine = Path.Combine(Paths.ConfigPath, "ValheimTomrer");
@@ -470,6 +552,7 @@ namespace ValheimTomrer.Dev
                 else
                 {
                     blueprints++;
+                    NoteSite(file);
                 }
             }
 
@@ -502,6 +585,10 @@ namespace ValheimTomrer.Dev
                     {
                         strays.Add(file + " (not text)");
                     }
+                    else
+                    {
+                        NoteSite(file);
+                    }
                 }
                 else if (ext == ".png" && inRoot)
                 {
@@ -513,14 +600,8 @@ namespace ValheimTomrer.Dev
                 }
             }
 
-            var artFound = strays.Where(f => art.Contains(Ext(f))).ToList();
-            Check(blueprints > 0, $"the mod wrote {blueprints} blueprint files");
-            Check(artFound.Count == 0, artFound.Count == 0
-                ? "no image, mesh, material or bundle file anywhere the mod writes"
-                : "the mod wrote game art: " + string.Join(", ", artFound.ToArray()));
-            Check(strays.Count == 0, strays.Count == 0
-                ? "nothing but blueprints and test output on disk"
-                : $"{strays.Count} unexpected files: " + string.Join(", ", strays.Take(10).ToArray()));
+            result.Blueprints = blueprints;
+            return result;
         }
 
         private static string[] Files(string folder)
@@ -3875,6 +3956,8 @@ namespace ValheimTomrer.Dev
         /// <summary>Every unfinished build forgotten, ghosts included, and the test's sites folder gone.</summary>
         private static void ClearSites()
         {
+            // The art guard runs at the end of the chain, when this folder is long gone. Walk it now.
+            NoteWrittenFiles();
             SiteStore.Clear();
             DeleteSitesFolder();
         }

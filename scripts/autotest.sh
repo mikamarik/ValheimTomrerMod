@@ -7,19 +7,15 @@
 #   ./scripts/autotest.sh probe_build  measure chests, support, ground, glow and the build card to
 #                                      .devtest/probe-build.txt (not part of editor_all)
 #   ./scripts/autotest.sh build_sources  build a kit paid from the inventory and chests at 5, 15 and 30 m
-#                                      (not part of editor_all yet)
 #   ./scripts/autotest.sh build_partial  build what the materials pay for and what would stand, bottom to
 #                                      top: half the wood, a two-storey house, nothing, everything, costs
-#                                      off, and the planner's time on 400 pieces (not part of editor_all yet)
+#                                      off, and the planner's time on 400 pieces
 #   ./scripts/autotest.sh build_sites  keep what a partial or empty click left as an unfinished build: its file,
 #                                      its ghosts with the hammer out nearby, what is built read from the world
-#                                      (not part of editor_all yet)
 #   ./scripts/autotest.sh build_continue  continue an unfinished build: the key offers it first, the ghost stays put,
 #                                      a click builds what the materials pay for, Remove twice forgets it
-#                                      (not part of editor_all yet)
 #   ./scripts/autotest.sh card_materials  the hammer card's materials list: a row per item and station, have / need,
 #                                      colours, the footer, Continue, 12 items in two columns, a normal piece
-#                                      (not part of editor_all yet)
 #   ./scripts/autotest.sh editor_open  open the editor window with its key, check the input takeover
 #   ./scripts/autotest.sh editor_view  fill the 3D pane with a kit and drive the camera
 #   ./scripts/autotest.sh editor_files round-trip every blueprint and run the file commands
@@ -34,7 +30,8 @@
 #   ./scripts/autotest.sh editor_build build a blueprint made in the editor, in the world, then edit it again
 #   ./scripts/autotest.sh editor_capture build a kit turned 45 degrees, capture it with the turned rectangle, compare it to the file
 #   ./scripts/autotest.sh editor_support build test structures, hold the editor's support rule against the game's
-#   ./scripts/autotest.sh editor_all   every scenario above in one game, then the "no game art" guard
+#   ./scripts/autotest.sh editor_all   every scenario above but probe_build in one game (about 10 minutes),
+#                                      then the "no game art" guard, sites folder included
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
 # VT_CHAIN="editor_build,blueprints" ./scripts/autotest.sh editor_all  runs only those, in that order.
 # VT_SUPPORT_EDITOR_ONLY=1 ./scripts/autotest.sh editor_support  skips building in the world (3 min less).
