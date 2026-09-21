@@ -72,6 +72,8 @@ namespace ValheimTomrer.Blueprints
         /// <summary>How many pieces one <see cref="Fill"/> step builds, so a big kit does not stall a frame.</summary>
         public const int PiecesPerStep = 8;
 
+        private static readonly Dictionary<GameObject, Bounds> PrefabBoxes = new Dictionary<GameObject, Bounds>();
+
         private static int _ghostLayer = -1;
 
         private readonly ResolvedBlueprint _blueprint;
@@ -526,6 +528,18 @@ namespace ValheimTomrer.Blueprints
             var box = copy.AddComponent<BoxCollider>();
             box.center = bounds.center;
             box.size = Vector3.Max(bounds.size, new Vector3(0.25f, 0.25f, 0.25f));
+        }
+
+        /// <summary>The box around a prefab's meshes, in the piece's own space. Measured once per prefab.</summary>
+        public static Bounds OwnBounds(GameObject prefab)
+        {
+            if (!PrefabBoxes.TryGetValue(prefab, out var box))
+            {
+                box = MeshBounds(prefab);
+                PrefabBoxes[prefab] = box;
+            }
+
+            return box;
         }
 
         /// <summary>The box around a copy's meshes, in the copy's own space.</summary>

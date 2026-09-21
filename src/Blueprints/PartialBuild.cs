@@ -85,10 +85,61 @@ namespace ValheimTomrer.Blueprints
             }
 
             // 3. The whole blueprint, once.
-            PieceCatalog.Ensure();
             var ground = GroundUnder(rootPosition, rootYaw);
-            var scene = new ScenePiece[count];
-            for (var i = 0; i < count; i++)
+            var scene = SceneOf(blueprint);
+            var exempt = Exempt(scene, ground, stats);
+
+            // 4. Height, then distance from the middle of the footprint, then file order.
+            var middle = FootprintMiddle(parts);
+            var order = unbuilt
+                .OrderBy(i => parts[i].Source.Position.y)
+                .ThenBy(i => Flat(parts[i].Source.Position, middle))
+                .ThenBy(i => i)
+                .ToList();
+
+            // 5. Rounds.
+            var stations = new StationCheck(blueprint, rootPosition, rootYaw);
+            var chosen = Rounds(order, taken, scene, ground, exempt, stations, costs, new Dictionary<string, int>(budget), stats);
+            Done(stats, "passes", watch);
+            return chosen;
+        }
+
+        /// <summary>
+        /// A plan with some of its parts left out, because someone stands where they go. The rest still
+        /// goes up only when it keeps its station and would still stand without them; in build order.
+        /// Nothing else is bought with what the left-out parts cost, so they stay next in line.
+        /// </summary>
+        public static List<int> Without(
+            ResolvedBlueprint blueprint, Vector3 rootPosition, float rootYaw, bool[] built, IEnumerable<int> chosen, ICollection<int> leftOut)
+        {
+            var rest = chosen.Where(i => !leftOut.Contains(i)).ToList();
+            if (leftOut.Count == 0 || rest.Count == 0)
+            {
+                return rest;
+            }
+
+            var count = blueprint.Parts.Count;
+            var taken = new bool[count];
+            if (built != null)
+            {
+                Array.Copy(built, taken, Math.Min(count, built.Length));
+            }
+
+            // Already paid for by the plan, so every part costs nothing here.
+            var ground = GroundUnder(rootPosition, rootYaw);
+            var scene = SceneOf(blueprint);
+            var free = Enumerable.Repeat(new List<KeyValuePair<string, int>>(), count).ToArray();
+            var stations = new StationCheck(blueprint, rootPosition, rootYaw);
+            return Rounds(rest, taken, scene, ground, Exempt(scene, ground, null), stations, free, new Dictionary<string, int>(), null);
+        }
+
+        /// <summary>Every part as the support model sees it, in the blueprint's own space.</summary>
+        private static ScenePiece[] SceneOf(ResolvedBlueprint blueprint)
+        {
+            PieceCatalog.Ensure();
+            var parts = blueprint.Parts;
+            var scene = new ScenePiece[parts.Count];
+            for (var i = 0; i < parts.Count; i++)
             {
                 var name = parts[i].Prefab.name;
                 scene[i] = new ScenePiece
@@ -101,9 +152,15 @@ namespace ValheimTomrer.Blueprints
                 };
             }
 
+            return scene;
+        }
+
+        /// <summary>Step 3: the parts that fall even with the whole blueprint built. The support check skips them.</summary>
+        private static bool[] Exempt(ScenePiece[] scene, Func<Vector3, float> ground, PlanStats stats)
+        {
             var whole = Support.Solve(scene, ground);
-            var exempt = new bool[count];
-            for (var i = 0; i < count; i++)
+            var exempt = new bool[scene.Length];
+            for (var i = 0; i < scene.Length; i++)
             {
                 exempt[i] = whole.Falls(i);
             }
@@ -114,17 +171,17 @@ namespace ValheimTomrer.Blueprints
                 stats.Exempt = exempt.Count(e => e);
             }
 
-            // 4. Height, then distance from the middle of the footprint, then file order.
-            var middle = FootprintMiddle(parts);
-            var order = unbuilt
-                .OrderBy(i => parts[i].Source.Position.y)
-                .ThenBy(i => Flat(parts[i].Source.Position, middle))
-                .ThenBy(i => i)
-                .ToList();
+            return exempt;
+        }
 
-            // 5. Rounds.
-            var stations = new StationCheck(blueprint, rootPosition, rootYaw);
-            var left = new Dictionary<string, int>(budget);
+        /// <summary>
+        /// Step 5: rounds until one adds nothing. Each round solves the support of what is taken so far,
+        /// then takes every part in order that is paid for, has its station, and would stand on that.
+        /// </summary>
+        private static List<int> Rounds(
+            List<int> order, bool[] taken, ScenePiece[] scene, Func<Vector3, float> ground, bool[] exempt,
+            StationCheck stations, List<KeyValuePair<string, int>>[] costs, Dictionary<string, int> left, PlanStats stats)
+        {
             var chosen = new List<int>();
             var placed = new PlacedPiece[1];
             var values = new float[1];
@@ -175,7 +232,6 @@ namespace ValheimTomrer.Blueprints
                 }
             }
 
-            Done(stats, "passes", watch);
             return chosen;
         }
 

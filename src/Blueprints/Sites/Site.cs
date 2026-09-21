@@ -71,6 +71,9 @@ namespace ValheimTomrer.Blueprints.Sites
 
         public int ReadyCount { get; internal set; }
 
+        /// <summary>The same parts in the order the click builds them: bottom to top. Null until planned once.</summary>
+        public IReadOnlyList<int> ReadyOrder { get; internal set; }
+
         /// <summary>What the last plan was made from. The plan runs again only when this changes.</summary>
         internal string ReadyKey { get; set; }
 

@@ -191,6 +191,7 @@ namespace ValheimTomrer.Blueprints.Sites
 
             site.Ready = ready;
             site.ReadyCount = chosen.Count;
+            site.ReadyOrder = chosen;
             site.ReadyKey = key;
             PlanRuns++;
         }
@@ -348,7 +349,8 @@ namespace ValheimTomrer.Blueprints.Sites
             }
         }
 
-        private static void Finish(Player player, Site site)
+        /// <summary>Every part stands: "X finished." and the file is deleted. Also the Continue click's last step.</summary>
+        public static void Finish(Player player, Site site)
         {
             LastMessage = $"{site.Name} finished.";
             player.Message(MessageHud.MessageType.TopLeft, LastMessage);

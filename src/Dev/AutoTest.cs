@@ -33,6 +33,7 @@ namespace ValheimTomrer.Dev
     /// "build_sources" builds a kit paid from the inventory and the chests in range, nearest first;
     /// "build_partial" builds what the materials pay for and what would stand, bottom to top;
     /// "build_sites" keeps what a click left unbuilt in a file, and shows its missing parts as ghosts;
+    /// "build_continue" continues an unfinished build: locked preview, the finishing click, Remove twice;
     /// "editor_open" opens the editor window with its key and checks the input takeover;
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
@@ -209,6 +210,9 @@ namespace ValheimTomrer.Dev
                 case "build_sites":
                     scenario = TestBuildSites(player);
                     break;
+                case "build_continue":
+                    scenario = TestBuildContinue(player);
+                    break;
                 case "editor_open":
                     scenario = TestEditorOpen(player);
                     break;
@@ -359,6 +363,7 @@ namespace ValheimTomrer.Dev
                 case "build_sources": return TestBuildSources(player);
                 case "build_partial": return TestBuildPartial(player);
                 case "build_sites": return TestBuildSites(player);
+                case "build_continue": return TestBuildContinue(player);
                 case "blueprints": return TestBlueprints(player);
                 case "editor_open": return TestEditorOpen(player);
                 case "editor_view": return TestEditorView(player);
@@ -4203,6 +4208,491 @@ namespace ValheimTomrer.Dev
             player.transform.rotation = facing;
             player.m_body.rotation = facing;
             yield return new WaitForSeconds(0.5f);
+        }
+
+        // ---------- scenario: build_continue ----------
+
+        /// <summary>
+        /// Near an unfinished build the key offers "Continue: Workshop (6/16)" first. The preview is the
+        /// site's own ghost and stays put, a click builds what the materials pay for now, the last one
+        /// finishes it, Remove twice forgets it, and a part the player stands in is left out.
+        /// </summary>
+        private static IEnumerator TestBuildContinue(Player player)
+        {
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            ClearSites();
+            yield return new WaitForSeconds(0.5f);
+            PieceCatalog.Ensure();
+
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Name == "Workshop");
+            ResolvedBlueprint resolved = null;
+            var error = "no Workshop kit";
+            if (kit == null || !ResolvedBlueprint.TryResolve(kit, out resolved, out error))
+            {
+                Check(false, "the workshop kit resolves: " + error);
+                yield break;
+            }
+
+            Unlock(player, resolved);
+            ClearInventoryExceptHammer(player);
+            yield return EquipHammer(player);
+            BlueprintLibrary.Reload();
+            var deepBefore = DeepObjects(out _);
+            var spot = player.transform.position;
+            Log("the kit's parts: " + string.Join(", ", resolved.Parts.Select((p, i) =>
+                $"{i} {p.Prefab.name} costs " + string.Join("+", PartialBuild.CostOf(p.Piece).Select(c => $"{c.Value} {c.Key}")))));
+
+            yield return ContinueToTheEnd(player, resolved);
+            yield return ContinueInThirds(player, resolved);
+            yield return ContinueForget(player, resolved);
+            yield return ContinueFarAway(player, resolved, spot);
+            yield return ContinueStandingInside(player);
+
+            BlueprintMode.Exit();
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            ClearSites();
+            player.m_lastToolUseTime = 0f;
+            yield return new WaitForSeconds(1f);
+            var deepAfter = DeepObjects(out var sample);
+            Check(deepAfter == deepBefore, $"the ghosts left nothing in the world: {deepBefore} deep objects before, {deepAfter} after"
+                + (deepAfter != deepBefore ? " | " + sample : ""));
+            var left = new List<Piece>();
+            Piece.GetAllPiecesInRadius(player.transform.position, 60f, left);
+            var mine = left.Count(p => p != null && p.GetCreator() == player.GetPlayerID());
+            Check(mine == 0, $"nothing of the test is left standing: {mine}");
+        }
+
+        /// <summary>A new unfinished build in front of the player: these materials, one click, blueprint mode off.</summary>
+        private static IEnumerator StartSite(Player player, ResolvedBlueprint kit, Func<string, int, int> give, Quaternion? facing = null)
+        {
+            ClearInventoryExceptHammer(player);
+            foreach (var cost in kit.TotalCost)
+            {
+                AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, give(cost.m_resItem.m_itemData.m_shared.m_name, cost.m_amount));
+            }
+
+            yield return AimBlueprint(player, kit, facing);
+            var sites = SiteStore.All.Count;
+            BlueprintMode.TryBuild(player);
+            var said = BlueprintMode.LastMessage ?? "";
+            BlueprintMode.Exit();
+            yield return null;
+            yield return null;
+            var site = BlueprintMode.LastSite;
+            Check(SiteStore.All.Count == sites + 1 && site != null && SiteStore.All.Contains(site),
+                $"set-up: the click kept an unfinished build, {(site != null ? site.BuiltCount : -1)} of {kit.Parts.Count} built: '{said}'");
+            yield return WaitForGhosts(SiteStore.All.Count);
+        }
+
+        /// <summary>The key pressed once from normal building: the first entry.</summary>
+        private static void FirstEntry(Player player)
+        {
+            BlueprintMode.Exit();
+            BlueprintMode.Cycle(player);
+        }
+
+        /// <summary>The site's parts standing in the world now, found the tracker's way.</summary>
+        private static int Standing(Player player, Site site)
+        {
+            return MatchParts(site.Resolved, site.RootPosition, site.RootRotation, PiecesAround(player, site.RootPosition)).Count;
+        }
+
+        /// <summary>
+        /// Checks 1 and 2: a site from half the wood, the rest in a chest 5 m away. The key offers
+        /// Continue first, the ghost stays put when the camera turns and the wheel turns, and one click
+        /// finishes it from the chest.
+        /// </summary>
+        private static IEnumerator ContinueToTheEnd(Player player, ResolvedBlueprint kit)
+        {
+            yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? need / 2 : need);
+            var site = BlueprintMode.LastSite;
+            if (site == null || !SiteStore.All.Contains(site))
+            {
+                yield break;
+            }
+
+            Check(site.BuiltCount > 0 && site.BuiltCount < site.Total, $"half the wood built {site.BuiltCount} of {site.Total}");
+            var chests = new List<Piece>();
+            yield return PlaceTestPiece(player, "piece_chest_wood", OnGround(player.transform.position, 180f, 5f), 0f, chests);
+            yield return new WaitForSeconds(0.5f);
+            var chest = chests[0] != null ? chests[0].GetComponentInChildren<Container>() : null;
+            Check(chest != null, "a wood chest stands 5 m behind the player");
+            if (chest == null)
+            {
+                yield break;
+            }
+
+            // Exactly what the rest costs goes into the chest; the bag is empty.
+            var rest = PartialBuild.Missing(site.Resolved, site.Built, MaterialSources.Around(player));
+            foreach (var item in rest)
+            {
+                AddTo(chest.GetInventory(), kit.TotalCost.First(c => c.m_resItem.m_itemData.m_shared.m_name == item.Key).m_resItem.gameObject.name, item.Value);
+            }
+
+            Check(rest.Count > 0, "the rest goes into the chest: " + PartialBuild.MissingText(rest));
+
+            // ---- 1. the key: Continue first, locked onto the site's own ghost ----
+            FirstEntry(player);
+            yield return null;
+            yield return null;
+            var entry = BlueprintMode.EntryName ?? "";
+            Check(BlueprintMode.CurrentSite == site && entry.StartsWith("Continue:") && entry == $"Continue: Workshop ({site.BuiltCount}/{site.Total})",
+                $"the key's first entry continues the site: '{entry}'");
+            var root = BlueprintMode.PreviewRoot;
+            Check(root != null && site.Ghost != null && root == site.Ghost.Root && GameObject.Find("ValheimTomrer_Blueprint_Workshop") == null,
+                "the preview is the site's ghost, no second copy is made");
+            if (root == null)
+            {
+                yield break;
+            }
+
+            var pos = root.position;
+            var rot = root.rotation;
+            Check(Vector3.Distance(pos, site.RootPosition) < 0.001f && Quaternion.Angle(rot, site.RootRotation) < 0.1f,
+                $"it stands at the site's pose: {V4(pos)}, turned {rot.eulerAngles.y:0.#}");
+
+            var face = Quaternion.Euler(0f, player.m_lookYaw.eulerAngles.y + 90f, 0f);
+            player.m_lookYaw = face;
+            player.transform.rotation = face;
+            player.m_body.rotation = face;
+            for (var frame = 0; frame < 10; frame++)
+            {
+                yield return null;
+            }
+
+            Check(BlueprintMode.CurrentSite == site && Vector3.Distance(root.position, pos) < 0.001f && Quaternion.Angle(root.rotation, rot) < 0.01f,
+                $"the camera turned 90 degrees, the ghost did not move: {Vector3.Distance(root.position, pos):0.####} m, {Quaternion.Angle(root.rotation, rot):0.##} degrees");
+            var steps = BlueprintMode.RotationSteps;
+            yield return WheelNotch(1f);
+            Check(BlueprintMode.RotationSteps == steps && Quaternion.Angle(root.rotation, rot) < 0.01f && Vector3.Distance(root.position, pos) < 0.001f,
+                $"a wheel notch does not turn it: steps {steps} -> {BlueprintMode.RotationSteps}, yaw {rot.eulerAngles.y:0.#} -> {root.eulerAngles.y:0.#}");
+
+            player.m_lookYaw = BuildFacing;
+            player.transform.rotation = BuildFacing;
+            player.m_body.rotation = BuildFacing;
+            player.m_lookPitch = 10f;
+            SiteTracker.Refresh(player);
+            yield return new WaitForSeconds(1f);
+            yield return Screenshot("build-continue-1-locked");
+
+            // ---- 2. the click finishes it from the chest ----
+            var path = site.Path;
+            player.m_lastToolUseTime = 0f;
+            var clicked = BlueprintMode.TryBuild(player);
+            var said = BlueprintMode.LastMessage ?? "";
+            yield return null;
+            var standing = Standing(player, site);
+            Check(clicked && standing == site.Total, $"the click builds every piece left: {standing} of {site.Total} stand");
+            Check(!File.Exists(path) && SiteStore.All.Count == 0, $"the file is gone ({File.Exists(path)}) and no site is kept ({SiteStore.All.Count})");
+            Check(said == "Workshop finished." && !BlueprintMode.Active, $"'{said}', and Continue ended: active {BlueprintMode.Active}");
+            var inChest = kit.TotalCost.Sum(c => Held(chest.GetInventory(), c.m_resItem.m_itemData.m_shared.m_name));
+            var inBag = kit.TotalCost.Sum(c => Held(player.GetInventory(), c.m_resItem.m_itemData.m_shared.m_name));
+            Check(inChest == 0 && inBag == 0, $"the chest is empty ({inChest} left) and so is the bag ({inBag})");
+
+            yield return new WaitForSeconds(15f);
+            standing = Standing(player, site);
+            Check(standing == site.Total, $"after 15 s nothing fell: {standing} of {site.Total}");
+            player.m_lookPitch = 10f;
+            yield return Screenshot("build-continue-2-finished");
+
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>Check 3: the wood in three parts, three clicks. Each one builds more, the third finishes it.</summary>
+        private static IEnumerator ContinueInThirds(Player player, ResolvedBlueprint kit)
+        {
+            var wood = kit.TotalCost.First(c => c.m_resItem.m_itemData.m_shared.m_name == "$item_wood");
+            var third = wood.m_amount / 3;
+            var first = wood.m_amount - (2 * third);
+            yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? first : need);
+            var site = BlueprintMode.LastSite;
+            if (site == null || !SiteStore.All.Contains(site))
+            {
+                yield break;
+            }
+
+            var path = site.Path;
+            var counts = new List<int> { site.BuiltCount };
+            Check(site.BuiltCount > 0, $"{first} of {wood.m_amount} wood: the first click built {site.BuiltCount}");
+            FirstEntry(player);
+            Check(BlueprintMode.CurrentSite == site, "the key continues it: " + BlueprintMode.EntryName);
+            for (var click = 2; click <= 3; click++)
+            {
+                AddTo(player.GetInventory(), wood.m_resItem.gameObject.name, third);
+                player.m_lastToolUseTime = 0f;
+                var clicked = BlueprintMode.TryBuild(player);
+                var said = BlueprintMode.LastMessage ?? "";
+                yield return null;
+                counts.Add(site.BuiltCount);
+                Check(clicked && counts[click - 1] > counts[click - 2],
+                    $"{third} more wood, click {click}: {counts[click - 2]} -> {counts[click - 1]} built: '{said}'");
+                if (click == 2)
+                {
+                    Check(BlueprintMode.CurrentSite == site && SiteStore.All.Contains(site), "still in Continue after the second click");
+                }
+
+                yield return new WaitForSeconds(0.5f);
+            }
+
+            Check(counts.Last() == site.Total && !SiteStore.All.Contains(site) && !File.Exists(path) && !BlueprintMode.Active
+                && Standing(player, site) == site.Total,
+                $"done after the third: {string.Join(" -> ", counts)} of {site.Total}, site kept: {SiteStore.All.Contains(site)}");
+
+            yield return new WaitForSeconds(1f);
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>Check 4: Remove twice within 3 s forgets the plan and keeps what stands. Two presses 4 s apart do not.</summary>
+        private static IEnumerator ContinueForget(Player player, ResolvedBlueprint kit)
+        {
+            yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? need / 2 : need);
+            var site = BlueprintMode.LastSite;
+            if (site == null || !SiteStore.All.Contains(site))
+            {
+                yield break;
+            }
+
+            var path = site.Path;
+            var built = Standing(player, site);
+            FirstEntry(player);
+            Check(BlueprintMode.CurrentSite == site, "the key continues it: " + BlueprintMode.EntryName);
+
+            yield return PressBound("Remove");
+            Check(SiteStore.All.Contains(site) && BlueprintMode.LastMessage == "Press again to remove the plan.",
+                $"one Remove press only asks: '{BlueprintMode.LastMessage}'");
+            yield return new WaitForSeconds(4f);
+            yield return PressBound("Remove");
+            Check(SiteStore.All.Contains(site) && File.Exists(path) && BlueprintMode.CurrentSite == site,
+                $"Remove, 4 s, Remove: the site is still there: '{BlueprintMode.LastMessage}'");
+
+            yield return new WaitForSeconds(BlueprintMode.ForgetWindow + 0.5f);
+            yield return PressBound("Remove");
+            yield return new WaitForSeconds(0.5f);
+            yield return PressBound("Remove");
+            var said = BlueprintMode.LastMessage ?? "";
+            Check(!SiteStore.All.Contains(site) && !File.Exists(path) && site.Ghost == null && !BlueprintMode.Active,
+                $"Remove twice within 3 s: site kept {SiteStore.All.Contains(site)}, file there {File.Exists(path)}, ghost {site.Ghost != null}, active {BlueprintMode.Active}");
+            Check(said == "Plan for Workshop removed. Built pieces stay.", $"and says so: '{said}'");
+            Check(built > 0 && Standing(player, site) == built, $"the built pieces are still there: {Standing(player, site)} of {built}");
+
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>
+        /// Presses and lets go of whatever the game binds to this button (the player may have changed
+        /// it), through the input system, so the game's own ZInput reads it.
+        /// </summary>
+        private static IEnumerator PressBound(string button)
+        {
+            var def = ZInput.instance != null ? ZInput.instance.GetButtonDef(button) : null;
+            var path = def != null && def.ButtonAction.bindings.Count > 0 ? def.ButtonAction.bindings[0].effectivePath : null;
+            var control = path != null ? UnityEngine.InputSystem.InputSystem.FindControl(path) as UnityEngine.InputSystem.Controls.ButtonControl : null;
+            if (control == null)
+            {
+                Check(false, $"a control is bound to {button}: {path ?? "none"}");
+                yield break;
+            }
+
+            QueueButton(control, 1f);
+            for (var frame = 0; frame < 4; frame++)
+            {
+                yield return null;
+            }
+
+            QueueButton(control, 0f);
+            for (var frame = 0; frame < 3; frame++)
+            {
+                yield return null;
+            }
+
+            Log($"pressed {button} ({path})");
+        }
+
+        private static void QueueButton(UnityEngine.InputSystem.Controls.ButtonControl control, float value)
+        {
+            using (UnityEngine.InputSystem.LowLevel.StateEvent.From(control.device, out var eventPtr))
+            {
+                UnityEngine.InputSystem.InputControlExtensions.WriteValueIntoEvent(control, value, eventPtr);
+                UnityEngine.InputSystem.InputSystem.QueueEvent(eventPtr);
+            }
+        }
+
+        /// <summary>
+        /// Check 5: two builds of the same blueprint are told apart by distance; 60 m away the key offers
+        /// only normal blueprints; picking a normal piece ends Continue. Leaves one site for check 6.
+        /// </summary>
+        private static IEnumerator ContinueFarAway(Player player, ResolvedBlueprint kit, Vector3 spot)
+        {
+            yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? need / 2 : need);
+            var near = BlueprintMode.LastSite;
+            yield return StartSite(player, kit, (item, need) => 0, Quaternion.Euler(0f, 180f, 0f));
+            var behind = BlueprintMode.LastSite;
+            if (near == null || behind == null || near == behind || SiteStore.All.Count != 2)
+            {
+                Check(false, $"set-up: two sites of the Workshop: {SiteStore.All.Count}");
+                yield break;
+            }
+
+            player.m_lookYaw = BuildFacing;
+            player.transform.rotation = BuildFacing;
+            player.m_body.rotation = BuildFacing;
+            FirstEntry(player);
+            var one = (BlueprintMode.CurrentSite, BlueprintMode.EntryName ?? "");
+            BlueprintMode.Cycle(player);
+            var two = (BlueprintMode.CurrentSite, BlueprintMode.EntryName ?? "");
+            BlueprintMode.Cycle(player);
+            var three = (BlueprintMode.CurrentSite, BlueprintMode.EntryName ?? "", BlueprintMode.Active);
+            float Away(Site s) => Mathf.Sqrt(s.WorldBox.SqrDistance(player.transform.position));
+            Check(one.Item1 != null && two.Item1 != null && one.Item1 != two.Item1 && Away(one.Item1) <= Away(two.Item1)
+                && one.Item2.StartsWith("Continue: Workshop") && one.Item2.Contains(" m ")
+                && two.Item2.StartsWith("Continue: Workshop") && two.Item2.Contains(" m ") && one.Item2 != two.Item2,
+                $"two Workshop sites, nearest first, told apart by distance and way: '{one.Item2}', '{two.Item2}'");
+            Check(three.Item1 == null && three.Item3 && !three.Item2.StartsWith("Continue:"), $"then the normal blueprints: '{three.Item2}'");
+            BlueprintMode.Exit();
+            SiteStore.Delete(behind);
+
+            // ---- 5. 60 m away: only the normal blueprints. Dry land: swimming puts the hammer away ----
+            var far = spot + (Vector3.right * 60f);
+            foreach (var angle in new[] { 90f, 270f, 180f, 135f, 225f, 45f, 315f })
+            {
+                far = spot + (Quaternion.Euler(0f, angle, 0f) * Vector3.forward * 60f);
+                if (WorldGenerator.instance.GetHeight(far.x, far.z) > ZoneSystem.instance.m_waterLevel + 1f)
+                {
+                    break;
+                }
+            }
+
+            far.y = WorldGenerator.instance.GetHeight(far.x, far.z) + 1f;
+            yield return TeleportNear(player, far, BuildFacing, "60 m away");
+            yield return EquipHammer(player);
+            var away = Away(near);
+            var names = new List<string>();
+            FirstEntry(player);
+            for (var i = 0; i < 20 && BlueprintMode.Active; i++)
+            {
+                names.Add(BlueprintMode.EntryName ?? "");
+                BlueprintMode.Cycle(player);
+            }
+
+            Check(away > BlueprintMode.ContinueRange && names.Count > 0 && names.All(n => !n.StartsWith("Continue:")),
+                $"{away:0} m from the site the key offers only blueprints: {string.Join(", ", names)}");
+            BlueprintMode.Exit();
+
+            yield return TeleportNear(player, spot + Vector3.up, BuildFacing, "back to the build spot");
+            yield return EquipHammer(player);
+            FirstEntry(player);
+            Check(BlueprintMode.CurrentSite == near, "back near it, Continue comes first again: " + BlueprintMode.EntryName);
+
+            // Picking a normal piece ends blueprint mode, Continue too. The site stays.
+            var wall = PiecePrefab("woodwall");
+            var picked = wall != null && player.SetSelectedPiece(wall);
+            yield return null;
+            Check(picked && !BlueprintMode.Active && BlueprintMode.CurrentSite == null && SiteStore.All.Contains(near) && near.Ghost != null,
+                $"picking the wood wall ends Continue ({BlueprintMode.Active}), the site and its ghost stay");
+        }
+
+        /// <summary>
+        /// Check 6: the player stands where a ready part goes. The click builds every other ready part,
+        /// leaves that one out, and says so. It stays ready.
+        /// </summary>
+        private static IEnumerator ContinueStandingInside(Player player)
+        {
+            var site = SiteStore.All.FirstOrDefault();
+            if (site == null || site.Ghost == null)
+            {
+                Check(false, "set-up: a site with its ghost is kept");
+                yield break;
+            }
+
+            ClearInventoryExceptHammer(player);
+            AddTo(player.GetInventory(), "Wood", 4);
+            SiteTracker.Refresh(player);
+            var ready = site.ReadyOrder != null ? site.ReadyOrder.ToList() : new List<int>();
+            Check(ready.Count >= 2, $"4 wood make {ready.Count} parts ready: {string.Join(", ", ready.Select(i => $"{i} {site.Resolved.Parts[i].Prefab.name}"))}");
+            if (ready.Count < 2)
+            {
+                yield break;
+            }
+
+            // The test's own box: the ghost copy's drawn box in the world, grown 0.6 m in x and z.
+            bool Holds(int part, Vector3 at)
+            {
+                var copy = site.Ghost.Part(part);
+                var renderers = copy != null ? copy.GetComponentsInChildren<Renderer>().Where(r => r.enabled && !(r is ParticleSystemRenderer)).ToList() : null;
+                if (renderers == null || renderers.Count == 0)
+                {
+                    return false;
+                }
+
+                var box = renderers[0].bounds;
+                foreach (var renderer in renderers)
+                {
+                    box.Encapsulate(renderer.bounds);
+                }
+
+                box.Expand(new Vector3(0.6f, 0f, 0.6f));
+                return box.Contains(at + (Vector3.up * 0.5f));
+            }
+
+            // A spot 0.2 m inside from one ready part's pivot, on the ground, that no other ready part holds.
+            var centre = site.WorldBox.center;
+            var target = -1;
+            var stand = Vector3.zero;
+            foreach (var part in ready)
+            {
+                var pivot = site.WorldPosition(part);
+                var inward = new Vector3(centre.x - pivot.x, 0f, centre.z - pivot.z).normalized;
+                var at = pivot + (inward * 0.2f);
+                at.y = ZoneSystem.instance.GetGroundHeight(at);
+                if (Holds(part, at) && ready.Count(p => Holds(p, at)) == 1)
+                {
+                    target = part;
+                    stand = at;
+                    break;
+                }
+            }
+
+            Check(target >= 0, $"set-up: a spot where only part {target} is held: {V4(stand)}");
+            if (target < 0)
+            {
+                yield break;
+            }
+
+            var look = Quaternion.LookRotation(new Vector3(centre.x - stand.x, 0f, centre.z - stand.z));
+            yield return TeleportNear(player, stand + (Vector3.up * 0.3f), look, "into the half-built house");
+            yield return EquipHammer(player);
+            var standing = player.transform.position;
+            var held = ready.Where(p => Holds(p, standing)).ToList();
+            Check(held.Count == 1 && held[0] == target && !site.Built[target],
+                $"the player stands at {V4(standing)}, in part {string.Join(", ", held)} ({site.Resolved.Parts[target].Prefab.name})");
+
+            FirstEntry(player);
+            Check(BlueprintMode.CurrentSite == site, "the key continues it: " + BlueprintMode.EntryName);
+            var before = (bool[])site.Built.Clone();
+            player.m_lastToolUseTime = 0f;
+            var clicked = BlueprintMode.TryBuild(player);
+            var said = BlueprintMode.LastMessage ?? "";
+            yield return null;
+            var added = Enumerable.Range(0, site.Total).Where(i => site.Built[i] && !before[i]).OrderBy(i => i).ToList();
+            var wanted = ready.Where(p => !held.Contains(p)).OrderBy(i => i).ToList();
+            Check(clicked && added.SequenceEqual(wanted),
+                $"the click builds every ready part but the one the player stands in: built {string.Join(", ", added)}, wanted {string.Join(", ", wanted)}");
+            Check(!site.Built[target] && said.Contains("1 left out"), $"that one is left out, and it says so: '{said}'");
+            SiteTracker.Refresh(player);
+            Check(site.Ready != null && site.Ready[target] && SiteStore.All.Contains(site), $"it stays ready: {Looks(site)}");
+            player.m_lookPitch = 20f;
+            yield return new WaitForSeconds(0.5f);
+            yield return Screenshot("build-continue-3-inside");
+            BlueprintMode.Exit();
         }
 
         // ---------- scenario: editor_open ----------
