@@ -28,6 +28,7 @@ namespace ValheimTomrer.Editor.View
         private float _yaw;      // 0 looks along +Z, turning right makes it bigger
         private float _pitch;    // up is positive
         private float _dist = 10f;
+        private float _near = 0.05f;
 
         public EditorCamera(PreviewCamera camera)
         {
@@ -74,8 +75,24 @@ namespace ValheimTomrer.Editor.View
             var size = Mathf.Max(Mathf.Max(box.size.x, box.size.y), Mathf.Max(box.size.z, 1f));
             var distance = size * 1.25f + 2.5f;
             var direction = new Vector3(0.28f, 0.5f, 1f).normalized;
-            _camera.SetNearPlane(distance / 500f);
+            _near = distance / 500f;
+            _camera.SetNearPlane(_near);
             LookFrom(center + direction * distance, center);
+        }
+
+        /// <summary>
+        /// Looks from where another camera looked. A world change kills the old camera's objects,
+        /// not its numbers, so the rebuilt pane comes back on the same view.
+        /// </summary>
+        public void TakePose(EditorCamera from)
+        {
+            _pos = from._pos;
+            _yaw = from._yaw;
+            _pitch = from._pitch;
+            _dist = from._dist;
+            _near = from._near;
+            _camera.SetNearPlane(_near);
+            Apply();
         }
 
         /// <summary>Moves the camera (and the point in front with it). Keys and sticks stop just above the ground.</summary>

@@ -162,6 +162,29 @@ namespace ValheimTomrer.Editor.Ui
         }
 
         /// <summary>
+        /// The window opened again. A walk that was on when it closed stays on, on the same widget
+        /// when that still exists. The game may have selected one of its own buttons meanwhile, and
+        /// its input module would press that on the first cross, so it lets go first.
+        /// </summary>
+        public static void Resume()
+        {
+            if (!Active)
+            {
+                return;
+            }
+
+            // The dialog went with a world change, the window was built again without it.
+            if (Current == FocusRegion.Dialog && !Dialogs.IsOpen)
+            {
+                LeaveDialog();
+                return;
+            }
+
+            Deselect();
+            Refresh();
+        }
+
+        /// <summary>
         /// Takes the walk into the dialog that is up, on the widget the dialog asked for. Where
         /// the walk was is remembered, so closing the dialog puts it back there.
         /// </summary>

@@ -55,6 +55,7 @@ namespace ValheimTomrer.Editor.Ui
         private static readonly List<CostMaterial> Materials = new List<CostMaterial>();
 
         private static string[] _words = Array.Empty<string>();
+        private static string _searchText = "";
         private static string _tag;
         private static string _material;
         private static bool _materialsOpen;
@@ -465,8 +466,14 @@ namespace ValheimTomrer.Editor.Ui
             _root = UiBuild.Rect("Palette", host);
             UiBuild.Stretch(_root, Pad, Pad, Pad, Pad);
 
+            // Built again after a world load, with the words that were in it.
             _search = UiBuild.InputField("Search", _root, "Search by name or prefab", SearchHeight);
-            _search.onValueChanged.AddListener(_ => Filter());
+            _search.SetTextWithoutNotify(_searchText);
+            _search.onValueChanged.AddListener(text =>
+            {
+                _searchText = text;
+                Filter();
+            });
 
             _tagRow = UiBuild.Rect("Tags", _root);
             BuildTagChips();
@@ -522,7 +529,16 @@ namespace ValheimTomrer.Editor.Ui
                 TagChips.Add(MakeChip(_tagRow, key, key, () => SetTag(_tag == key ? null : key), out _, out _));
             }
 
-            TagChips[0].SetOn(true);
+            // The tag that was picked stays picked, "All" when none was.
+            if (_tag != null && PieceCatalog.Tags.Count > 0 && !TagChips.Exists(chip => chip.Key == _tag))
+            {
+                _tag = null;
+            }
+
+            foreach (var chip in TagChips)
+            {
+                chip.SetOn(chip.Key == _tag);
+            }
         }
 
         private static void BuildMaterials()

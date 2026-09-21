@@ -278,7 +278,9 @@ namespace ValheimTomrer.Editor.Ui
             UiBuild.LinkRow(walk);
             PalettePane = Pane("PalettePane", Height);
             PieceListPane = Pane("PieceListPane", Height);
-            SetLeftTab(0);
+
+            // Built again after a world load: the tab that was open stays open.
+            SetLeftTab(LeftTab);
         }
 
         private static RectTransform Pane(string name, float tabHeight)

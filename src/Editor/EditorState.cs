@@ -71,6 +71,9 @@ namespace ValheimTomrer.Editor
         private static SupportMap _weighedMap;
         private static MovingSet _weighedSet;
 
+        // The piece table the entries in hand and in the index were read from.
+        private static PieceTable _catalog;
+
         /// <summary>The blueprint being edited, or null while the editor is closed.</summary>
         public static BlueprintDocument Document { get; private set; }
 
@@ -180,12 +183,79 @@ namespace ValheimTomrer.Editor
             _stability = null;
             _stabilityIndex = null;
             _weighed = null;
+            _catalog = PieceCatalog.Table;
             Version++;
         }
 
         public static void Close()
         {
             Open(null);
+        }
+
+        /// <summary>
+        /// The editor opens again on what it held when it closed. When the catalog was read again
+        /// meanwhile (a world change), what is in hand takes the new entries, and the placing rule
+        /// and the support numbers are worked out again.
+        /// </summary>
+        public static void Rebind()
+        {
+            if (ReferenceEquals(_catalog, PieceCatalog.Table))
+            {
+                return;
+            }
+
+            _catalog = PieceCatalog.Table;
+            _index = null;
+            _stability = null;
+            _stabilityIndex = null;
+            _weighed = null;
+            if (Document == null || Mode != EditMode.Place || Moving == null)
+            {
+                return;
+            }
+
+            var stale = false;
+            foreach (var moving in Moving.Pieces)
+            {
+                stale |= !ReferenceEquals(moving.Entry, PieceCatalog.Find(moving.Prefab));
+            }
+
+            if (!stale)
+            {
+                return;
+            }
+
+            if (Held != null)
+            {
+                var entry = PieceCatalog.Find(Held.PrefabName);
+                if (entry == null)
+                {
+                    CancelMode();
+                    return;
+                }
+
+                Held = entry;
+                Moving = MovingSet.One(entry);
+                Version++;
+                return;
+            }
+
+            // Moved pieces and copies are taken from the document again, the way they were first taken.
+            var pieces = new List<DocPiece>();
+            foreach (var moving in Moving.Pieces)
+            {
+                var piece = Document.Find(moving.Id);
+                if (piece == null)
+                {
+                    CancelMode();
+                    return;
+                }
+
+                pieces.Add(piece);
+            }
+
+            Moving = MovingSet.Of(MovingPieces(pieces));
+            Version++;
         }
 
         // ---------- selection ----------

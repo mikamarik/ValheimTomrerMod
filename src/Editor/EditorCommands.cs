@@ -93,6 +93,26 @@ namespace ValheimTomrer.Editor
         }
 
         /// <summary>
+        /// A blueprint from outside the window takes the open one's place: the one in the build
+        /// tool's hand, or a world capture. Asks first when the open one has changes.
+        /// </summary>
+        public static void Take(BlueprintDocument document, ResolvedBlueprint blueprint)
+        {
+            if (document == null)
+            {
+                return;
+            }
+
+            var name = string.IsNullOrEmpty(document.Name) ? "this blueprint" : document.Name;
+            if (AskFirst($"Open {name}?", () => Take(document, blueprint)))
+            {
+                return;
+            }
+
+            EditorSession.Replace(document, blueprint);
+        }
+
+        /// <summary>
         /// Writes the blueprint back over its own file. A kit, a read-only file or a blueprint
         /// that was never saved goes to Save as instead.
         /// </summary>
@@ -271,7 +291,7 @@ namespace ValheimTomrer.Editor
             }
         }
 
-        /// <summary>Forgets a half-answered question when the editor closes.</summary>
+        /// <summary>Forgets the busy chip when the editor closes. A question that is up stays up.</summary>
         public static void Reset()
         {
             _working = false;

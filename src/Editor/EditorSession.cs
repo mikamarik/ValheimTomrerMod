@@ -1,3 +1,4 @@
+using System.IO;
 using UnityEngine;
 using ValheimTomrer.Blueprints;
 using ValheimTomrer.Editor.Catalog;
@@ -14,6 +15,11 @@ namespace ValheimTomrer.Editor
     /// Close follows the vanilla pattern (StoreGui.Update): hide, let the one-frame grace run
     /// out, then hand input back with a short delay and reset the buttons, so the key that
     /// closed the window is not used again by the game in the same breath.
+    ///
+    /// Closing keeps everything: the blueprint with its unsaved changes and its undo, the
+    /// selection, what is in hand, the camera, the tabs and filters, the piece menu, a dialog that
+    /// was up and the panel walk. The next open comes back to all of it. Only
+    /// <see cref="Forget"/> starts over.
     /// </summary>
     internal static class EditorSession
     {
@@ -51,7 +57,7 @@ namespace ValheimTomrer.Editor
 
                 if (ZInput.GetKeyDown(EditorConfig.Key.Value))
                 {
-                    // With a blueprint in hand the key edits that one, not the last kit. The
+                    // With a blueprint in hand the key edits that one, not the one left open. The
                     // build tool lets go of it: the Build this button puts it back.
                     var inHand = BlueprintMode.Current;
                     Open(inHand);
@@ -122,24 +128,44 @@ namespace ValheimTomrer.Editor
             }
         }
 
-        /// <summary>Opens the window. Without a blueprint it shows the first kit it can build.</summary>
-        public static void Open(ResolvedBlueprint blueprint = null)
+        /// <summary>True while a blueprint is kept from the last time, so the next open comes back to it.</summary>
+        public static bool Kept => !ModUi.Open && EditorState.Document != null;
+
+        /// <summary>
+        /// Opens the window as it was left. The first time, or after <see cref="Forget"/>, it starts
+        /// on <paramref name="inHand"/>, else on the first kit it can build.
+        ///
+        /// A blueprint in the build tool's hand that is not the one left open takes its place, and
+        /// the window asks first when the one left open has unsaved changes.
+        /// </summary>
+        public static void Open(ResolvedBlueprint inHand = null)
         {
             if (ModUi.Open)
             {
                 return;
             }
 
-            blueprint = blueprint ?? FirstKit();
-            var document = blueprint != null
-                ? BlueprintDocument.FromBlueprint(blueprint.Blueprint)
-                : BlueprintDocument.New();
-            Begin(document, blueprint);
+            if (EditorState.Document == null)
+            {
+                var blueprint = inHand ?? FirstKit();
+                var document = blueprint != null
+                    ? BlueprintDocument.FromBlueprint(blueprint.Blueprint)
+                    : BlueprintDocument.New();
+                Begin(document, blueprint);
+                return;
+            }
+
+            Begin(null, null);
+            if (ModUi.Open && inHand != null && !Holds(EditorState.Document, inHand.Blueprint))
+            {
+                EditorCommands.Take(BlueprintDocument.FromBlueprint(inHand.Blueprint), inHand);
+            }
         }
 
         /// <summary>
         /// Opens the window on a document that is already read, whatever is in it. The pane builds
         /// the pieces itself, so a blueprint holding a piece this game does not have still opens.
+        /// A blueprint left open with unsaved changes is asked about first.
         /// </summary>
         public static void OpenDocument(BlueprintDocument document)
         {
@@ -148,14 +174,25 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
-            Begin(document, null);
+            if (EditorState.Document == null)
+            {
+                Begin(document, null);
+                return;
+            }
+
+            Begin(null, null);
+            if (ModUi.Open)
+            {
+                EditorCommands.Take(document, null);
+            }
         }
 
         /// <summary>
         /// Swaps the open blueprint for another one without closing the window. New and Open both
-        /// come through here: the pane starts empty and fills itself from the document.
+        /// come through here: the pane starts empty and fills itself from the document. With
+        /// <paramref name="blueprint"/> it is built a few pieces a frame instead.
         /// </summary>
-        public static void Replace(BlueprintDocument document)
+        public static void Replace(BlueprintDocument document, ResolvedBlueprint blueprint = null)
         {
             if (!ModUi.Open || document == null)
             {
@@ -164,7 +201,7 @@ namespace ValheimTomrer.Editor
 
             EditorState.Open(document);
             PiecePicker.Close();
-            ViewportHost.Show(null);
+            ViewportHost.Show(blueprint);
             Palette.Selected = null;
             PieceListPanel.Show(document);
             BlueprintPanel.Show(document);
@@ -174,6 +211,7 @@ namespace ValheimTomrer.Editor
             ValheimTomrerPlugin.Log.LogInfo($"editor now on '{document.Name}' ({document.Pieces.Count} pieces)");
         }
 
+        /// <summary>Shows the window. A null document comes back to everything that was kept.</summary>
         private static void Begin(BlueprintDocument document, ResolvedBlueprint blueprint)
         {
             // The window is about to cover the world, so a half-picked capture box goes.
@@ -204,9 +242,17 @@ namespace ValheimTomrer.Editor
             UITooltip.HideTooltip();
             EditorWindow.Show(true);
             PieceCatalog.Ensure();
-            EditorState.Open(document);
             ViewportHost.Ensure(EditorWindow.ViewportHost);
-            ViewportHost.Show(blueprint);
+            if (document != null)
+            {
+                EditorState.Open(document);
+                ViewportHost.Show(blueprint);
+            }
+            else
+            {
+                EditorState.Rebind();
+                ViewportHost.Wake();
+            }
 
             Palette.Ensure(EditorWindow.PalettePane);
             Palette.Show();
@@ -230,9 +276,21 @@ namespace ValheimTomrer.Editor
             _syncedSelection = -1;
             ModUi.Open = true;
             EditorInput.Reset();
-            ValheimTomrerPlugin.Log.LogInfo("editor opened");
+            if (document == null)
+            {
+                FocusNav.Resume();
+            }
+
+            ValheimTomrerPlugin.Log.LogInfo(document != null
+                ? "editor opened"
+                : $"editor opened again on '{Document.Name}' ({Document.Pieces.Count} pieces"
+                    + (Document.Dirty ? ", unsaved changes" : "") + ")");
         }
 
+        /// <summary>
+        /// Hides the window and gives the game its input back. Everything the editor holds stays
+        /// for the next open, see the class comment.
+        /// </summary>
         public static void Close()
         {
             if (!ModUi.Open)
@@ -240,9 +298,9 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
-            FocusNav.Leave();
-            ViewportHost.Close();
-            PiecePicker.Close();
+            // A box that has the keyboard lets go of it. The walk itself stays where it is.
+            FocusNav.StopTyping();
+            ViewportHost.Sleep();
             PiecePicker.PieceChosen = null;
             Palette.PieceChosen = null;
             Palette.Selected = null;
@@ -252,19 +310,32 @@ namespace ValheimTomrer.Editor
             BlueprintPanel.Close();
             SelectionPanel.Close();
             ChecksPanel.Close();
-            Dialogs.Close();
             Toasts.Clear();
             EditorCommands.Reset();
             Bindings.Reset();
             PadBindings.Reset();
-            EditorState.Close();
             EditorWindow.Show(false);
             ModUi.MarkClosed();
             UITooltip.HideTooltip();
             PlayerController.SetTakeInputDelay(0.2f);
             ZInput.ResetAllButtonStates();
             EditorInput.Reset();
-            ValheimTomrerPlugin.Log.LogInfo("editor closed");
+            ValheimTomrerPlugin.Log.LogInfo("editor closed, its state kept");
+        }
+
+        /// <summary>
+        /// Closes and drops everything that was kept: the blueprint, the pane, a dialog, the piece
+        /// menu and the walk. The next open starts on the blueprint in hand or the first kit. The
+        /// autotest calls it between scenarios.
+        /// </summary>
+        public static void Forget()
+        {
+            Close();
+            Dialogs.Close();
+            PiecePicker.Close();
+            FocusNav.Leave();
+            ViewportHost.Close();
+            EditorState.Close();
         }
 
         /// <summary>A tile in the palette or the pad's piece menu: that piece goes in hand.</summary>
@@ -298,7 +369,7 @@ namespace ValheimTomrer.Editor
         /// <summary>Plugin OnDestroy: drop the canvas and the cached sprites for a hot reload.</summary>
         public static void Shutdown()
         {
-            Close();
+            Forget();
             WorldCapture.Shutdown();
             EditorWindow.Destroy();
             PieceCatalog.Clear();
@@ -319,6 +390,20 @@ namespace ValheimTomrer.Editor
             }
 
             return null;
+        }
+
+        /// <summary>True when a blueprint is the one the document came from: the same file, or the same kit.</summary>
+        private static bool Holds(BlueprintDocument document, Blueprint blueprint)
+        {
+            if (string.IsNullOrEmpty(document.SourcePath) || string.IsNullOrEmpty(blueprint.SourcePath))
+            {
+                // Kits have no file. A new blueprint has none either, but it is not read only.
+                return string.IsNullOrEmpty(document.SourcePath) && string.IsNullOrEmpty(blueprint.SourcePath)
+                    && document.ReadOnly && blueprint.ReadOnly && document.Name == blueprint.Name;
+            }
+
+            return string.Equals(
+                Path.GetFullPath(document.SourcePath), Path.GetFullPath(blueprint.SourcePath), System.StringComparison.Ordinal);
         }
 
         private static bool CanOpen()

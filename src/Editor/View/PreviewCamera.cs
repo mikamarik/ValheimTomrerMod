@@ -88,6 +88,20 @@ namespace ValheimTomrer.Editor.View
             _camera.nearClipPlane = Mathf.Max(0.02f, near);
         }
 
+        /// <summary>
+        /// The window closed: the texture goes, the camera stays. The next <see cref="Resize"/>
+        /// makes a new one.
+        /// </summary>
+        public void DropTexture()
+        {
+            if (_camera != null)
+            {
+                _camera.targetTexture = null;
+            }
+
+            ReleaseTexture();
+        }
+
         /// <summary>One frame of the pane. The world's own lighting settings are put back at once.</summary>
         public void Render()
         {

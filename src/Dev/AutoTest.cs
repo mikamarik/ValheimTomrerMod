@@ -37,6 +37,7 @@ namespace ValheimTomrer.Dev
     /// "editor_keys" drives every key, the wheel and the mouse, plus the top bar and the dialogs;
     /// "editor_pad" drives every controller button through a made-up pad, plus the piece menu;
     /// "editor_focus" walks the top bar and the two panels with the pad, and presses what it finds;
+    /// "editor_keep" closes the editor on a changed blueprint and checks the key comes back to all of it;
     /// "editor_build" builds a blueprint made in the editor, in the world, and edits it again;
     /// "editor_capture" builds a kit in the world, captures it back, and compares it to the file;
     /// "editor_support" holds the editor's support rule against the game's, then checks the ghost's colours;
@@ -216,6 +217,9 @@ namespace ValheimTomrer.Dev
                 case "editor_focus":
                     scenario = TestEditorFocus(player);
                     break;
+                case "editor_keep":
+                    scenario = TestEditorKeep(player);
+                    break;
                 case "editor_build":
                     scenario = TestEditorBuild(player);
                     break;
@@ -298,7 +302,7 @@ namespace ValheimTomrer.Dev
             // VT_CHAIN cuts the list down while hunting for the scenario that left something behind.
             var names = (Environment.GetEnvironmentVariable("VT_CHAIN")
                 ?? "dump,probe,editor_open,editor_view,editor_files,editor_palette,editor_snap,"
-                + "editor_edit,editor_panels,editor_keys,editor_pad,editor_focus,editor_build,"
+                + "editor_edit,editor_panels,editor_keys,editor_pad,editor_focus,editor_keep,editor_build,"
                 + "editor_capture,editor_support,blueprints")
                 .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
 
@@ -340,6 +344,7 @@ namespace ValheimTomrer.Dev
                 case "editor_keys": return TestEditorKeys(player);
                 case "editor_pad": return TestEditorPad(player);
                 case "editor_focus": return TestEditorFocus(player);
+                case "editor_keep": return TestEditorKeep(player);
                 case "editor_build": return TestEditorBuild(player);
                 case "editor_capture": return TestEditorCapture(player);
                 case "editor_support": return TestEditorSupport(player);
@@ -350,7 +355,8 @@ namespace ValheimTomrer.Dev
         /// <summary>Back to a known state between two scenarios, whatever the last one left open.</summary>
         private static IEnumerator Reset(Player player)
         {
-            EditorSession.Close();
+            // Closing keeps the blueprint for the next open. The next scenario starts from nothing.
+            EditorSession.Forget();
             FocusNav.Leave();
             BlueprintMode.Exit();
             PadReader.Fake = null;
@@ -2312,8 +2318,15 @@ namespace ValheimTomrer.Dev
             yield return PressKey(UnityEngine.InputSystem.Key.Escape);
             yield return new WaitForSeconds(0.5f);
             Check(!ModUi.Open, "the second Esc closed the editor");
-            Check(ViewportHost.Scene == null && ViewportHost.Preview == null, "the pane let go of its scene and camera");
-            Check(GameObject.Find("ValheimTomrer_EditorScene") == null, "the editor scene object is gone");
+            Check(ViewportHost.Scene != null && ViewportHost.Scene.IsAlive
+                    && !ViewportHost.Scene.Root.gameObject.activeSelf,
+                "the pane kept its scene for the next open, switched off");
+            Check(GameObject.Find("ValheimTomrer_EditorScene") == null, "so no search in the world finds it");
+            Check(ViewportHost.Preview != null && !ViewportHost.Preview.TextureAlive, "and it let go of its texture");
+
+            EditorSession.Forget();
+            yield return new WaitForSeconds(0.5f);
+            Check(ViewportHost.Scene == null && ViewportHost.Preview == null, "Forget let go of the scene and the camera");
             Check(ViewportHost.Leaked() == 0, $"nothing left behind: {ViewportHost.Leaked()} objects still alive");
         }
 
@@ -5422,6 +5435,251 @@ namespace ValheimTomrer.Dev
             var corners = new Vector3[4];
             rect.GetWorldCorners(corners);
             return (corners[0] + corners[2]) * 0.5f;
+        }
+
+        // ---------- scenario: editor_keep ----------
+
+        /// <summary>
+        /// Closing the editor keeps everything, and the key comes back to it: the blueprint with
+        /// its unsaved change and its undo, the selection, the piece in hand and its turn, the
+        /// camera, the left tab, the search, the piece menu, a dialog and the walk inside it. A
+        /// blueprint in the build tool's hand that is not the one left open asks first when there
+        /// are unsaved changes. A dead pane (what a world change does) is built again on the same
+        /// view. Forget leaves nothing behind and the next open starts fresh.
+        /// </summary>
+        private static IEnumerator TestEditorKeep(Player player)
+        {
+            yield return new WaitForSeconds(0.5f);
+            Check(!ModUi.Open && !EditorSession.Kept, "the editor starts closed, with nothing kept");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return WaitPaneReady();
+            var document = EditorSession.Document;
+            Check(ModUi.Open && ViewportHost.Ready && document != null && document.Pieces.Count >= 3,
+                $"the key opened the editor on a kit: '{(document != null ? document.Name : "nothing")}'");
+            var wall = PieceCatalog.Find("woodwall");
+            if (!ModUi.Open || document == null || document.Pieces.Count < 3 || wall == null)
+            {
+                yield break;
+            }
+
+            yield return KeepEverything(document, wall);
+            yield return KeepDialog();
+            yield return KeepAgainstHand(player, wall);
+            yield return RebuildDeadPane();
+
+            // ---- Forget: nothing left, and the next open is a fresh one ----
+            var kept = EditorSession.Document;
+            EditorSession.Forget();
+            yield return new WaitForSeconds(0.5f);
+            Check(!ModUi.Open && !EditorSession.Kept && EditorSession.Document == null, "Forget dropped the blueprint");
+            Check(!Dialogs.IsOpen && !PiecePicker.IsOpen && !FocusNav.Active, "and the dialog, the piece menu and the walk");
+            Check(ViewportHost.Scene == null && ViewportHost.Leaked() == 0,
+                $"and the pane, with nothing left behind: {ViewportHost.Leaked()} objects still alive");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return WaitPaneReady();
+            var fresh = EditorSession.Document;
+            Check(ModUi.Open && fresh != null && fresh != kept && !fresh.Dirty
+                    && EditorState.SelectionCount == 0 && EditorState.Mode == EditMode.Idle,
+                "after Forget the key opens a fresh copy of the kit, nothing selected, nothing in hand");
+        }
+
+        /// <summary>Changes one of everything, closes with the key, opens with the key, finds it all.</summary>
+        private static IEnumerator KeepEverything(BlueprintDocument document, PieceEntry wall)
+        {
+            var first = document.Pieces[0].Id;
+            var second = document.Pieces[1].Id;
+            EditorState.Select(document.Pieces[2].Id);
+            EditorState.DeleteSelection();
+            EditorState.Select(new[] { first, second });
+            EditorSession.StartAdd(wall);
+            EditorState.SetPlaceSteps(3);
+            EditorWindow.SetLeftTab(1);
+            Palette.SetSearch("wood");
+            PiecePicker.Open();
+            var camera = ViewportHost.Camera;
+            camera.Turn(40f, -10f);
+            camera.Zoom(-300f, new Vector2(0.5f, 0.5f));
+            yield return null;
+            yield return null;
+
+            var position = camera.Position;
+            var yaw = camera.Yaw;
+            var pitch = camera.Pitch;
+            var distance = camera.Distance;
+            var undo = document.UndoDepth;
+            var count = document.Pieces.Count;
+            var scene = ViewportHost.Scene;
+            Check(document.Dirty && undo > 0, $"the blueprint has an unsaved change, {undo} undo step(s)");
+            yield return Screenshot("editor-keep-1-before");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(!ModUi.Open && EditorSession.Kept, "F7 closed the editor and kept the blueprint");
+            Check(!ModUi.Blocking && Player.m_localPlayer.TakeInput(), "the game has its input back");
+            Check(ViewportHost.Scene == scene && scene.IsAlive && !scene.Root.gameObject.activeSelf,
+                "the pane's scene is kept, switched off");
+            Check(ViewportHost.Preview != null && !ViewportHost.Preview.TextureAlive, "the pane's texture was let go");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open, "F7 opened it again");
+            Check(EditorSession.Document == document && document.Dirty && document.UndoDepth == undo
+                    && document.Pieces.Count == count,
+                $"on the same blueprint, change and undo kept: {document.Pieces.Count} pieces, {document.UndoDepth} undo step(s)");
+            Check(EditorState.SelectionCount == 2 && EditorState.IsSelected(first) && EditorState.IsSelected(second),
+                $"the same two pieces are selected ({EditorState.SelectionCount})");
+            Check(EditorState.Mode == EditMode.Place && EditorState.Held == wall && EditorState.Steps == 3,
+                $"the wall is still in hand, turned {EditorState.Steps} steps");
+            Check(Palette.Selected == wall, "and its tile is still marked in the palette");
+            Check(EditorWindow.LeftTab == 1, "the In blueprint tab is still open");
+            Check(Palette.Search == "wood", $"the search still says '{Palette.Search}'");
+            Check(PiecePicker.IsOpen, "the piece menu is still up");
+            Check(ViewportHost.Scene == scene && scene.Root.gameObject.activeSelf, "the same scene, switched on again");
+
+            camera = ViewportHost.Camera;
+            Check(Vector3.Distance(camera.Position, position) < 1e-3f && Mathf.Abs(Mathf.DeltaAngle(camera.Yaw, yaw)) < 1e-3f
+                    && Mathf.Abs(camera.Pitch - pitch) < 1e-3f && Mathf.Abs(camera.Distance - distance) < 1e-3f,
+                $"the camera looks from where it did: {V4(camera.Position)} yaw {camera.Yaw:0.0} pitch {camera.Pitch:0.0}");
+
+            yield return null;
+            yield return null;
+            Check(ViewportHost.Pieces != null && ViewportHost.Pieces.Count == document.Pieces.Count,
+                $"every piece stands in the pane: {(ViewportHost.Pieces != null ? ViewportHost.Pieces.Count : 0)} of {document.Pieces.Count}");
+            var picture = SampleView("opened again");
+            Check(Painted(picture) > 0.2f, $"the pane draws again: {Painted(picture) * 100f:0} % of it is not background");
+            yield return Screenshot("editor-keep-2-opened-again");
+
+            PiecePicker.Close();
+            EditorState.CancelMode();
+            Palette.SetSearch("");
+            EditorWindow.SetLeftTab(0);
+        }
+
+        /// <summary>A dialog up, with the walk inside it, is still up after closing and opening.</summary>
+        private static IEnumerator KeepDialog()
+        {
+            EditorCommands.Help();
+            yield return null;
+            var focused = FocusNav.Focused;
+            Check(Dialogs.Kind == "help" && FocusNav.InDialog && focused != null, "the help is up, the walk is in it");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(!ModUi.Open && Dialogs.IsOpen, "F7 closed the window with the help still up");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open && Dialogs.Kind == "help" && FocusNav.InDialog && FocusNav.Focused == focused,
+                "it opened again on the help, the walk on the same button");
+            Check(FocusNav.Ring != null && FocusNav.Ring.gameObject.activeInHierarchy, "the ring shows");
+            yield return Screenshot("editor-keep-3-dialog");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.Escape);
+            yield return new WaitForSeconds(0.3f);
+            Check(ModUi.Open && !Dialogs.IsOpen && !FocusNav.Active, "Esc shut the help, not the window, and the walk left");
+        }
+
+        /// <summary>
+        /// The key with a blueprint in the build tool's hand. The one left open: it comes back as it
+        /// was. Another one, over unsaved changes: the window asks first.
+        /// </summary>
+        private static IEnumerator KeepAgainstHand(Player player, PieceEntry wall)
+        {
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.ReadOnly && string.IsNullOrEmpty(b.SourcePath));
+            ResolvedBlueprint resolved = null;
+            Check(kit != null && ResolvedBlueprint.TryResolve(kit, out resolved, out _), "a kit to put in the hammer");
+            if (resolved == null)
+            {
+                yield break;
+            }
+
+            var document = EditorSession.Document;
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
+            yield return EquipHammer(player);
+
+            // The same kit that is open, with its unsaved change: no question, the same blueprint.
+            BlueprintMode.Select(player, resolved);
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open && EditorSession.Document == document && document.Dirty && !Dialogs.IsOpen,
+                "the same kit in hand: the key came back to the blueprint as it was, nothing asked");
+            Check(!BlueprintMode.Active, "the build tool let go of it");
+
+            // A new blueprint with a piece in it and no file, then the kit in hand: the window asks.
+            EditorSession.Replace(DocumentStore.New("Keep test"));
+            var mine = EditorSession.Document;
+            mine.AddPiece(wall.PrefabName, Vector3.zero, Quaternion.identity);
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
+            BlueprintMode.Select(player, resolved);
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return new WaitForSeconds(0.5f);
+            Check(ModUi.Open && EditorSession.Document == mine && Dialogs.Kind == "confirm",
+                $"another blueprint in hand over unsaved changes: the window asks first ({Dialogs.TitleText})");
+            yield return Screenshot("editor-keep-4-asks");
+
+            Dialogs.Submit();
+            yield return WaitPaneReady();
+            var taken = EditorSession.Document;
+            Check(!Dialogs.IsOpen && taken != mine && taken != null && taken.Name == kit.Name && !taken.Dirty,
+                $"Discard opened the kit from the hammer: '{(taken != null ? taken.Name : "nothing")}'");
+            Check(ViewportHost.Pieces != null && ViewportHost.Pieces.Count == taken.Pieces.Count,
+                $"and the pane stands it: {(ViewportHost.Pieces != null ? ViewportHost.Pieces.Count : 0)} of {taken.Pieces.Count}");
+        }
+
+        /// <summary>A world change kills the pane while the window is closed. The next open builds it again, same view.</summary>
+        private static IEnumerator RebuildDeadPane()
+        {
+            var document = EditorSession.Document;
+            EditorState.Select(document.Pieces[0].Id);
+            var camera = ViewportHost.Camera;
+            camera.Turn(-30f, 5f);
+            yield return null;
+            var position = camera.Position;
+            var yaw = camera.Yaw;
+            var pitch = camera.Pitch;
+
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
+            var dead = ViewportHost.Scene;
+            UnityEngine.Object.Destroy(dead.Root.gameObject);
+            yield return null;
+            yield return null;
+            Check(!dead.IsAlive, "the kept scene is gone, the way a world change takes it");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F7);
+            yield return WaitPaneReady();
+            yield return null;
+            yield return null;
+            var scene = ViewportHost.Scene;
+            Check(ModUi.Open && scene != null && scene != dead && scene.IsAlive, "the key built a new pane");
+            Check(EditorSession.Document == document && EditorState.IsSelected(document.Pieces[0].Id),
+                "on the same blueprint and selection");
+            camera = ViewportHost.Camera;
+            Check(Vector3.Distance(camera.Position, position) < 1e-3f && Mathf.Abs(Mathf.DeltaAngle(camera.Yaw, yaw)) < 1e-3f
+                    && Mathf.Abs(camera.Pitch - pitch) < 1e-3f,
+                $"the new camera looks from where the old one did: {V4(camera.Position)} yaw {camera.Yaw:0.0}");
+            Check(ViewportHost.Pieces != null && ViewportHost.Pieces.Count == document.Pieces.Count,
+                $"every piece stands again: {(ViewportHost.Pieces != null ? ViewportHost.Pieces.Count : 0)} of {document.Pieces.Count}");
+            var picture = SampleView("built again");
+            Check(Painted(picture) > 0.2f, $"the pane draws: {Painted(picture) * 100f:0} % of it is not background");
+            yield return Screenshot("editor-keep-5-rebuilt");
+        }
+
+        /// <summary>Waits until every piece of the open blueprint stands in the pane.</summary>
+        private static IEnumerator WaitPaneReady()
+        {
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            yield return null;
         }
 
         // ---------- scenario: editor_build ----------

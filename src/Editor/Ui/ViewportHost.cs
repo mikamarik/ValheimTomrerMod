@@ -23,8 +23,11 @@ namespace ValheimTomrer.Editor.Ui
     /// right button drags the view round and the middle one pans. C hands the mouse to the pane
     /// for looking, and Esc gives it back.
     ///
-    /// The scene, the camera and the texture live only while the editor is open. Closing it
-    /// destroys all three.
+    /// Closing the window puts the pane to sleep (<see cref="Sleep"/>): the scene and the camera
+    /// stay, switched off, and only the texture goes. The next open switches them back on, so the
+    /// pane is exactly as it was left. A world change kills the scene; <see cref="Wake"/> then
+    /// builds it again from the document and puts the camera back where it was.
+    /// <see cref="Close"/> destroys all of it.
     /// </summary>
     internal static class ViewportHost
     {
@@ -250,6 +253,69 @@ namespace ValheimTomrer.Editor.Ui
             ValheimTomrerPlugin.Log.LogInfo(blueprint != null
                 ? $"editor view opened on '{blueprint.Name}' ({_model.Total} pieces)"
                 : "editor view opened on an empty blueprint");
+        }
+
+        /// <summary>
+        /// The window closed. The scene and the camera stay, switched off, so nothing in them draws,
+        /// lights or can be hit, and the next open finds the pane as it was. Only the texture goes:
+        /// it is memory on the graphics card.
+        /// </summary>
+        public static void Sleep()
+        {
+            Release();
+            PadAim = false;
+            _hasLastMouse = false;
+            _boxSelecting = false;
+            HideSelectRect();
+            if (_scene != null && _scene.IsAlive)
+            {
+                _scene.Root.gameObject.SetActive(false);
+            }
+
+            if (_preview != null && _preview.IsAlive)
+            {
+                _preview.DropTexture();
+            }
+
+            if (_image != null)
+            {
+                _image.texture = null;
+                _image.color = new Color(0f, 0f, 0f, 0f);
+            }
+        }
+
+        /// <summary>
+        /// The window is back. The pane that went to sleep switches on as it was left. When a world
+        /// change killed it, it is built again from the document, on the same view.
+        /// </summary>
+        public static void Wake()
+        {
+            if (_image == null)
+            {
+                return;
+            }
+
+            if (_scene != null && _scene.IsAlive && _preview != null && _preview.IsAlive)
+            {
+                _scene.Root.gameObject.SetActive(true);
+
+                // The window may have been built again since, with a new picture to aim through.
+                _raycast = new ViewportRaycast(_preview, _image.rectTransform, _scene);
+                _boxSignature = -1;
+                Fit();
+                Release();
+                ValheimTomrerPlugin.Log.LogInfo("editor view woke as it was left");
+                return;
+            }
+
+            var pose = _camera;
+            Show(null);
+            if (pose != null && _camera != null)
+            {
+                _camera.TakePose(pose);
+            }
+
+            ValheimTomrerPlugin.Log.LogInfo("editor view built again for the open blueprint, on the same view");
         }
 
         /// <summary>Everything the pane does once a frame, while the window is open.</summary>
