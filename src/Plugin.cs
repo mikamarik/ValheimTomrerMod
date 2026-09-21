@@ -41,6 +41,7 @@ namespace ValheimTomrer
                 "With a hammer in hand: selects the next blueprint. After the last one, back to normal building.");
 
             EditorConfig.Bind(Config);
+            BuildConfig.Bind(Config);
 
 #if DEBUG
             Dev.AutoTest.Init();

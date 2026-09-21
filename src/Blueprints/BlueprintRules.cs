@@ -5,7 +5,7 @@ namespace ValheimTomrer.Blueprints
 {
     /// <summary>
     /// The same rules the hammer applies to one piece, applied to a whole blueprint:
-    /// unlocked pieces, materials in the inventory, crafting stations in range.
+    /// unlocked pieces, materials in the inventory and the chests in range, crafting stations in range.
     /// </summary>
     internal static class BlueprintRules
     {
@@ -49,10 +49,11 @@ namespace ValheimTomrer.Blueprints
                 return null;
             }
 
+            var sources = MaterialSources.Around(player);
             var missing = new List<string>();
             foreach (var need in MaterialNeeds(blueprint))
             {
-                var have = player.GetInventory().CountItems(need.Key);
+                var have = sources.Count(need.Key);
                 if (have < need.Value)
                 {
                     missing.Add($"{need.Value - have} {Localize(need.Key)}");
@@ -79,7 +80,10 @@ namespace ValheimTomrer.Blueprints
             return null;
         }
 
-        /// <summary>Takes the materials of every piece that is not free in this world.</summary>
+        /// <summary>
+        /// Takes the materials of every piece that is not free in this world, piece by piece: the
+        /// inventory first, then the chests in range, nearest first. Call it after CheckCanBuild.
+        /// </summary>
         public static void Pay(Player player, ResolvedBlueprint blueprint)
         {
             if (player.PlacementCostDisabled)
@@ -87,13 +91,32 @@ namespace ValheimTomrer.Blueprints
                 return;
             }
 
+            var sources = MaterialSources.Around(player);
+            var unpaid = 0;
             foreach (var part in blueprint.Parts)
             {
-                if (!ZoneSystem.instance.GetGlobalKey(part.Piece.FreeBuildKey()))
+                if (ZoneSystem.instance.GetGlobalKey(part.Piece.FreeBuildKey()))
                 {
-                    player.ConsumeResources(part.Piece.m_resources, 0);
+                    continue;
+                }
+
+                foreach (var requirement in part.Piece.m_resources)
+                {
+                    if (requirement.m_resItem == null || requirement.m_amount <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (!sources.Take(requirement.m_resItem.m_itemData.m_shared.m_name, requirement.m_amount))
+                    {
+                        unpaid++;
+                    }
                 }
             }
+
+            var from = sources.ChestCount > 0 ? $" and {sources.ChestCount} chests within {sources.Range:0} m" : "";
+            ValheimTomrerPlugin.Log.LogInfo($"paid for {blueprint.Name} from the inventory{from}"
+                + (unpaid > 0 ? $", {unpaid} costs could not be paid" : ""));
         }
 
         /// <summary>Item name to amount, skipping pieces the world makes free.</summary>

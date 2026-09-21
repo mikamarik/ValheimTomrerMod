@@ -29,6 +29,7 @@ namespace ValheimTomrer.Dev
     /// "probe" measures what the in-game editor will be built on and writes probe.txt;
     /// "probe_build" measures what building from chests and partial builds rest on, to probe-build.txt
     /// (a probe like "probe", but left out of editor_all: it places and removes chests and floors);
+    /// "build_sources" builds a kit paid from the inventory and the chests in range, nearest first;
     /// "editor_open" opens the editor window with its key and checks the input takeover;
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
@@ -192,6 +193,9 @@ namespace ValheimTomrer.Dev
                 case "probe_build":
                     scenario = ProbeBuild(player);
                     break;
+                case "build_sources":
+                    scenario = TestBuildSources(player);
+                    break;
                 case "editor_open":
                     scenario = TestEditorOpen(player);
                     break;
@@ -339,6 +343,7 @@ namespace ValheimTomrer.Dev
                 case "dump": return DumpPieces(player);
                 case "probe": return Probe(player);
                 case "probe_build": return ProbeBuild(player);
+                case "build_sources": return TestBuildSources(player);
                 case "blueprints": return TestBlueprints(player);
                 case "editor_open": return TestEditorOpen(player);
                 case "editor_view": return TestEditorView(player);
@@ -382,8 +387,8 @@ namespace ValheimTomrer.Dev
         }
 
         /// <summary>
-        /// Every editor setting back to its default. A scenario that flips one must not decide what
-        /// the next one sees, and the run must not leave the player's config file changed.
+        /// Every editor and build setting back to its default. A scenario that flips one must not
+        /// decide what the next one sees, and the run must not leave the player's config file changed.
         /// </summary>
         private static void ResetSettings()
         {
@@ -393,6 +398,8 @@ namespace ValheimTomrer.Dev
             Default(EditorConfig.Boxes);
             Default(EditorConfig.LookSensitivity);
             Default(EditorConfig.PadLookSensitivity);
+            Default(BuildConfig.UseChests);
+            Default(BuildConfig.ChestRange);
         }
 
         private static void Default<T>(BepInEx.Configuration.ConfigEntry<T> entry)
@@ -2938,6 +2945,349 @@ namespace ValheimTomrer.Dev
         private static string V2(Vector2 v)
         {
             return $"({v.x:0.#},{v.y:0.#})";
+        }
+
+        // ---------- scenario: build_sources ----------
+
+        /// <summary>Kept in the 15 m chest on top of its share. What is left then shows the take order.</summary>
+        private const int SourcesSpare = 3;
+
+        /// <summary>
+        /// The hammer pays from the inventory and the chests in range, nearest first. Three wood
+        /// chests behind the player at 5, 15 and 30 m. The kit's cost is split 40 % in the inventory,
+        /// 40 % in the 5 m chest and 20 % in the 15 m chest (plus a spare), and the 30 m chest holds a
+        /// whole second copy that must never be touched.
+        /// </summary>
+        private static IEnumerator TestBuildSources(Player player)
+        {
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(0.5f);
+
+            Check(BuildConfig.UseChests != null && BuildConfig.UseChests.Value
+                && BuildConfig.ChestRange != null && Mathf.Approximately(BuildConfig.ChestRange.Value, 20f),
+                "the build settings start at their defaults: chests on, 20 m");
+
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Name == "Workshop");
+            ResolvedBlueprint resolved = null;
+            var error = "no Workshop kit";
+            if (kit == null || !ResolvedBlueprint.TryResolve(kit, out resolved, out error))
+            {
+                Check(false, "the workshop kit resolves: " + error);
+                yield break;
+            }
+
+            foreach (var part in resolved.Parts)
+            {
+                player.m_knownRecipes.Add(part.Piece.m_name);
+            }
+
+            player.UpdateAvailablePiecesList();
+            ClearInventoryExceptHammer(player);
+            yield return EquipHammer(player);
+
+            // RemoveItem by name takes any quality. That is only safe while a material has one.
+            foreach (var cost in resolved.TotalCost)
+            {
+                var shared = cost.m_resItem.m_itemData.m_shared;
+                Check(shared.m_maxQuality == 1, $"{shared.m_name} has one quality (max {shared.m_maxQuality}), so taking it by name is safe");
+            }
+
+            // ---- three wood chests behind the player, away from where the kit goes up ----
+            var centre = player.transform.position;
+            var pieces = new List<Piece>();
+            yield return PlaceTestPiece(player, "piece_chest_wood", OnGround(centre, 180f, 5f), 0f, pieces);
+            yield return PlaceTestPiece(player, "piece_chest_wood", OnGround(centre, 160f, 15f), 340f, pieces);
+            var farAngle = DryAngle(centre, 30f);
+            yield return PlaceTestPiece(player, "piece_chest_wood", OnGround(centre, farAngle, 30f), farAngle + 180f, pieces);
+            yield return new WaitForSeconds(1f);
+
+            var boxes = pieces.Select(p => p != null ? p.GetComponentInChildren<Container>() : null).ToList();
+            Check(boxes.All(b => b != null && b.GetInventory() != null), "three wood chests stand, each with an inventory");
+            if (!boxes.All(b => b != null && b.GetInventory() != null))
+            {
+                RemoveOldTestBuildings(player);
+                yield break;
+            }
+
+            var at = pieces.Select(p => Vector3.Distance(player.transform.position, p.transform.position)).ToList();
+            Log($"chests at {at[0]:0.00} m, {at[1]:0.00} m and {at[2]:0.00} m (the far one at {farAngle:0} degrees)");
+            Check(at[0] < 10f && at[1] > 10f && at[1] < 20f && at[2] > 20f,
+                $"the chests stand at 5, 15 and 30 m: {at[0]:0.0}, {at[1]:0.0}, {at[2]:0.0}");
+
+            yield return SourcesTakeOrder(player, boxes[0], boxes[1], boxes[2]);
+            yield return SourcesRules(player, pieces[0]);
+
+            // ---- the kit's cost, split over the inventory and the chests ----
+            var shares = new List<(string Name, int Need, int Bag, int Near, int Middle)>();
+            foreach (var cost in resolved.TotalCost)
+            {
+                var prefab = cost.m_resItem.gameObject.name;
+                var need = cost.m_amount;
+                var bag = Mathf.RoundToInt(need * 0.4f);
+                var near = Mathf.RoundToInt(need * 0.4f);
+                var middle = need - bag - near;
+                shares.Add((cost.m_resItem.m_itemData.m_shared.m_name, need, bag, near, middle));
+                AddTo(player.GetInventory(), prefab, bag);
+                AddTo(boxes[0].GetInventory(), prefab, near);
+                AddTo(boxes[1].GetInventory(), prefab, middle + SourcesSpare);
+                AddTo(boxes[2].GetInventory(), prefab, need);
+                Log($"{cost.m_resItem.m_itemData.m_shared.m_name}: needs {need}, bag {bag}, 5 m {near}, 15 m {middle} + {SourcesSpare} spare, 30 m {need}");
+            }
+
+            int Bag(string item) => player.GetInventory().CountItems(item);
+            int In(int chest, string item) => boxes[chest].GetInventory().CountItems(item);
+
+            var sources = MaterialSources.Around(player);
+            foreach (var s in shares)
+            {
+                Check(Bag(s.Name) == s.Bag && In(0, s.Name) == s.Near && In(1, s.Name) == s.Middle + SourcesSpare && In(2, s.Name) == s.Need,
+                    $"{s.Name} put in as planned: bag {Bag(s.Name)}, 5 m {In(0, s.Name)}, 15 m {In(1, s.Name)}, 30 m {In(2, s.Name)}");
+                var want = Bag(s.Name) + In(0, s.Name) + In(1, s.Name);
+                Check(sources.Count(s.Name) == want,
+                    $"Count({s.Name}) is {sources.Count(s.Name)}: bag + 5 m + 15 m = {want}, the 30 m chest's {In(2, s.Name)} left out");
+            }
+
+            Check(sources.ChestCount == 2 && sources.Chests[0] == boxes[0] && sources.Chests[1] == boxes[1]
+                && Mathf.Approximately(sources.Range, 20f),
+                $"the sources are the bag and 2 chests within 20 m, nearest first: {sources.ChestCount} chests within {sources.Range:0} m");
+            var rule = BlueprintRules.CheckCanBuild(player, resolved);
+            Check(rule == null, "the rules say the kit can be built from bag and chests: " + (rule ?? "ok"));
+
+            // ---- a shorter range drops the 15 m chest, chests off leaves the bag ----
+            BuildConfig.ChestRange.Value = 10f;
+            var near10 = MaterialSources.Around(player);
+            Check(near10.ChestCount == 1 && near10.Chests[0] == boxes[0]
+                && shares.All(s => near10.Count(s.Name) == Bag(s.Name) + In(0, s.Name)),
+                $"ChestRange 10: only the 5 m chest counts ({near10.ChestCount} chests), "
+                + string.Join(", ", shares.Select(s => $"{s.Name} {near10.Count(s.Name)}")));
+            Default(BuildConfig.ChestRange);
+
+            BuildConfig.UseChests.Value = false;
+            var bagOnly = MaterialSources.Around(player);
+            var refused = BlueprintRules.CheckCanBuild(player, resolved);
+            Check(bagOnly.ChestCount == 0 && bagOnly.Range == 0f && shares.All(s => bagOnly.Count(s.Name) == Bag(s.Name)),
+                "UseChests off: the bag only, " + string.Join(", ", shares.Select(s => $"{s.Name} {bagOnly.Count(s.Name)}")));
+            Check(refused != null && refused.StartsWith("Missing"), "and the rules refuse the kit: " + (refused ?? "no reason"));
+
+            // ---- the click: the whole kit, paid bag first, then nearest chest first ----
+            player.m_lookYaw = BuildFacing;
+            player.transform.rotation = BuildFacing;
+            player.m_body.rotation = BuildFacing;
+            yield return new WaitForSeconds(0.3f);
+            BlueprintMode.Select(player, resolved);
+            yield return AimAtGround(player);
+            Check(BlueprintMode.HasTarget && BlueprintMode.Blocked == null, "the preview stands on a free spot: " + (BlueprintMode.Blocked ?? "ok"));
+            var root = BlueprintMode.PreviewRoot;
+            var middleOfKit = root != null ? root.position : centre;
+
+            player.m_lastToolUseTime = 0f;
+            var standing = PiecesAround(player, middleOfKit).Count;
+            Check(!BlueprintMode.TryBuild(player) && PiecesAround(player, middleOfKit).Count == standing,
+                "with chests off the click is refused and builds nothing");
+            Default(BuildConfig.UseChests);
+
+            player.m_lastToolUseTime = 0f;
+            var existing = new HashSet<Piece>(PiecesAround(player, middleOfKit));
+            var ruleBefore = BlueprintRules.CheckCanBuild(player, resolved);
+            Check(BlueprintMode.TryBuild(player), "chests on again: the click builds the kit: " + (ruleBefore ?? "ok"));
+            var built = PiecesAround(player, middleOfKit).Where(p => !existing.Contains(p)).ToList();
+            Check(built.Count == resolved.Parts.Count, $"the whole kit stands: {built.Count} of {resolved.Parts.Count} pieces");
+
+            foreach (var s in shares)
+            {
+                Check(Bag(s.Name) == 0, $"{s.Name}: none left in the inventory ({s.Bag} -> {Bag(s.Name)})");
+                Check(In(0, s.Name) == 0 && In(1, s.Name) == SourcesSpare,
+                    $"{s.Name}: the 5 m chest was emptied ({s.Near} -> {In(0, s.Name)}) before the 15 m one was touched"
+                    + $" ({s.Middle + SourcesSpare} -> {In(1, s.Name)}, its {SourcesSpare} spare kept)");
+                Check(In(2, s.Name) == s.Need, $"{s.Name}: the 30 m chest is untouched ({In(2, s.Name)} of {s.Need})");
+            }
+
+            // Long enough for the build smoke to clear.
+            yield return new WaitForSeconds(3f);
+            player.m_lookPitch = 10f;
+            yield return Screenshot("build-sources-built");
+
+            // ---- what the chests saved, read back the way the game loads it ----
+            foreach (var s in shares)
+            {
+                var saved = boxes.Select(b => WoodIn(b.m_nview.GetZDO().GetByteArray(ZDOVars.s_items), b, s.Name)).ToList();
+                Check(saved[0] == In(0, s.Name) && saved[0] == 0,
+                    $"{s.Name}: the 5 m chest's saved items hold the new count ({saved[0]})");
+                Check(saved[1] == SourcesSpare && saved[2] == s.Need,
+                    $"{s.Name}: saved in the 15 m chest {saved[1]}, in the 30 m chest {saved[2]}");
+            }
+
+            BlueprintMode.Exit();
+            yield return SourcesWard(player, boxes[0], boxes[1]);
+
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(1f);
+            Check(pieces.All(p => p == null), "every test chest is removed again");
+            var left = new List<Piece>();
+            Piece.GetAllPiecesInRadius(player.transform.position, 60f, left);
+            var mine = left.Count(p => p != null && p.GetCreator() == player.GetPlayerID());
+            Check(mine == 0, $"nothing of the test is left standing: {mine}");
+        }
+
+        /// <summary>
+        /// Take goes the inventory first, then nearest first, one source at a time, and takes nothing
+        /// when all of them together are short. A cart between the two near chests proves a hold on
+        /// a child object counts. Stone, which the kit does not use.
+        /// </summary>
+        private static IEnumerator SourcesTakeOrder(Player player, Container near, Container middle, Container far)
+        {
+            var carts = new List<Piece>();
+            yield return PlaceTestPiece(player, "Cart", OnGround(player.transform.position, 200f, 9f) + (Vector3.up * 0.3f), 20f, carts);
+            yield return new WaitForSeconds(1f);
+            var cart = carts[0] != null ? carts[0].GetComponentInChildren<Container>() : null;
+            Check(cart != null && cart.GetComponent<Piece>() == null, "a cart stands at 9 m, its hold on a child object");
+            if (cart == null)
+            {
+                yield break;
+            }
+
+            var stone = ObjectDB.instance.GetItemPrefab("Stone").GetComponent<ItemDrop>().m_itemData.m_shared.m_name;
+            var holders = new[] { player.GetInventory(), near.GetInventory(), cart.GetInventory(), middle.GetInventory(), far.GetInventory() };
+            foreach (var inventory in holders)
+            {
+                AddTo(inventory, "Stone", 3);
+            }
+
+            string Left() => string.Join(",", holders.Select(i => i.CountItems(stone)));
+            var sources = MaterialSources.Around(player);
+            Check(sources.ChestCount == 3 && sources.Chests[0] == near && sources.Chests[1] == cart && sources.Chests[2] == middle,
+                $"the chests nearest first: 5 m, the cart, 15 m, and the 30 m one out ({sources.ChestCount} chests)");
+            Check(sources.Count(stone) == 12, $"Count(stone) is {sources.Count(stone)}: 3 each in the bag, 5 m, cart, 15 m");
+            Check(sources.Take(stone, 7) && Left() == "0,0,2,3,3",
+                $"Take 7 stone: the bag, then the 5 m chest, then 2 from the cart. Left bag,5 m,cart,15 m,30 m: {Left()}");
+            Check(!sources.Take(stone, 100) && Left() == "0,0,2,3,3", $"Take 100 stone says no and takes nothing: {Left()}");
+
+            foreach (var inventory in holders)
+            {
+                inventory.RemoveItem(stone, inventory.CountItems(stone));
+            }
+
+            ZNetScene.instance.Destroy(carts[0].gameObject);
+            yield return new WaitForSeconds(0.5f);
+        }
+
+        /// <summary>
+        /// A chest counts only when the player could open it: placed by a player, and not private to
+        /// someone else. The owner is changed in memory only, and put back in the same frame.
+        /// </summary>
+        private static IEnumerator SourcesRules(Player player, Piece near)
+        {
+            var box = near.GetComponentInChildren<Container>();
+            var me = player.GetPlayerID();
+            Check(MaterialSources.Around(player).Chests.Contains(box), "the 5 m chest counts as it is");
+
+            near.m_creator = 0L;
+            var unowned = MaterialSources.Around(player).Chests.Contains(box);
+            near.m_creator = me;
+            Check(!unowned, "a chest no player placed does not count");
+
+            var privates = new List<Piece>();
+            yield return PlaceTestPiece(player, "piece_chest_private", OnGround(player.transform.position, 215f, 6f), 35f, privates);
+            yield return new WaitForSeconds(0.5f);
+            var personal = privates[0] != null ? privates[0].GetComponentInChildren<Container>() : null;
+            Check(personal != null && personal.m_privacy == Container.PrivacySetting.Private, "a private chest stands at 6 m");
+            if (personal == null)
+            {
+                yield break;
+            }
+
+            var own = MaterialSources.Around(player).Chests.Contains(personal);
+            privates[0].m_creator = me + 1;
+            var foreign = MaterialSources.Around(player).Chests.Contains(personal);
+            privates[0].m_creator = me;
+            Check(own, "the player's own private chest counts");
+            Check(!foreign, "another player's private chest does not count");
+
+            ZNetScene.instance.Destroy(privates[0].gameObject);
+            yield return new WaitForSeconds(0.5f);
+        }
+
+        /// <summary>
+        /// A wood chest checks the ward, as the game does when it is opened. Under a ward the player
+        /// placed, it counts. When that ward belongs to someone else (in memory, put back in the same
+        /// frame), it does not.
+        /// </summary>
+        private static IEnumerator SourcesWard(Player player, Container near, Container middle)
+        {
+            var wards = new List<Piece>();
+            yield return PlaceTestPiece(player, "guard_stone", OnGround(player.transform.position, 240f, 4f), 60f, wards);
+            yield return new WaitForSeconds(0.5f);
+            var ward = wards[0] != null ? wards[0].GetComponent<PrivateArea>() : null;
+            Check(ward != null, "a ward stands at 4 m");
+            if (ward == null)
+            {
+                yield break;
+            }
+
+            if (!ward.IsEnabled())
+            {
+                Log("the ward came up switched off, switching it on");
+                ward.SetEnabled(true);
+            }
+
+            var mine = MaterialSources.Around(player);
+            Check(near.m_checkGuardStone && mine.Chests.Contains(near) && mine.Chests.Contains(middle),
+                "under the player's own ward both wood chests count");
+
+            var me = player.GetPlayerID();
+            wards[0].m_creator = me + 1;
+            var open = PrivateArea.CheckAccess(near.transform.position, 0f, flash: false);
+            var theirs = MaterialSources.Around(player);
+            wards[0].m_creator = me;
+            Check(!open && !theirs.Chests.Contains(near) && !theirs.Chests.Contains(middle),
+                $"under another player's ward neither counts ({theirs.ChestCount} chests)");
+
+            ZNetScene.instance.Destroy(wards[0].gameObject);
+            yield return new WaitForSeconds(0.5f);
+        }
+
+        /// <summary>Puts a piece down the game's way and adds the new one to the list (null when it is not there).</summary>
+        private static IEnumerator PlaceTestPiece(Player player, string prefab, Vector3 spot, float yaw, List<Piece> into)
+        {
+            var piece = PiecePrefab(prefab);
+            if (piece == null)
+            {
+                Check(false, $"the {prefab} prefab exists");
+                into.Add(null);
+                yield break;
+            }
+
+            var before = new List<Piece>();
+            Piece.GetAllPiecesInRadius(spot, 2f, before);
+            player.PlacePiece(piece, spot, Quaternion.Euler(0f, yaw, 0f), false);
+            yield return null;
+            var after = new List<Piece>();
+            Piece.GetAllPiecesInRadius(spot, 2f, after);
+            into.Add(after.FirstOrDefault(p => !before.Contains(p) && p.GetCreator() == player.GetPlayerID()));
+        }
+
+        /// <summary>A way out from the centre with dry ground at this distance, behind the player first.</summary>
+        private static float DryAngle(Vector3 centre, float distance)
+        {
+            foreach (var angle in new[] { 200f, 180f, 220f, 160f, 240f, 140f, 260f, 120f })
+            {
+                if (OnGround(centre, angle, distance).y > ZoneSystem.instance.m_waterLevel + 0.5f)
+                {
+                    return angle;
+                }
+            }
+
+            return 200f;
+        }
+
+        private static void AddTo(Inventory inventory, string prefab, int amount)
+        {
+            if (amount > 0)
+            {
+                inventory.AddItem(prefab, amount, 1, 0, 0L, "", false);
+            }
         }
 
         // ---------- scenario: editor_open ----------
