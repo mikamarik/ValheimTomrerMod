@@ -32,7 +32,7 @@ namespace ValheimTomrer.Blueprints
         /// <summary>Inside the list's background, left and right.</summary>
         private const float Padding = 10f;
 
-        /// <summary>Inside the list's background, top and bottom. With three rows the list is then as tall as the card.</summary>
+        /// <summary>Inside the list's background, top and bottom.</summary>
         private const float PaddingY = 8f;
 
         /// <summary>The list's background is at least this dark (the card's own is 0.5).</summary>
@@ -202,12 +202,13 @@ namespace ValheimTomrer.Blueprints
 
             LastTally = tally;
             _list.Width = MaterialList.ColumnsFor(MaterialList.RowCount(tally), _list.MaxColumns) > 1 ? TwoColumnWidth : OneColumnWidth;
-            _list.Show(tally);
 
-            // Never lower than the card, so a short list lines up with the card's top.
+            // Never lower than the card, so a short list lines up with the card's top. Its footer then
+            // sits at the bottom, with nothing empty under it.
             var card = _panel.rectTransform.parent as RectTransform;
-            var height = Mathf.Max(card != null ? card.rect.height : 0f, _list.Height + (2f * PaddingY));
-            _panel.rectTransform.sizeDelta = new Vector2(_list.Width + (2f * Padding), height);
+            _list.MinHeight = Mathf.Max(0f, (card != null ? card.rect.height : 0f) - (2f * PaddingY));
+            _list.Show(tally);
+            _panel.rectTransform.sizeDelta = new Vector2(_list.Width + (2f * Padding), _list.Height + (2f * PaddingY));
             KeepOnScreen();
         }
 

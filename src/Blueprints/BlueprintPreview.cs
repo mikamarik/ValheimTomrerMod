@@ -21,10 +21,13 @@ namespace ValheimTomrer.Blueprints
         /// <summary>Already built in the world: the copy is switched off.</summary>
         Hidden,
 
-        /// <summary>The next click builds it: the normal see-through ghost.</summary>
+        /// <summary>
+        /// The next click builds it: light blue (<see cref="BlueprintPreview.ReadyTint"/>) on a site's
+        /// ghost, the plain see-through ghost on any other preview.
+        /// </summary>
         Ready,
 
-        /// <summary>Not yet: the game's own red "cannot place" tint.</summary>
+        /// <summary>Not yet: the game's own red "cannot place" tint (<see cref="BlueprintPreview.RedTint"/>).</summary>
         Waiting,
     }
 
@@ -35,6 +38,9 @@ namespace ValheimTomrer.Blueprints
         public PreviewLook Look;
         public bool Colliders;
 
+        /// <summary>Parts the next click builds (<see cref="PartLook.Ready"/>) are tinted light blue.</summary>
+        public bool BlueReady;
+
         /// <summary>Blueprint mode: the game's "ghost" layer, tinted copies, nothing to collide with.</summary>
         public static PreviewStyle Ghost()
         {
@@ -44,6 +50,18 @@ namespace ValheimTomrer.Blueprints
                 Look = PreviewLook.Ghost,
                 Colliders = false,
             };
+        }
+
+        /// <summary>
+        /// An unfinished build's ghost: the same as <see cref="Ghost"/>, and the parts the next click
+        /// builds are light blue. The game's ghost material is nearly opaque, so untinted they would
+        /// look like built wood.
+        /// </summary>
+        public static PreviewStyle Site()
+        {
+            var style = Ghost();
+            style.BlueReady = true;
+            return style;
         }
 
         /// <summary>The editor pane: the editor's own layer, real materials, clickable.</summary>
@@ -64,13 +82,26 @@ namespace ValheimTomrer.Blueprints
     /// no lights or sounds. Nothing here is saved.
     ///
     /// Three users: blueprint mode's see-through preview that follows the player's aim, the ghost of
-    /// an unfinished build (the same look, one <see cref="PartLook"/> per part, Sites/SiteTracker.cs),
-    /// and the editor's solid model standing in its own scene (<see cref="PreviewStyle"/>).
+    /// an unfinished build (the same look, one <see cref="PartLook"/> per part: hidden, light blue or
+    /// red, Sites/SiteTracker.cs), and the editor's solid model standing in its own scene
+    /// (<see cref="PreviewStyle"/>).
     /// </summary>
     internal sealed class BlueprintPreview
     {
         /// <summary>How many pieces one <see cref="Fill"/> step builds, so a big kit does not stall a frame.</summary>
         public const int PiecesPerStep = 8;
+
+        /// <summary>
+        /// The glow is the tint at this strength. The game's own red uses 0.7
+        /// (<c>Piece.SetInvalidPlacementHeightlight</c>).
+        /// </summary>
+        public const float TintGlow = 0.7f;
+
+        /// <summary>A part that is blocked or waiting: the game's own "cannot place" red.</summary>
+        public static readonly Color RedTint = Color.red;
+
+        /// <summary>A part of a site's ghost the next click builds. Reads on grass and wood in daylight.</summary>
+        public static readonly Color ReadyTint = new Color(0.35f, 0.7f, 1f);
 
         private static readonly Dictionary<GameObject, Bounds> PrefabBoxes = new Dictionary<GameObject, Bounds>();
 
@@ -83,8 +114,8 @@ namespace ValheimTomrer.Blueprints
         private readonly List<bool> _invalid = new List<bool>();
         private readonly List<PartLook> _looks = new List<PartLook>();
 
-        /// <summary>Whether a part wears the red tint now: blocked (<see cref="SetInvalid"/>) or waiting.</summary>
-        private readonly List<bool> _red = new List<bool>();
+        /// <summary>The tint a part wears now: red (blocked or waiting), blue (ready on a site's ghost) or none.</summary>
+        private readonly List<Tint> _tints = new List<Tint>();
 
         private readonly List<Material> _materials = new List<Material>();
 
@@ -232,7 +263,7 @@ namespace ValheimTomrer.Blueprints
                 _pieces.Add(copy.GetComponent<Piece>());
                 _invalid.Add(false);
                 _looks.Add(PartLook.Ready);
-                _red.Add(false);
+                _tints.Add(Tint.None);
                 if (_hideUntilDone)
                 {
                     Hold(copy);
@@ -312,13 +343,14 @@ namespace ValheimTomrer.Blueprints
         }
 
         /// <summary>
-        /// One part of an unfinished build: hidden (built), the normal ghost (the next click builds
-        /// it) or the red tint (not yet). The red is the game's own, <c>Piece.SetInvalidPlacementHeightlight</c>,
-        /// the same one <see cref="SetInvalid"/> uses; a part is red when either asks for it.
+        /// One part of an unfinished build: hidden (built), light blue on a site's ghost (the next
+        /// click builds it) or red (not yet). A part is red when <see cref="SetInvalid"/> or its look
+        /// asks for it. Every call checks the tint, so the first one also paints a part that is Ready
+        /// from the start.
         /// </summary>
         public void SetPart(int index, PartLook look)
         {
-            if (index < 0 || index >= _looks.Count || _looks[index] == look)
+            if (index < 0 || index >= _looks.Count)
             {
                 return;
             }
@@ -334,16 +366,34 @@ namespace ValheimTomrer.Blueprints
             Paint(index);
         }
 
+        /// <summary>
+        /// Puts the part's tint on through the game's <c>MaterialMan</c>, the calls
+        /// <c>Piece.SetInvalidPlacementHeightlight</c> makes: <c>_Color</c> and a glow in
+        /// <c>_EmissionColor</c>. No tint takes both off again. Only a change is sent.
+        /// </summary>
         private void Paint(int index)
         {
-            var red = _invalid[index] || _looks[index] == PartLook.Waiting;
-            if (_red[index] == red)
+            var tint = _invalid[index] || _looks[index] == PartLook.Waiting ? Tint.Red
+                : _style.BlueReady && _looks[index] == PartLook.Ready ? Tint.Blue
+                : Tint.None;
+            var man = MaterialMan.instance;
+            if (_tints[index] == tint || man == null)
             {
                 return;
             }
 
-            _red[index] = red;
-            _pieces[index].SetInvalidPlacementHeightlight(red);
+            _tints[index] = tint;
+            var go = _pieces[index].gameObject;
+            if (tint == Tint.None)
+            {
+                man.ResetValue(go, ShaderProps._Color);
+                man.ResetValue(go, ShaderProps._EmissionColor);
+                return;
+            }
+
+            var colour = tint == Tint.Red ? RedTint : ReadyTint;
+            man.SetValue(go, ShaderProps._Color, colour);
+            man.SetValue(go, ShaderProps._EmissionColor, colour * TintGlow);
         }
 
         public void Destroy()
@@ -624,6 +674,13 @@ namespace ValheimTomrer.Blueprints
             {
                 Object.Destroy(component);
             }
+        }
+
+        private enum Tint
+        {
+            None,
+            Red,
+            Blue,
         }
     }
 }

@@ -11,7 +11,7 @@ namespace ValheimTomrer.Blueprints.Sites
     ///   1. which parts stand is read from the world (same prefab, pivot within 5 cm, turn within 2°);
     ///   2. a site with every part standing is finished: "X finished." and its file is deleted;
     ///   3. with the hammer out and the player within 64 m of a site's box, its ghost shows: built
-    ///      parts hidden, the ones the next click builds as the normal ghost, the rest red.
+    ///      parts hidden, the ones the next click builds light blue, the rest red.
     ///
     /// The next click's parts come from <see cref="PartialBuild.Plan(ResolvedBlueprint, Vector3, float, bool[], MaterialSources, bool)"/>,
     /// which is not cheap on a big blueprint (57 ms on 400 pieces). So it runs again for a site only
@@ -331,7 +331,7 @@ namespace ValheimTomrer.Blueprints.Sites
 
         private static void StartGhost(Site site)
         {
-            var ghost = BlueprintPreview.Empty(site.Resolved, PreviewStyle.Ghost(), hideUntilDone: true);
+            var ghost = BlueprintPreview.Empty(site.Resolved, PreviewStyle.Site(), hideUntilDone: true);
             ghost.Root.name = "ValheimTomrer_Site_" + site.Name;
             ghost.Root.SetPositionAndRotation(site.RootPosition, Quaternion.identity);
             site.Ghost = ghost;

@@ -66,11 +66,6 @@ namespace ValheimTomrer.Blueprints
         /// <summary>Costs are off (no-cost mode): nothing is taken, every row counts as enough.</summary>
         public bool CostsOff;
 
-        public int ChestCount;
-
-        /// <summary>The range the chests were found in, in metres. 0 when chests are off.</summary>
-        public float Range;
-
         public int Missing => Total - BuiltCount;
     }
 
@@ -94,8 +89,6 @@ namespace ValheimTomrer.Blueprints
                 Total = blueprint.Parts.Count,
                 Continuing = built != null,
                 CostsOff = costsOff,
-                ChestCount = sources != null ? sources.ChestCount : 0,
-                Range = sources != null ? sources.Range : 0f,
             };
 
             // What the parts not built yet cost, item by item. Free-build keys count (PartialBuild.CostOf).

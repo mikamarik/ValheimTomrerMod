@@ -9,12 +9,13 @@ namespace ValheimTomrer.Editor.Ui
 {
     /// <summary>
     /// The materials list: one row per item (icon, name, have / need, a bar), one per station, and a
-    /// footer ("Can build now: 34 of 120 pieces", "From: bag + 3 chests within 20 m"). More than
-    /// <see cref="OneColumnRows"/> rows go in two columns. Nothing is ever hidden.
+    /// footer line ("Can build now: 34 of 120 pieces"). More than <see cref="OneColumnRows"/> rows go
+    /// in two columns. Nothing is ever hidden.
     ///
-    /// Knows nothing about where it sits: the caller gives the parent, the width and the most columns,
-    /// and reads <see cref="Height"/> back. Rows are pooled, and a text is set only when it changed,
-    /// so <see cref="Show"/> can be called often. Every label is on <see cref="UiTheme.FontMaterial"/>.
+    /// Knows nothing about where it sits: the caller gives the parent, the width, the most columns and
+    /// the least height, and reads <see cref="Height"/> back. Rows are pooled, and a text is set only
+    /// when it changed, so <see cref="Show"/> can be called often. Every label is on
+    /// <see cref="UiTheme.FontMaterial"/>.
     /// </summary>
     internal sealed class MaterialList
     {
@@ -25,7 +26,6 @@ namespace ValheimTomrer.Editor.Ui
         public const float TextSize = 16f;
         public const float BarHeight = 3f;
         public const float FooterSize = 15f;
-        public const float SourceSize = 13f;
         public const int OneColumnRows = 10;
 
         /// <summary>Between the icon and the text, and between the name and the numbers.</summary>
@@ -42,11 +42,11 @@ namespace ValheimTomrer.Editor.Ui
 
         private readonly List<Row> _rows = new List<Row>();
         private TextMeshProUGUI _footer;
-        private TextMeshProUGUI _source;
         private Image _line;
         private int _shown = -1;
         private int _columns;
         private float _laidOutWidth = -1f;
+        private float _laidOutMinHeight = -1f;
         private float _haveWidth;
         private float _needWidth;
 
@@ -62,7 +62,13 @@ namespace ValheimTomrer.Editor.Ui
         /// <summary>1 keeps every row in one column, whatever the count.</summary>
         public int MaxColumns { get; set; } = 2;
 
-        /// <summary>What the rows and the footer take, after <see cref="Show"/>.</summary>
+        /// <summary>
+        /// The least height. When the rows need less, the footer goes to the bottom and the spare room
+        /// is left above its line, never under it. 0: only as tall as the rows and the footer.
+        /// </summary>
+        public float MinHeight { get; set; }
+
+        /// <summary>What the rows and the footer take, at least <see cref="MinHeight"/>. After <see cref="Show"/>.</summary>
         public float Height { get; private set; }
 
         public int Columns => _columns;
@@ -82,8 +88,6 @@ namespace ValheimTomrer.Editor.Ui
         }
 
         public TextMeshProUGUI Footer => _footer;
-
-        public TextMeshProUGUI Source => _source;
 
         /// <summary>Columns a list of this many rows takes.</summary>
         public static int ColumnsFor(int rows, int maxColumns)
@@ -114,10 +118,6 @@ namespace ValheimTomrer.Editor.Ui
             list._footer.fontStyle = FontStyles.Bold;
             list._footer.enableWordWrapping = true;
             TopLeft(list._footer.rectTransform);
-
-            list._source = UiBuild.Label("From", root, "", SourceSize, TextAlignmentOptions.TopLeft, UiTheme.TextDim);
-            list._source.enableWordWrapping = true;
-            TopLeft(list._source.rectTransform);
             return list;
         }
 
@@ -168,12 +168,14 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             var columns = ColumnsFor(count, MaxColumns);
-            var relaid = numbersChanged || count != _shown || columns != _columns || !Mathf.Approximately(Width, _laidOutWidth);
+            var relaid = numbersChanged || count != _shown || columns != _columns || !Mathf.Approximately(Width, _laidOutWidth)
+                || !Mathf.Approximately(MinHeight, _laidOutMinHeight);
             if (relaid)
             {
                 _shown = count;
                 _columns = columns;
                 _laidOutWidth = Width;
+                _laidOutMinHeight = MinHeight;
                 MeasureNumbers(count);
                 Layout(count);
             }
@@ -248,11 +250,7 @@ namespace ValheimTomrer.Editor.Ui
                     : UiTheme.Warn;
             }
 
-            var from = tally.CostsOff ? "Costs are off: nothing is taken."
-                : tally.Range > 0f ? $"From: bag + {tally.ChestCount} {(tally.ChestCount == 1 ? "chest" : "chests")} within {tally.Range:0} m"
-                : "From: bag";
-
-            var changed = SetText(_footer, text) | SetText(_source, from);
+            var changed = SetText(_footer, text);
             if (_footer.color != colour)
             {
                 _footer.color = colour;
@@ -264,16 +262,13 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             // The footer spans every column and wraps when it has to, so it is measured, not assumed.
+            // It sits at the bottom, its line just over it; spare room from MinHeight goes above the line.
             var width = Width;
-            var y = -RowsHeight - (RowsHeight > 0f ? FooterGap : 0f);
-            Size(_line.rectTransform, 0f, y, width, 1f);
-            y -= 1f + FooterGap;
             var footerHeight = Mathf.Ceil(_footer.GetPreferredValues(text, width, 0f).y);
-            Size(_footer.rectTransform, 0f, y, width, footerHeight);
-            y -= footerHeight + 2f;
-            var sourceHeight = Mathf.Ceil(_source.GetPreferredValues(from, width, 0f).y);
-            Size(_source.rectTransform, 0f, y, width, sourceHeight);
-            Height = -(y - sourceHeight);
+            var needed = RowsHeight + (RowsHeight > 0f ? FooterGap : 0f) + 1f + FooterGap + footerHeight;
+            Height = Mathf.Max(needed, MinHeight);
+            Size(_footer.rectTransform, 0f, -(Height - footerHeight), width, footerHeight);
+            Size(_line.rectTransform, 0f, -(Height - footerHeight - FooterGap - 1f), width, 1f);
             Root.sizeDelta = new Vector2(Width, Height);
         }
 

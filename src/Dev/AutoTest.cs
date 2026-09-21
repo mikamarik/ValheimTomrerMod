@@ -3924,6 +3924,10 @@ namespace ValheimTomrer.Dev
                 yield break;
             }
 
+            var plain = new string(root.GetComponentsInChildren<Piece>(true).Select(TintOf).ToArray());
+            Check(plain.Length == resolved.Parts.Count && plain.All(t => t == '-'),
+                $"the hammer's preview of a new blueprint keeps the plain ghost look, no part tinted: {plain}");
+
             var rootPos = root.position;
             var rootYaw = root.eulerAngles.y;
             var existing = new HashSet<Piece>(PiecesAround(player, rootPos));
@@ -4008,17 +4012,18 @@ namespace ValheimTomrer.Dev
             Check(SiteTracker.PlanRuns == runs + 1 && ready.Count > 0 && ready.Count < site.Total - site.BuiltCount,
                 $"with 4 wood the plan ran again and {ready.Count} parts are ready: {string.Join(", ", ready.Select(i => $"{i} {resolved.Parts[i].Prefab.name}"))}");
             Check(Enumerable.Range(0, site.Total).All(i => ghost.LookOf(i) == (site.Built[i] ? PartLook.Hidden : ready.Contains(i) ? PartLook.Ready : PartLook.Waiting)),
-                "ready parts look like the normal ghost, the others red: " + Looks(site));
+                "ready parts are Ready, the others Waiting: " + Looks(site));
             SiteTracker.Refresh(player);
             SiteTracker.Refresh(player);
             Check(SiteTracker.PlanRuns == runs + 1, $"two more refreshes with nothing changed do not plan again ({SiteTracker.PlanRuns - runs - 1} extra)");
 
             yield return null;
             yield return null;
-            var redPart = Enumerable.Range(0, site.Total).FirstOrDefault(i => ghost.LookOf(i) == PartLook.Waiting);
-            var readyPart = ready.Count > 0 ? ready[0] : -1;
-            Check(IsTintedRed(ghost.Part(redPart)) && readyPart >= 0 && !IsTintedRed(ghost.Part(readyPart)),
-                $"the game's red tint is on a waiting part ({redPart}) and not on a ready one ({readyPart})");
+            var tints = Tints(site);
+            var waiting = Enumerable.Range(0, site.Total).Count(i => ghost.LookOf(i) == PartLook.Waiting);
+            Check(tints == Wanted(site) && ready.Count > 0 && waiting > 0,
+                $"each part wears its look's tint through MaterialMan, _Color and the glow in _EmissionColor: the {ready.Count} ready ones"
+                + $" light blue, the {waiting} waiting ones red, the built ones none: {tints} (b blue, r red, - none), wanted {Wanted(site)}");
 
             // The screenshot: from the front left corner, 11 m off, so the side wall that is ready shows too.
             var centre = site.WorldBox.center;
@@ -4030,6 +4035,15 @@ namespace ValheimTomrer.Dev
             SiteTracker.Refresh(player);
             yield return new WaitForSeconds(1f);
             yield return Screenshot("build-sites-1-ghosts");
+
+            // The 4 wood gone again: the parts that were ready turn red, and no blue is left on any of them.
+            ClearInventoryExceptHammer(player);
+            SiteTracker.Refresh(player);
+            yield return null;
+            yield return null;
+            tints = Tints(site);
+            Check(site.ReadyCount == 0 && ready.All(i => ghost.LookOf(i) == PartLook.Waiting && tints[i] == 'r') && tints.IndexOf('b') < 0,
+                $"the wood taken away: the parts that were ready are red now, nothing stays light blue: {tints}");
 
             // ---- 3. loaded again from disk: the same site, what is built read from the world ----
             var was = site;
@@ -4171,26 +4185,56 @@ namespace ValheimTomrer.Dev
                 site.Ghost.LookOf(i) == PartLook.Hidden ? 'H' : site.Ghost.LookOf(i) == PartLook.Ready ? 'R' : 'W').ToArray());
         }
 
-        /// <summary>The game's red "cannot place" colour is on this copy's renderers, through MaterialMan.</summary>
-        private static bool IsTintedRed(Piece copy)
+        /// <summary>
+        /// The tint MaterialMan put on a ghost copy, read back from every mesh renderer's property block,
+        /// switched-off ones too: 'b' the light blue, 'r' the red (each with its glow in _EmissionColor),
+        /// '-' none, '?' anything else or renderers that disagree.
+        /// </summary>
+        private static char TintOf(Piece copy)
         {
             if (copy == null)
             {
-                return false;
+                return '?';
+            }
+
+            bool Wears(MaterialPropertyBlock b, Color colour)
+            {
+                bool Near(Color a, Color c) => Mathf.Abs(a.r - c.r) < 0.01f && Mathf.Abs(a.g - c.g) < 0.01f && Mathf.Abs(a.b - c.b) < 0.01f;
+                return b.HasColor(ShaderProps._Color) && b.HasColor(ShaderProps._EmissionColor)
+                    && Near(b.GetColor(ShaderProps._Color), colour) && Near(b.GetColor(ShaderProps._EmissionColor), colour * BlueprintPreview.TintGlow);
             }
 
             var block = new MaterialPropertyBlock();
+            var found = ' ';
             foreach (var renderer in copy.GetComponentsInChildren<MeshRenderer>(true))
             {
                 renderer.GetPropertyBlock(block);
-                var colour = block.isEmpty ? Color.clear : block.GetColor(ShaderProps._Color);
-                if (colour.r > 0.99f && colour.g < 0.01f && colour.b < 0.01f)
+                var tint = block.isEmpty || (!block.HasColor(ShaderProps._Color) && !block.HasColor(ShaderProps._EmissionColor)) ? '-'
+                    : Wears(block, BlueprintPreview.ReadyTint) ? 'b'
+                    : Wears(block, BlueprintPreview.RedTint) ? 'r'
+                    : '?';
+                if (found != ' ' && found != tint)
                 {
-                    return true;
+                    return '?';
                 }
+
+                found = tint;
             }
 
-            return false;
+            return found == ' ' ? '-' : found;
+        }
+
+        /// <summary>One letter per part of a site's ghost: its tint (<see cref="TintOf"/>).</summary>
+        private static string Tints(Site site)
+        {
+            return site.Ghost == null ? "no ghost" : new string(Enumerable.Range(0, site.Total).Select(i => TintOf(site.Ghost.Part(i))).ToArray());
+        }
+
+        /// <summary>The tint each part's look asks for: hidden none, ready light blue, waiting red.</summary>
+        private static string Wanted(Site site)
+        {
+            return site.Ghost == null ? "no ghost" : new string(Enumerable.Range(0, site.Total).Select(i =>
+                site.Ghost.LookOf(i) == PartLook.Hidden ? '-' : site.Ghost.LookOf(i) == PartLook.Ready ? 'b' : 'r').ToArray());
         }
 
         /// <summary>A short teleport the game's way: waits out the 2 s cooldown, then faces the given way.</summary>
@@ -4682,6 +4726,7 @@ namespace ValheimTomrer.Dev
 
             FirstEntry(player);
             Check(BlueprintMode.CurrentSite == site, "the key continues it: " + BlueprintMode.EntryName);
+            var tintsBefore = Tints(site);
             var before = (bool[])site.Built.Clone();
             player.m_lastToolUseTime = 0f;
             var clicked = BlueprintMode.TryBuild(player);
@@ -4694,6 +4739,14 @@ namespace ValheimTomrer.Dev
             Check(!site.Built[target] && said.Contains("1 left out"), $"that one is left out, and it says so: '{said}'");
             SiteTracker.Refresh(player);
             Check(site.Ready != null && site.Ready[target] && SiteStore.All.Contains(site), $"it stays ready: {Looks(site)}");
+            yield return null;
+            yield return null;
+            var tints = Tints(site);
+            var waiting = Enumerable.Range(0, site.Total).Where(i => site.Ghost.LookOf(i) == PartLook.Waiting).DefaultIfEmpty(-1).First();
+            Check(added.Count > 0 && added.All(i => tintsBefore[i] == 'b' && site.Ghost.LookOf(i) == PartLook.Hidden && tints[i] == '-')
+                && tints[target] == 'b' && waiting >= 0 && tints[waiting] == 'r' && tints == Wanted(site),
+                $"the parts the click built were light blue and are hidden now with no tint left ({string.Join(", ", added)}),"
+                + $" the one left out is still light blue ({target}), a waiting one red ({waiting}): before {tintsBefore}, after {tints}");
             player.m_lookPitch = 20f;
             yield return new WaitForSeconds(0.5f);
             yield return Screenshot("build-continue-3-inside");
@@ -4838,8 +4891,10 @@ namespace ValheimTomrer.Dev
             var footer = list.Footer.text;
             Check(plan > 0 && plan < kit.Parts.Count && footer == $"Can build now: {plan} of {kit.Parts.Count} pieces"
                 && list.Footer.color == UiTheme.Accent, $"the footer counts what the plan builds ({plan}): '{footer}'");
-            Check(list.Source.text == $"From: bag + {sources.ChestCount} {(sources.ChestCount == 1 ? "chest" : "chests")} within {sources.Range:0} m"
-                && sources.ChestCount >= 1, $"and where it comes from: '{list.Source.text}'");
+            var texts = BlueprintInfoCard.Panel.GetComponentsInChildren<TMPro.TMP_Text>(true).Select(t => t.text).ToList();
+            Check(sources.ChestCount >= 1 && texts.Count > 0 && texts.All(t => !t.Contains("From:")),
+                $"with a chest in range the list still says nothing about where things come from: no 'From:' in its {texts.Count} texts");
+            CheckFooterAtBottom(list, "the Workshop's list");
             CheckLabels(list);
             CheckOnScreen("the Workshop's list");
 
@@ -4952,6 +5007,7 @@ namespace ValheimTomrer.Dev
             var description = Hud.instance.m_pieceDescription.text;
             Check(description.Contains("Click: build what you can.") && description.Contains("twice: forget the plan.")
                 && !description.Contains("Wheel"), $"the hint line says what Continue does: '{description}'");
+            CheckFooterAtBottom(list, "the Continue list");
             CheckLabels(list);
             CheckOnScreen("the Continue list");
 
@@ -5032,8 +5088,8 @@ namespace ValheimTomrer.Dev
             var cut = rows.Where(r => r.Name.isTextTruncated || (!r.IsStation && (r.Have.isTextTruncated || r.Need.isTextTruncated))).Select(r => r.Name.text).ToList();
             Check(cut.Count == 0, "no name or number is cut short: " + (cut.Count == 0 ? "none" : string.Join(", ", cut)));
             var footer = list.Footer;
-            Check(Contains(panel, footer.rectTransform) && Contains(panel, list.Source.rectTransform),
-                $"the footer sits inside the list: '{footer.text}' / '{list.Source.text}'");
+            Check(Contains(panel, footer.rectTransform), $"the footer sits inside the list: '{footer.text}'");
+            CheckFooterAtBottom(list, "the twelve-item list");
             CheckLabels(list);
             CheckOnScreen("the twelve-item list");
             Log("twelve items: " + string.Join(", ", rows.Select(r => $"{r.Name.text} {(r.IsStation ? r.State.text : r.Have.text + r.Need.text)}")));
@@ -5164,6 +5220,22 @@ namespace ValheimTomrer.Dev
             var labels = list.Root.GetComponentsInChildren<TMPro.TMP_Text>(true);
             var wrong = labels.Count(l => l.fontSharedMaterial != UiTheme.FontMaterial);
             Check(labels.Length > 0 && wrong == 0, $"all {labels.Length} labels use UiTheme.FontMaterial ({wrong} do not)");
+        }
+
+        /// <summary>
+        /// The footer is the list's last line, at the bottom of its background: under it only the
+        /// padding, the same as over the first row. Nothing empty is left where a second line was.
+        /// </summary>
+        private static void CheckFooterAtBottom(MaterialList list, string what)
+        {
+            var panel = ScreenRect(BlueprintInfoCard.Panel);
+            var footer = ScreenRect(list.Footer.rectTransform);
+            var first = list.ShownRows.FirstOrDefault();
+            var over = first != null ? panel.yMax - ScreenRect(first.Rect).yMax : -1f;
+            var under = footer.yMin - panel.yMin;
+            var rowsOver = list.ShownRows.All(r => ScreenRect(r.Rect).yMin >= footer.yMax - 0.5f);
+            Check(first != null && Mathf.Abs(under - over) < 1.5f && rowsOver,
+                $"{what}: the footer is the last line, {under:0} px over the bottom edge, as the first row is {over:0} px under the top");
         }
 
         private static void CheckOnScreen(string what)
