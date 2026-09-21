@@ -30,8 +30,8 @@ namespace ValheimTomrer.Editor.Ui
         public static readonly Color Inset = new Color(1f, 1f, 1f, 0.85f);
 
         /// <summary>
-        /// The hint text drawn straight over the 3D picture: dark, on <see cref="FontEdged"/>, so
-        /// the letters read on a bright sky and their white edge reads on a dark floor.
+        /// The hint text drawn straight over the 3D picture: dark and plain, for the pane's light
+        /// sky and floor.
         /// </summary>
         public static readonly Color TextOnPicture = new Color32(0x1A, 0x14, 0x0E, 0xFF);
 
@@ -57,12 +57,6 @@ namespace ValheimTomrer.Editor.Ui
         /// </summary>
         public static Material FontOutlined { get; private set; }
 
-        /// <summary>
-        /// A white edge and no shadow, the other way round: for the dark hint text along the
-        /// bottom of the 3D pane, which needs lifting off a dark floor, not off a bright sky.
-        /// </summary>
-        public static Material FontEdged { get; private set; }
-
         public static Sprite Panel { get; private set; }         // woodpanel_trophys
         public static Sprite PanelBkg { get; private set; }      // panel_bkg
         public static Sprite PanelWood { get; private set; }     // woodpanel_400_tileable
@@ -83,9 +77,6 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>The black edge under white text over the picture. Wide enough to carry a sky.</summary>
         private const float OutlineWidth = 0.2f;
-
-        /// <summary>The white edge around the dark hint text. A hairline, it only has to separate.</summary>
-        private const float EdgeWidth = 0.06f;
 
         private static Hud _builtFrom;
         private static readonly List<Sprite> Copies = new List<Sprite>();
@@ -110,7 +101,6 @@ namespace ValheimTomrer.Editor.Ui
             var source = hud.m_hoverName.fontSharedMaterial;
             FontMaterial = OwnTextMaterial(source, "ValheimTomrerText", NoColour, 0f, false);
             FontOutlined = OwnTextMaterial(source, "ValheimTomrerTextOutlined", Color.black, OutlineWidth, true);
-            FontEdged = OwnTextMaterial(source, "ValheimTomrerTextEdged", Color.white, EdgeWidth, false);
 
             var atlas = Resources.FindObjectsOfTypeAll<SpriteAtlas>().FirstOrDefault(a => a.name == "UIAtlas");
             if (atlas == null)
@@ -158,14 +148,8 @@ namespace ValheimTomrer.Editor.Ui
                 Object.Destroy(FontOutlined);
             }
 
-            if (FontEdged != null)
-            {
-                Object.Destroy(FontEdged);
-            }
-
             FontMaterial = null;
             FontOutlined = null;
-            FontEdged = null;
             Panel = PanelBkg = PanelWood = Button = ButtonHighlight = ButtonPressed = TextField
                 = ItemBackground = Sunken = null;
             _builtFrom = null;
@@ -180,17 +164,15 @@ namespace ValheimTomrer.Editor.Ui
         /// 12 to 16 point sizes the panels use, that eats the strokes and every label reads grey
         /// however light its colour is.
         ///
-        /// So there are three of our own, all with a white face at full strength so the label's
+        /// So there are two of our own, all with a white face at full strength so the label's
         /// colour is the only thing deciding how it looks:
         /// <list type="bullet">
         /// <item><see cref="FontMaterial"/>: no edge and no shadow, for text on a panel, where the
         /// wood behind it is dark and known.</item>
         /// <item><see cref="FontOutlined"/>: a black edge and a shadow, for white text over the
         /// 3D picture, where the background can be as light as the sky.</item>
-        /// <item><see cref="FontEdged"/>: a hairline white edge and no shadow, for the dark hint
-        /// text along the bottom of the pane.</item>
         /// </list>
-        /// All three are copies of a loaded material, made at runtime. Nothing is written to disk.
+        /// Both are copies of a loaded material, made at runtime. Nothing is written to disk.
         /// </summary>
         private static Material OwnTextMaterial(Material source, string name, Color edge, float edgeWidth, bool shadow)
         {
@@ -205,8 +187,7 @@ namespace ValheimTomrer.Editor.Ui
             Set(mine, ShaderUtilities.ID_GlowPower, 0f);
             mine.DisableKeyword(ShaderUtilities.Keyword_Glow);
 
-            // A fat edge eats into the glyph, so the face is dilated back out. A hairline one is
-            // drawn around the letter as it is.
+            // A fat edge eats into the glyph, so the face is dilated back out.
             var edged = edge.a > 0f && edgeWidth > 0f;
             Set(mine, ShaderUtilities.ID_FaceDilate, edgeWidth >= 0.15f ? 0.1f : 0.05f);
             Set(mine, ShaderUtilities.ID_OutlineColor, edged ? edge : NoColour);

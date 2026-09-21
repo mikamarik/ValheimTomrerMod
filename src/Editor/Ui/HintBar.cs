@@ -56,6 +56,7 @@ namespace ValheimTomrer.Editor.Ui
         private const float BetweenHints = 20f;
         private const float TextSize = 15f;
         private const float CapTextSize = 13f;
+        private const float BoldSpacing = -4f;
 
         private readonly RectTransform _root;
         private string _key = string.Empty;
@@ -141,10 +142,15 @@ namespace ValheimTomrer.Editor.Ui
                 }
             }
 
-            // Straight over the picture: dark, with a white edge and no shadow. The cap labels
-            // stay white and plain, they sit on their own wooden background.
-            var label = UiBuild.EdgedOverPicture(UiBuild.Label(
-                "Text", item, hint.Text, TextSize, TextAlignmentOptions.MidlineLeft, UiTheme.TextOnPicture));
+            // Straight over the picture: dark and bold, plain, with no edge and no shadow. The cap
+            // labels stay white, they sit on their own wooden background.
+            var label = UiBuild.Label(
+                "Text", item, hint.Text, TextSize, TextAlignmentOptions.MidlineLeft, UiTheme.TextOnPicture);
+            label.fontStyle = FontStyles.Bold;
+
+            // The font has no bold cut, so TMP thickens the letters and spaces them out as well.
+            // Take most of that extra space back, or the words read letter by letter.
+            label.characterSpacing = BoldSpacing;
             label.textWrappingMode = TextWrappingModes.NoWrap;
             Sizes(label.gameObject, Mathf.Ceil(label.GetPreferredValues(hint.Text, 4000f, 0f).x) + 2f, CapHeight);
         }

@@ -81,20 +81,6 @@ namespace ValheimTomrer.Editor.Ui
             return label;
         }
 
-        /// <summary>
-        /// Gives a label a white edge and no shadow. For the dark hint text over the 3D picture:
-        /// the pane's floor can be as dark as the text, and an edge is what keeps it readable.
-        /// </summary>
-        public static TextMeshProUGUI EdgedOverPicture(TextMeshProUGUI label)
-        {
-            if (label != null && UiTheme.FontEdged != null)
-            {
-                label.fontSharedMaterial = UiTheme.FontEdged;
-            }
-
-            return label;
-        }
-
         public static UnityEngine.UI.Button Button(string name, Transform parent, string text, UnityAction onClick, float height = 38f)
         {
             var image = Panel(name, parent, UiTheme.Button);
