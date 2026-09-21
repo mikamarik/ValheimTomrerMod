@@ -1,5 +1,6 @@
 using System.Reflection;
 using ValheimTomrer.Blueprints;
+using ValheimTomrer.Blueprints.Sites;
 using ValheimTomrer.Editor;
 using BepInEx;
 using BepInEx.Configuration;
@@ -56,11 +57,13 @@ namespace ValheimTomrer
         }
 
         /// <summary>
-        /// The editor key is read here, not in a build patch, so it works without a hammer.
+        /// The editor key is read here, not in a build patch, so it works without a hammer. The
+        /// unfinished builds are kept in step with the world here too.
         /// </summary>
         private void Update()
         {
             EditorSession.Tick();
+            SiteTracker.Tick();
         }
 
         /// <summary>
@@ -70,6 +73,7 @@ namespace ValheimTomrer
         private void OnDestroy()
         {
             BlueprintMode.Exit();
+            SiteStore.Clear();
             EditorSession.Shutdown();
             _harmony?.UnpatchSelf();
             Log?.LogInfo($"{PluginName} unloaded.");

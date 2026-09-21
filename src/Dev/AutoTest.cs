@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using ValheimTomrer.Blueprints;
+using ValheimTomrer.Blueprints.Sites;
 using ValheimTomrer.Editor;
 using ValheimTomrer.Editor.Catalog;
 using ValheimTomrer.Editor.Doc;
@@ -31,6 +32,7 @@ namespace ValheimTomrer.Dev
     /// (a probe like "probe", but left out of editor_all: it places and removes chests and floors);
     /// "build_sources" builds a kit paid from the inventory and the chests in range, nearest first;
     /// "build_partial" builds what the materials pay for and what would stand, bottom to top;
+    /// "build_sites" keeps what a click left unbuilt in a file, and shows its missing parts as ghosts;
     /// "editor_open" opens the editor window with its key and checks the input takeover;
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
@@ -90,6 +92,10 @@ namespace ValheimTomrer.Dev
             // disables the keyboard the moment the window loses focus and swallows them.
             UnityEngine.InputSystem.InputSystem.settings.backgroundBehavior =
                 UnityEngine.InputSystem.InputSettings.BackgroundBehavior.IgnoreFocus;
+
+            // Unfinished builds go to the test's own folder, never the player's. Each run starts empty.
+            SiteStore.RootOverride = SitesFolder;
+            DeleteSitesFolder();
             Log($"scenario={Scenario} out={OutDir}");
         }
 
@@ -199,6 +205,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "build_partial":
                     scenario = TestBuildPartial(player);
+                    break;
+                case "build_sites":
+                    scenario = TestBuildSites(player);
                     break;
                 case "editor_open":
                     scenario = TestEditorOpen(player);
@@ -349,6 +358,7 @@ namespace ValheimTomrer.Dev
                 case "probe_build": return ProbeBuild(player);
                 case "build_sources": return TestBuildSources(player);
                 case "build_partial": return TestBuildPartial(player);
+                case "build_sites": return TestBuildSites(player);
                 case "blueprints": return TestBlueprints(player);
                 case "editor_open": return TestEditorOpen(player);
                 case "editor_view": return TestEditorView(player);
@@ -380,6 +390,7 @@ namespace ValheimTomrer.Dev
             PadReader.Fake = null;
             BlueprintLibrary.UserFolder = null;
             BlueprintLibrary.Reload();
+            ClearSites();
             PieceCatalog.Clear();
             ResetSettings();
             if (player != null)
@@ -3385,12 +3396,13 @@ namespace ValheimTomrer.Dev
             player.UpdateAvailablePiecesList();
         }
 
-        /// <summary>The blueprint in the hammer, the player facing the build way, the aim on free ground.</summary>
-        private static IEnumerator AimBlueprint(Player player, ResolvedBlueprint blueprint)
+        /// <summary>The blueprint in the hammer, the player facing the build way (or <paramref name="facing"/>), the aim on free ground.</summary>
+        private static IEnumerator AimBlueprint(Player player, ResolvedBlueprint blueprint, Quaternion? facing = null)
         {
-            player.m_lookYaw = BuildFacing;
-            player.transform.rotation = BuildFacing;
-            player.m_body.rotation = BuildFacing;
+            var face = facing ?? BuildFacing;
+            player.m_lookYaw = face;
+            player.transform.rotation = face;
+            player.m_body.rotation = face;
             yield return new WaitForSeconds(0.3f);
             BlueprintMode.Select(player, blueprint);
             yield return AimAtGround(player);
@@ -3829,6 +3841,368 @@ namespace ValheimTomrer.Dev
             var all = new PlanStats();
             var every = PartialBuild.Plan(big, spot, 0f, null, full, false, all);
             Check(all.Route == "all paid" && every.Count == big.Parts.Count, $"with all of it paid, Plan takes every piece: {every.Count}, {all.Milliseconds:0.00} ms");
+        }
+
+        // ---------- scenario: build_sites ----------
+
+        private static string SitesFolder => Path.Combine(OutDir, "sites");
+
+        private static void DeleteSitesFolder()
+        {
+            try
+            {
+                if (Directory.Exists(SitesFolder))
+                {
+                    Directory.Delete(SitesFolder, true);
+                }
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                Log($"cannot delete {SitesFolder}: {e.Message}");
+            }
+        }
+
+        /// <summary>Every unfinished build forgotten, ghosts included, and the test's sites folder gone.</summary>
+        private static void ClearSites()
+        {
+            SiteStore.Clear();
+            DeleteSitesFolder();
+        }
+
+        /// <summary>
+        /// A partial or empty click keeps the rest as an unfinished build: a file in the world's folder,
+        /// ghosts for its missing parts while the hammer is out nearby, and what is built read from the
+        /// world. Half the Workshop's wood, then an empty click somewhere else.
+        /// </summary>
+        private static IEnumerator TestBuildSites(Player player)
+        {
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            ClearSites();
+            yield return new WaitForSeconds(0.5f);
+            PieceCatalog.Ensure();
+
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Name == "Workshop");
+            ResolvedBlueprint resolved = null;
+            var error = "no Workshop kit";
+            if (kit == null || !ResolvedBlueprint.TryResolve(kit, out resolved, out error))
+            {
+                Check(false, "the workshop kit resolves: " + error);
+                yield break;
+            }
+
+            Unlock(player, resolved);
+            ClearInventoryExceptHammer(player);
+            yield return EquipHammer(player);
+            BlueprintLibrary.Reload();
+            var library = BlueprintLibrary.All.Count;
+            var deepBefore = DeepObjects(out _);
+            var spot = player.transform.position;
+
+            // ---- 1. half the wood: part is built, the rest is kept in a file ----
+            foreach (var cost in resolved.TotalCost)
+            {
+                var wood = cost.m_resItem.m_itemData.m_shared.m_name == "$item_wood";
+                AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, wood ? cost.m_amount / 2 : cost.m_amount);
+            }
+
+            yield return AimBlueprint(player, resolved);
+            var root = BlueprintMode.PreviewRoot;
+            if (root == null)
+            {
+                yield break;
+            }
+
+            var rootPos = root.position;
+            var rootYaw = root.eulerAngles.y;
+            var existing = new HashSet<Piece>(PiecesAround(player, rootPos));
+            var refreshes = SiteTracker.Refreshes;
+            var clicked = BlueprintMode.TryBuild(player);
+            var said = BlueprintMode.LastMessage ?? "";
+            BlueprintMode.Exit();
+            yield return null;
+            yield return null;
+            var placed = PiecesAround(player, rootPos).Where(p => !existing.Contains(p)).ToList();
+            Check(clicked && placed.Count > 0 && placed.Count < resolved.Parts.Count,
+                $"half the wood builds part of the kit: {placed.Count} of {resolved.Parts.Count}: '{said}'");
+            Check(SiteStore.All.Count == 1, $"the click kept one unfinished build: {SiteStore.All.Count}");
+            var site = SiteStore.All.FirstOrDefault();
+            if (site == null)
+            {
+                yield break;
+            }
+
+            Check(SiteTracker.Refreshes > refreshes, $"the tracker refreshed right after the build ({SiteTracker.Refreshes - refreshes} times)");
+            var world = ZNet.World;
+            var folder = Path.Combine(OutDir, "sites", world.m_name.ToLowerInvariant() + "_" + world.m_uid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Check(site.Path != null && File.Exists(site.Path) && Path.GetDirectoryName(site.Path) == folder
+                && Path.GetFileName(site.Path).StartsWith("workshop_"),
+                $"the file is in the world's folder: {site.Path}, wanted under {folder}");
+            Check(!Directory.GetFiles(folder).Any(f => f.EndsWith(".tmp")), "no temp file is left next to it");
+
+            var lines = File.Exists(site.Path) ? File.ReadAllLines(site.Path) : new string[0];
+            var poseLine = lines.FirstOrDefault(l => l.StartsWith("#Site:")) ?? "";
+            var fields = poseLine.Length > 6 ? poseLine.Substring(6).Split(';') : new string[0];
+            var filePos = Vector3.zero;
+            var fileYaw = float.NaN;
+            if (fields.Length == 4)
+            {
+                float F(string t) => float.Parse(t, System.Globalization.CultureInfo.InvariantCulture);
+                filePos = new Vector3(F(fields[0]), F(fields[1]), F(fields[2]));
+                fileYaw = F(fields[3]);
+            }
+
+            Check(fields.Length == 4 && Vector3.Distance(filePos, rootPos) < 0.001f && Mathf.Abs(Mathf.DeltaAngle(fileYaw, rootYaw)) < 0.1f,
+                $"its '{poseLine}' is the preview's pose {V4(rootPos)} turned {rootYaw:0.###}: off by {Vector3.Distance(filePos, rootPos):0.#####} m,"
+                + $" {Mathf.Abs(Mathf.DeltaAngle(fileYaw, rootYaw)):0.###} degrees");
+            Check(lines.Contains("#SiteSource:workshop") && lines.Contains("#Name:Workshop"),
+                "and it names the blueprint it came from: " + string.Join(" | ", lines.Where(l => l.StartsWith("#"))));
+            var parsed = BlueprintFormat.ParseBlueprint("x", lines);
+            Check(parsed.Pieces.Count == resolved.Parts.Count
+                && parsed.Pieces.Select(p => p.PrefabName).SequenceEqual(kit.Pieces.Select(p => p.PrefabName)),
+                $"the file holds the whole blueprint, in the kit's order: {parsed.Pieces.Count} pieces");
+            Check(!lines.Any(l => l.StartsWith("#Built", StringComparison.OrdinalIgnoreCase)), "and nothing about what is built");
+            BlueprintLibrary.Reload();
+            Check(BlueprintLibrary.All.Count == library && BlueprintLibrary.All.All(b => b.Name != "x"),
+                $"the blueprint library does not read the site: {library} before, {BlueprintLibrary.All.Count} after");
+
+            // ---- 2. the ghost: built parts hidden, the rest red (the bag is empty now) ----
+            yield return WaitForGhosts(1);
+            var ghost = site.Ghost;
+            Check(site.BuiltCount == placed.Count, $"the tracker reads {site.BuiltCount} built parts from the world, the click placed {placed.Count}");
+            Check(ghost != null && ghost.Done && ghost.Visible, "the site's ghost stands, with the hammer out");
+            if (ghost == null || !ghost.Done)
+            {
+                yield break;
+            }
+
+            Check(ghost.VisibleParts == site.Total - site.BuiltCount,
+                $"visible ghost parts: {ghost.VisibleParts} = {site.Total} - {site.BuiltCount}");
+            Check(Vector3.Distance(ghost.Root.position, site.RootPosition) < 0.001f && Quaternion.Angle(ghost.Root.rotation, site.RootRotation) < 0.1f,
+                $"the ghost stands at the site's pose: {V4(ghost.Root.position)}, turned {ghost.Root.eulerAngles.y:0.#}");
+            var probe = BlueprintPreview.Create(resolved);
+            var box = probe.LocalBounds;
+            probe.Destroy();
+            Check(Vector3.Distance(ghost.LocalBounds.center, box.center) < 0.01f && Vector3.Distance(ghost.LocalBounds.size, box.size) < 0.01f,
+                $"built over several frames with its drawing held, its box is the hammer preview's: {Box(ghost.LocalBounds)} vs {Box(box)}");
+            var looksOk = Enumerable.Range(0, site.Total).All(i => ghost.LookOf(i) == (site.Built[i] ? PartLook.Hidden : PartLook.Waiting));
+            Check(site.ReadyCount == 0 && looksOk,
+                $"with the bag empty nothing is ready: {site.ReadyCount}; built parts hidden, the rest red: {Looks(site)}");
+
+            // Four more wood: the next click would build two more walls. Those look like the normal ghost.
+            var runs = SiteTracker.PlanRuns;
+            AddTo(player.GetInventory(), "Wood", 4);
+            SiteTracker.Refresh(player);
+            var ready = Enumerable.Range(0, site.Total).Where(i => site.Ready != null && site.Ready[i]).ToList();
+            Check(SiteTracker.PlanRuns == runs + 1 && ready.Count > 0 && ready.Count < site.Total - site.BuiltCount,
+                $"with 4 wood the plan ran again and {ready.Count} parts are ready: {string.Join(", ", ready.Select(i => $"{i} {resolved.Parts[i].Prefab.name}"))}");
+            Check(Enumerable.Range(0, site.Total).All(i => ghost.LookOf(i) == (site.Built[i] ? PartLook.Hidden : ready.Contains(i) ? PartLook.Ready : PartLook.Waiting)),
+                "ready parts look like the normal ghost, the others red: " + Looks(site));
+            SiteTracker.Refresh(player);
+            SiteTracker.Refresh(player);
+            Check(SiteTracker.PlanRuns == runs + 1, $"two more refreshes with nothing changed do not plan again ({SiteTracker.PlanRuns - runs - 1} extra)");
+
+            yield return null;
+            yield return null;
+            var redPart = Enumerable.Range(0, site.Total).FirstOrDefault(i => ghost.LookOf(i) == PartLook.Waiting);
+            var readyPart = ready.Count > 0 ? ready[0] : -1;
+            Check(IsTintedRed(ghost.Part(redPart)) && readyPart >= 0 && !IsTintedRed(ghost.Part(readyPart)),
+                $"the game's red tint is on a waiting part ({redPart}) and not on a ready one ({readyPart})");
+
+            // The screenshot: from the front left corner, 11 m off, so the side wall that is ready shows too.
+            var centre = site.WorldBox.center;
+            var view = centre + new Vector3(-8f, 0f, -8f);
+            view.y = ZoneSystem.instance.GetGroundHeight(view) + 1f;
+            var look = Quaternion.LookRotation(new Vector3(centre.x - view.x, 0f, centre.z - view.z));
+            yield return TeleportNear(player, view, look, "to the site's front left corner, to look at it");
+            player.m_lookPitch = 6f;
+            SiteTracker.Refresh(player);
+            yield return new WaitForSeconds(1f);
+            yield return Screenshot("build-sites-1-ghosts");
+
+            // ---- 3. loaded again from disk: the same site, what is built read from the world ----
+            var was = site;
+            SiteStore.Load();
+            site = SiteStore.All.FirstOrDefault();
+            Check(SiteStore.All.Count == 1 && site != null && site != was && site.Name == was.Name && site.Path == was.Path
+                && Vector3.Distance(site.RootPosition, was.RootPosition) < 0.001f && Mathf.Abs(Mathf.DeltaAngle(site.RootYaw, was.RootYaw)) < 0.1f
+                && site.Total == was.Total,
+                $"Load reads the same site back: {SiteStore.All.Count}, {site?.Name} at {(site != null ? V4(site.RootPosition) : "none")}");
+            Check(was.Ghost == null, "and the old one's ghost is gone");
+            if (site == null)
+            {
+                yield break;
+            }
+
+            Check(site.BuiltCount == 0, $"nothing built is stored: right after Load it knows {site.BuiltCount} built");
+            SiteTracker.Refresh(player);
+            Check(site.BuiltCount == was.BuiltCount, $"after a refresh the world says {site.BuiltCount} built, as before ({was.BuiltCount})");
+            yield return WaitForGhosts(1);
+
+            // ---- 4. an empty click somewhere else: a second site with nothing built ----
+            yield return TeleportNear(player, spot + Vector3.up, BuildFacing, "back to the build spot");
+            ClearInventoryExceptHammer(player);
+            yield return AimBlueprint(player, resolved, Quaternion.Euler(0f, 180f, 0f));
+            var secondRoot = BlueprintMode.PreviewRoot;
+            var secondPos = secondRoot != null ? secondRoot.position : Vector3.zero;
+            var empty = BlueprintMode.TryBuild(player);
+            said = BlueprintMode.LastMessage ?? "";
+            BlueprintMode.Exit();
+            yield return null;
+            var second = SiteStore.All.FirstOrDefault(s => s != site);
+            Check(!empty && said.StartsWith("Workshop planned, nothing built yet.") && SiteStore.All.Count == 2 && second != null,
+                $"an empty click behind the player keeps a second site: {SiteStore.All.Count}: '{said}'");
+            if (second == null)
+            {
+                yield break;
+            }
+
+            Check(Vector3.Distance(second.RootPosition, secondPos) < 0.001f && Flat(second.RootPosition, site.RootPosition) > 5f,
+                $"it stands where that preview stood, {Flat(second.RootPosition, site.RootPosition):0.0} m from the first");
+            SiteTracker.Refresh(player);
+            Check(second.BuiltCount == 0, $"with nothing built: {second.BuiltCount}");
+            yield return WaitForGhosts(2);
+            Check(second.Ghost != null && second.Ghost.VisibleParts == second.Total,
+                $"its ghost shows every part: {(second.Ghost != null ? second.Ghost.VisibleParts : -1)} of {second.Total}");
+
+            // ---- 5. the hammer away: no ghost. Out: ghosts. 100 m away: none ----
+            var hammer = player.GetRightItem();
+            player.UnequipItem(hammer);
+            yield return new WaitForSeconds(0.3f);
+            SiteTracker.Refresh(player);
+            Check(!player.InPlaceMode() && SiteStore.All.All(s => s.Ghost == null || !s.Ghost.Visible),
+                "hammer put away: no ghost is visible");
+            yield return EquipHammer(player);
+            SiteTracker.Refresh(player);
+            Check(SiteStore.All.All(s => s.Ghost != null && s.Ghost.Visible), "hammer out: both ghosts are visible");
+
+            var far = spot + (Vector3.right * 100f);
+            far.y = WorldGenerator.instance.GetHeight(far.x, far.z) + 1f;
+            yield return TeleportNear(player, far, BuildFacing, "100 m away");
+            SiteTracker.Refresh(player);
+            var nearest = SiteStore.All.Min(s => Mathf.Sqrt(s.WorldBox.SqrDistance(player.transform.position)));
+            Check(nearest > SiteTracker.ShowRange && SiteStore.All.All(s => s.Ghost == null || !s.Ghost.Visible),
+                $"100 m away (the nearest site is {nearest:0} m off) no ghost is visible");
+            yield return TeleportNear(player, spot + Vector3.up, BuildFacing, "back to the build spot");
+            SiteTracker.Refresh(player);
+            Check(SiteStore.All.All(s => s.Ghost != null && s.Ghost.Visible), "back near them, the ghosts show again");
+
+            // ---- 6. a built piece of the first site destroyed: its ghost comes back on the next refresh ----
+            var standing = MatchParts(site.Resolved, site.RootPosition, site.RootRotation, PiecesAround(player, site.RootPosition));
+            var gone = standing.Keys.Where(i => site.Resolved.Parts[i].Prefab.name == "piece_groundtorch_wood").DefaultIfEmpty(standing.Keys.LastOrDefault()).First();
+            var builtBefore = site.BuiltCount;
+            if (!standing.ContainsKey(gone))
+            {
+                Check(false, "a built part of the first site stands in the world");
+                yield break;
+            }
+
+            ZNetScene.instance.Destroy(standing[gone].gameObject);
+            var waited = 0f;
+            while (site.BuiltCount == builtBefore && waited < SiteTracker.Period + 1f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(site.BuiltCount == builtBefore - 1 && !site.Built[gone],
+                $"{site.Resolved.Parts[gone].Prefab.name} destroyed: {site.BuiltCount} built after {waited:0.0} s, was {builtBefore}");
+            Check(site.Ghost != null && site.Ghost.LookOf(gone) != PartLook.Hidden && site.Ghost.Part(gone).gameObject.activeSelf
+                && site.Ghost.VisibleParts == site.Total - site.BuiltCount,
+                $"and its ghost shows again: {(site.Ghost != null ? site.Ghost.LookOf(gone).ToString() : "no ghost")}, {(site.Ghost != null ? site.Ghost.VisibleParts : -1)} visible");
+
+            // ---- the second site built in full, piece by piece: it is finished and its file is gone ----
+            var secondPath = second.Path;
+            for (var i = 0; i < second.Total; i++)
+            {
+                player.PlacePiece(second.Resolved.Parts[i].Piece, second.WorldPosition(i), second.WorldRotation(i), false);
+            }
+
+            yield return null;
+            SiteTracker.Refresh(player);
+            Check(!SiteStore.All.Contains(second) && !File.Exists(secondPath) && SiteTracker.LastMessage == "Workshop finished.",
+                $"every part of the second site standing: '{SiteTracker.LastMessage}', {SiteStore.All.Count} sites left, file there: {File.Exists(secondPath)}");
+            Check(SiteStore.All.Count == 1 && SiteStore.All[0] == site && File.Exists(site.Path), "the first site is still kept");
+
+            // ---- 7. no world object under -1000 m ----
+            var deepAfter = DeepObjects(out var sample);
+            Check(deepAfter == deepBefore, $"the ghosts left nothing in the world: {deepBefore} deep objects before, {deepAfter} after"
+                + (deepAfter != deepBefore ? " | " + sample : ""));
+
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            ClearSites();
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>Waits until this many sites have a ghost that is done, at most 3 s.</summary>
+        private static IEnumerator WaitForGhosts(int count)
+        {
+            var waited = 0f;
+            while (SiteStore.All.Count(s => s.Ghost != null && s.Ghost.Done && s.Ghost.Visible) < count && waited < 3f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Log($"{count} site ghosts done after {waited:0.00} s");
+        }
+
+        /// <summary>One letter per part: H hidden, R ready, W waiting.</summary>
+        private static string Looks(Site site)
+        {
+            if (site.Ghost == null)
+            {
+                return "no ghost";
+            }
+
+            return new string(Enumerable.Range(0, site.Total).Select(i =>
+                site.Ghost.LookOf(i) == PartLook.Hidden ? 'H' : site.Ghost.LookOf(i) == PartLook.Ready ? 'R' : 'W').ToArray());
+        }
+
+        /// <summary>The game's red "cannot place" colour is on this copy's renderers, through MaterialMan.</summary>
+        private static bool IsTintedRed(Piece copy)
+        {
+            if (copy == null)
+            {
+                return false;
+            }
+
+            var block = new MaterialPropertyBlock();
+            foreach (var renderer in copy.GetComponentsInChildren<MeshRenderer>(true))
+            {
+                renderer.GetPropertyBlock(block);
+                var colour = block.isEmpty ? Color.clear : block.GetColor(ShaderProps._Color);
+                if (colour.r > 0.99f && colour.g < 0.01f && colour.b < 0.01f)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>A short teleport the game's way: waits out the 2 s cooldown, then faces the given way.</summary>
+        private static IEnumerator TeleportNear(Player player, Vector3 to, Quaternion facing, string what)
+        {
+            var waited = 0f;
+            while (player.m_teleportCooldown < 2.1f && waited < 5f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(player.TeleportTo(to, facing, false), "teleport " + what);
+            while (player.IsTeleporting())
+            {
+                yield return null;
+            }
+
+            player.m_lookYaw = facing;
+            player.transform.rotation = facing;
+            player.m_body.rotation = facing;
+            yield return new WaitForSeconds(0.5f);
         }
 
         // ---------- scenario: editor_open ----------

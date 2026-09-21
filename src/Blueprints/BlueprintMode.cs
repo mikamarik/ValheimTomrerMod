@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using ValheimTomrer.Blueprints.Sites;
 
 namespace ValheimTomrer.Blueprints
 {
@@ -215,6 +216,7 @@ namespace ValheimTomrer.Blueprints
         /// <summary>
         /// Builds every piece the materials pay for and that would stand, bottom to top, where the
         /// preview is (<see cref="PartialBuild"/>). With enough for all of it, the whole blueprint.
+        /// When anything is left, even everything, it is kept as an unfinished build (<see cref="SiteStore"/>).
         /// Returns false and tells the player why when nothing goes up.
         /// </summary>
         public static bool TryBuild(Player player)
@@ -285,6 +287,11 @@ namespace ValheimTomrer.Blueprints
             }
 
             var total = Current.Parts.Count;
+            if (placed < total)
+            {
+                KeepSite(root, built, placed);
+            }
+
             if (placed == 0)
             {
                 var missing = PartialBuild.MissingText(PartialBuild.Missing(Current, null, sources));
@@ -325,6 +332,33 @@ namespace ValheimTomrer.Blueprints
                 $"Built {placed} of {total} pieces of {Current.Name}." + (still.Length > 0 ? $" Still missing: {still}." : ""));
             return true;
         }
+
+        /// <summary>
+        /// The rest of the blueprint is kept as an unfinished build, at the preview's pose. The file is
+        /// written now; what stands is read from the world again on the tracker's next refresh.
+        /// </summary>
+        private static void KeepSite(Transform root, bool[] built, int placed)
+        {
+            var site = Site.Start(Current, root.position, root.eulerAngles.y);
+            if (site == null)
+            {
+                ValheimTomrerPlugin.Log.LogWarning($"cannot keep {Current.Name} as an unfinished build");
+                return;
+            }
+
+            // A first answer until the tracker reads the world.
+            System.Array.Copy(built, site.Built, site.Built.Length);
+            site.BuiltCount = placed;
+            if (SiteStore.Add(site))
+            {
+                LastSite = site;
+            }
+
+            SiteTracker.RefreshSoon();
+        }
+
+        /// <summary>The unfinished build the last partial or empty click kept. For the tests.</summary>
+        public static Site LastSite { get; private set; }
 
         /// <summary>The last thing <see cref="TryBuild"/> told the player, localized. For the tests.</summary>
         public static string LastMessage { get; private set; }

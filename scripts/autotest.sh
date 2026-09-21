@@ -11,6 +11,9 @@
 #   ./scripts/autotest.sh build_partial  build what the materials pay for and what would stand, bottom to
 #                                      top: half the wood, a two-storey house, nothing, everything, costs
 #                                      off, and the planner's time on 400 pieces (not part of editor_all yet)
+#   ./scripts/autotest.sh build_sites  keep what a partial or empty click left as an unfinished build: its file,
+#                                      its ghosts with the hammer out nearby, what is built read from the world
+#                                      (not part of editor_all yet)
 #   ./scripts/autotest.sh editor_open  open the editor window with its key, check the input takeover
 #   ./scripts/autotest.sh editor_view  fill the 3D pane with a kit and drive the camera
 #   ./scripts/autotest.sh editor_files round-trip every blueprint and run the file commands
