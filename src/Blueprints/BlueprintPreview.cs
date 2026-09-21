@@ -249,12 +249,17 @@ namespace ValheimTomrer.Blueprints
                 terrainModifier.enabled = false;
             }
 
+            // Made with no parent, then moved. An object made active wakes up at once, inside the
+            // guard, so its ZNetView removes itself. Under a switched-off parent (the editor's ghost
+            // is built hidden) it would wake up later with the guard off and become a real piece,
+            // saved in the world 8000 m under the player.
             GameObject copy;
             ZNetView.m_forceDisableInit = true;
             TerrainOp.m_forceDisableTerrainOps = true;
             try
             {
-                copy = Object.Instantiate(prefab, parent, false);
+                copy = Object.Instantiate(prefab);
+                copy.transform.SetParent(parent, false);
             }
             finally
             {
