@@ -7528,18 +7528,16 @@ namespace ValheimTomrer.Dev
             ViewportHost.Release();
             yield return null;
 
-            // Save says what is wrong and still saves: a piece this game does not have is one error.
-            // An empty blueprint is not: it is a warning, since a new one is saved before its first piece.
+            // Save always reads "Save": the problem list counts the errors, not the button.
+            // A piece this game does not have is one error.
             document.AddPiece("valheimtomrer_no_such_piece", Vector3.zero, Quaternion.identity);
             ChecksPanel.Refresh();
             TopBar.Tick();
-            Check(TopBar.SaveText == "Save (1 error)" && TopBar.SaveIsRed,
-                $"with an error the Save button reads '{TopBar.SaveText}' in red");
+            Check(TopBar.SaveText == "Save",
+                $"with an error the Save button still reads '{TopBar.SaveText}'");
             EditorState.Undo();
             ChecksPanel.Refresh();
             TopBar.Tick();
-            Check(TopBar.SaveText == "Save" && !TopBar.SaveIsRed,
-                $"and goes back to '{TopBar.SaveText}' once the error is gone");
 
             // Move one piece first, or the kit's origin is already where centring would put it.
             EditorState.Select(document.Pieces[0].Id);

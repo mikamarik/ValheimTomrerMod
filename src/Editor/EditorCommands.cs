@@ -24,25 +24,6 @@ namespace ValheimTomrer.Editor
         /// <summary>What the editor is doing right now, or null.</summary>
         public static string Busy { get; private set; }
 
-        /// <summary>Errors in the open blueprint, from the panel that already worked them out.</summary>
-        public static int Errors
-        {
-            get
-            {
-                var errors = 0;
-                var rows = ChecksPanel.Rows;
-                for (var i = 0; i < rows.Count; i++)
-                {
-                    if (rows[i].Level == CheckLevel.Error)
-                    {
-                        errors++;
-                    }
-                }
-
-                return errors;
-            }
-        }
-
         /// <summary>Starts an empty blueprint, asking first when the open one has changes.</summary>
         public static void NewBlueprint()
         {
