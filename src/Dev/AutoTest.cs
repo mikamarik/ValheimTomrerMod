@@ -4006,9 +4006,9 @@ namespace ValheimTomrer.Dev
             ViewportHost.Release();
             yield return null;
 
-            // Save says what is wrong and still saves: an empty blueprint is one error.
-            EditorState.SelectAll();
-            EditorState.DeleteSelection();
+            // Save says what is wrong and still saves: a piece this game does not have is one error.
+            // An empty blueprint is not: it is a warning, since a new one is saved before its first piece.
+            document.AddPiece("valheimtomrer_no_such_piece", Vector3.zero, Quaternion.identity);
             ChecksPanel.Refresh();
             TopBar.Tick();
             Check(TopBar.SaveText == "Save (1 error)" && TopBar.SaveIsRed,
@@ -4324,7 +4324,7 @@ namespace ValheimTomrer.Dev
             Check(xbox.Of(PadButton.Cross) == "A" && xbox.Of(PadButton.L1) == "LB" && xbox.Of(PadButton.Options) == "Menu",
                 $"an Xbox pad switches them to {xbox.Of(PadButton.Cross)} {xbox.Of(PadButton.Circle)} "
                 + $"{xbox.Of(PadButton.Square)} {xbox.Of(PadButton.Triangle)}");
-            Check(Array.Exists(Bindings.Pad, r => r.Keys == "A") && Array.Exists(Bindings.Pad, r => r.Keys == "LT + RB"),
+            Check(Array.Exists(Bindings.Pad, r => r.Keys == "A") && Array.Exists(Bindings.Pad, r => r.Keys == "LT + RT"),
                 "and the help table follows");
 
             _pad.Ps = true;
@@ -4624,7 +4624,10 @@ namespace ValheimTomrer.Dev
                 "square moves the aimed piece with nothing selected, and cross is silent while it is in hand");
             EditorState.CancelMode();
 
+            // The piece was hidden while it was in hand, so the crosshair was on what stands
+            // behind it. The pad reads the aim of the frame before: wait until it is back.
             EditorState.Select(Array.Empty<int>());
+            yield return AimBackOn(aimed.Id);
             yield return Tap(PadButton.Triangle);
             Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Duplicate
                 && EditorState.Moving != null && EditorState.Moving.Count == 1,
@@ -4635,6 +4638,7 @@ namespace ValheimTomrer.Dev
             Check(EditorState.SelectionCount == 0, "and the next one clears the selection");
 
             var count = document.Pieces.Count;
+            yield return AimBackOn(aimed.Id);
             yield return Tap(PadButton.R1);
             var gone = document.Pieces.Count;
             EditorState.Undo();
@@ -4652,6 +4656,8 @@ namespace ValheimTomrer.Dev
                 }
             }
 
+            // Undo rebuilt the deleted piece's copy, so the aim needs a frame to find it again.
+            yield return AimBackOn(aimed.Id);
             EditorState.Select(ids);
             count = document.Pieces.Count;
             yield return Tap(PadButton.R1);
@@ -4663,6 +4669,7 @@ namespace ValheimTomrer.Dev
                 $"and the whole selection when the aimed piece is in it: {count} -> {both}");
 
             // And they take the whole selection when the aimed piece is part of it.
+            yield return AimBackOn(aimed.Id);
             EditorState.Select(ids);
             yield return Tap(PadButton.Triangle);
             Check(EditorState.Mode == EditMode.Place && EditorState.Action == PlaceAction.Duplicate
@@ -4688,6 +4695,23 @@ namespace ValheimTomrer.Dev
                 UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
                 yield return null;
             }
+        }
+
+        /// <summary>
+        /// Waits until the crosshair is on the piece again, at most a second. The pad acts on the
+        /// aim of the frame before its press, so after the piece was hidden (in hand) or rebuilt
+        /// (undo) a press straight away would see what stood behind it.
+        /// </summary>
+        private static IEnumerator AimBackOn(int id)
+        {
+            var waited = 0f;
+            while (ViewportHost.AimPiece != id && waited < 1f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            yield return null;
         }
 
         /// <summary>A real mouse move over the pane takes the aim back from the crosshair.</summary>
