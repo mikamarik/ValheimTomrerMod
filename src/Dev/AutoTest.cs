@@ -1296,6 +1296,15 @@ namespace ValheimTomrer.Dev
             CheckGhostLook(resolved);
             yield return Screenshot(Slug(kit.Name) + "-1-preview");
 
+            // Once, on the first kit: the turn, then the build below proves it reached the pieces.
+            var turnedTo = BlueprintMode.RotationSteps;
+            if (withRefusals)
+            {
+                yield return TestTurn(player);
+                turnedTo = BlueprintMode.RotationSteps;
+                yield return Screenshot(Slug(kit.Name) + "-1b-turned");
+            }
+
             var root = BlueprintMode.PreviewRoot;
             var center = root != null ? root.position : player.transform.position;
             if (withRefusals)
@@ -1331,9 +1340,26 @@ namespace ValheimTomrer.Dev
                 + $" tool={(tool != null ? tool.m_shared.m_name : "none")}"
                 + $" stamina={player.GetStamina():0}/{player.GetMaxStamina():0}"
                 + $" need={(tool != null ? tool.m_shared.m_attack.m_attackStamina : 0f):0}");
+            var turn = Quaternion.Euler(0f, turnedTo * BlueprintMode.RotationStep, 0f);
             Check(BlueprintMode.TryBuild(player), "built with exact materials");
             var built = PiecesAround(player, center).Where(p => !existing.Contains(p)).ToList();
             Check(built.Count == resolved.Parts.Count, $"all pieces exist: {built.Count}/{resolved.Parts.Count}");
+
+            // Every piece stands where the turned preview showed it, facing the turned way.
+            var off = root != null ? 0 : resolved.Parts.Count;
+            foreach (var part in root != null ? resolved.Parts : new List<ResolvedPart>())
+            {
+                var position = root.TransformPoint(part.Source.Position);
+                var rotation = turn * part.Source.Rotation;
+                if (!built.Any(p => Vector3.Distance(p.transform.position, position) < 0.05f
+                    && Quaternion.Angle(p.transform.rotation, rotation) < 1f))
+                {
+                    off++;
+                }
+            }
+
+            Check(root != null && Quaternion.Angle(root.rotation, turn) < 0.01f && off == 0,
+                $"built facing {turnedTo * BlueprintMode.RotationStep:0.#} degrees like the preview, pieces off: {off}");
             var left = resolved.TotalCost.Sum(c => player.GetInventory().CountItems(c.m_resItem.m_itemData.m_shared.m_name));
             Check(left == 0, $"materials taken (left over: {left})");
 
@@ -1351,6 +1377,102 @@ namespace ValheimTomrer.Dev
 
             RemoveOldTestBuildings(player);
             yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>
+        /// The wheel and the pad turn the blueprint, through the game's own input and the real
+        /// BlueprintMode.HandleInput: a scroll queued on the mouse, then a made-up controller
+        /// added to the input system with L2 held and the right stick pushed. Ends one or two
+        /// steps off the start, never on it, so the build after it proves the turn.
+        /// </summary>
+        private static IEnumerator TestTurn(Player player)
+        {
+            var start = BlueprintMode.RotationSteps;
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            if (mouse == null)
+            {
+                Check(false, "no mouse device to scroll");
+                yield break;
+            }
+
+            UnityEngine.InputSystem.InputSystem.QueueDeltaStateEvent(mouse.scroll, new Vector2(0f, 1f));
+            for (var frame = 0; frame < 4; frame++)
+            {
+                yield return null;
+            }
+
+            var root = BlueprintMode.PreviewRoot;
+            var yaw = root != null ? root.eulerAngles.y : float.NaN;
+            Check(BlueprintMode.RotationSteps == start + 1
+                && Mathf.Abs(Mathf.DeltaAngle(yaw, (start + 1) * BlueprintMode.RotationStep)) < 0.01f,
+                $"one wheel notch turns the preview one step: {start} -> {BlueprintMode.RotationSteps}, yaw {yaw:0.#}");
+
+            // A controller of its own, so the test does not need one plugged in.
+            var pad = UnityEngine.InputSystem.InputSystem.AddDevice<UnityEngine.InputSystem.Gamepad>("AutoTestPad");
+            var source = ZInput.m_inputSource;
+            try
+            {
+                var left = new UnityEngine.InputSystem.LowLevel.GamepadState { leftTrigger = 1f, rightStick = new Vector2(-1f, 0f) };
+                var right = new UnityEngine.InputSystem.LowLevel.GamepadState { leftTrigger = 1f, rightStick = new Vector2(1f, 0f) };
+
+                // Held for 0.6 s: one step at once, then the game's repeat after a quarter second.
+                var from = BlueprintMode.RotationSteps;
+                var first = 0;
+                var until = Time.time + 0.6f;
+                var frames = 0;
+                while (Time.time < until || frames < 4)
+                {
+                    UnityEngine.InputSystem.InputSystem.QueueStateEvent(pad, left);
+                    yield return null;
+                    frames++;
+                    if (first == 0 && BlueprintMode.RotationSteps != from)
+                    {
+                        first = BlueprintMode.RotationSteps - from;
+                        if (!ZInput.IsGamepadActive())
+                        {
+                            Log("the game had not switched to the pad on its own");
+                        }
+                    }
+                }
+
+                var peak = BlueprintMode.RotationSteps;
+                Log($"pad: layout={ZInput.InputLayout} gamepadActive={ZInput.IsGamepadActive()} "
+                    + $"first={first} held 0.6 s: {from} -> {peak}");
+                Check(first == 1 && peak - from >= 3,
+                    $"L2 + right stick left turns one step at once, then repeats: {from} -> {peak}");
+
+                // The other way, back down to one or two steps off the start.
+                until = Time.time + 3f;
+                while (BlueprintMode.RotationSteps > start + 2 && Time.time < until)
+                {
+                    UnityEngine.InputSystem.InputSystem.QueueStateEvent(pad, right);
+                    yield return null;
+                }
+
+                UnityEngine.InputSystem.InputSystem.QueueStateEvent(pad, new UnityEngine.InputSystem.LowLevel.GamepadState());
+                for (var frame = 0; frame < 4; frame++)
+                {
+                    yield return null;
+                }
+
+                var end = BlueprintMode.RotationSteps;
+                Check(end < peak && end > start && end <= start + 2,
+                    $"L2 + right stick right turns it back: {peak} -> {end} (start {start})");
+            }
+            finally
+            {
+                // Back to the mouse the game's own way, so its hints switch back too.
+                UnityEngine.InputSystem.InputSystem.RemoveDevice(pad);
+                ZInput.instance?.OnInput(source, true);
+                Log($"input back to {ZInput.m_inputSource}, pad active: {ZInput.IsGamepadActive()}");
+            }
+
+            // Turned, the building can reach the player; aim again if it does.
+            yield return null;
+            if (!BlueprintMode.HasTarget || BlueprintMode.Blocked != null)
+            {
+                yield return AimAtGround(player);
+            }
         }
 
         /// <summary>

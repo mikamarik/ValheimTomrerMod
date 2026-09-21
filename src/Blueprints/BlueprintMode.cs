@@ -19,6 +19,7 @@ namespace ValheimTomrer.Blueprints
         private static BlueprintPreview _preview;
         private static int _rotationSteps;
         private static float _scroll;
+        private static float _padTurnTimer;
         private static bool _hasTarget;
         private static string _blockedReason;
 
@@ -72,6 +73,7 @@ namespace ValheimTomrer.Blueprints
             // Start with the blueprint's front (+Z) facing the player.
             _rotationSteps = Mathf.RoundToInt((player.transform.eulerAngles.y + 180f) / RotationStep);
             _scroll = 0f;
+            _padTurnTimer = 0f;
             _hasTarget = false;
             _blockedReason = null;
         }
@@ -83,7 +85,13 @@ namespace ValheimTomrer.Blueprints
             Current = null;
         }
 
-        /// <summary>Mouse wheel turns the blueprint, attack builds it. Called instead of the vanilla click handling.</summary>
+        /// <summary>Which way the blueprint faces now, in steps of <see cref="RotationStep"/>.</summary>
+        public static int RotationSteps => _rotationSteps;
+
+        /// <summary>
+        /// The wheel or the pad turns the blueprint, attack builds it. Called instead of the
+        /// vanilla click handling.
+        /// </summary>
         public static void HandleInput(Player player)
         {
             _scroll += ZInput.GetMouseScrollWheel();
@@ -98,11 +106,59 @@ namespace ValheimTomrer.Blueprints
                 _rotationSteps--;
             }
 
+            PadTurn(Time.deltaTime);
+
             var clicked = (ZInput.GetButtonDown("Attack") || ZInput.GetButtonDown("JoyPlace")) && !Hud.InRadial();
             if (clicked && Time.time - player.m_lastToolUseTime > player.m_placeDelay)
             {
                 TryBuild(player);
             }
+        }
+
+        /// <summary>
+        /// The pad turns a blueprint the way the game turns one piece (Player.UpdatePlacement):
+        /// L2 and the right stick in the default layout, L2 and R2 in the other two. One step at
+        /// once, then one every 0.08 s after a quarter second. While L2 is down the game's own
+        /// PlayerController already keeps the right stick off the camera.
+        /// </summary>
+        private static void PadTurn(float dt)
+        {
+            var direction = 0f;
+            var held = false;
+            if (ZInput.IsGamepadActive())
+            {
+                switch (ZInput.InputLayout)
+                {
+                    case InputLayout.Alternative1:
+                    case InputLayout.Alternative2:
+                        var left = ZInput.GetButton("JoyRotate");
+                        var right = ZInput.GetButton("JoyRotateRight");
+                        held = left || right;
+                        direction = left ? 0.5f : right ? -0.5f : 0f;
+                        break;
+                    case InputLayout.Default:
+                        direction = ZInput.GetJoyRightStickX();
+                        held = ZInput.GetButton("JoyRotate") && Mathf.Abs(direction) > 0.5f;
+                        break;
+                }
+            }
+
+            if (!held)
+            {
+                _padTurnTimer = 0f;
+                return;
+            }
+
+            if (_padTurnTimer == 0f || _padTurnTimer > 0.25f)
+            {
+                _rotationSteps += direction < 0f ? 1 : -1;
+                if (_padTurnTimer > 0.25f)
+                {
+                    _padTurnTimer = 0.17f;
+                }
+            }
+
+            _padTurnTimer += dt;
         }
 
         /// <summary>Moves the preview to the aim point and marks blocked pieces. Called instead of the vanilla preview update.</summary>
