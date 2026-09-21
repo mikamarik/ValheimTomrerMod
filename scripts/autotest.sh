@@ -4,6 +4,8 @@
 #   ./scripts/autotest.sh              scenario "blueprints": build every kit and check it
 #   ./scripts/autotest.sh dump         write every hammer piece's size to .devtest/pieces.txt
 #   ./scripts/autotest.sh probe        measure layers, UI, input and pieces to .devtest/probe.txt
+#   ./scripts/autotest.sh probe_build  measure chests, support, ground, glow and the build card to
+#                                      .devtest/probe-build.txt (not part of editor_all)
 #   ./scripts/autotest.sh editor_open  open the editor window with its key, check the input takeover
 #   ./scripts/autotest.sh editor_view  fill the 3D pane with a kit and drive the camera
 #   ./scripts/autotest.sh editor_files round-trip every blueprint and run the file commands

@@ -27,6 +27,8 @@ namespace ValheimTomrer.Dev
     /// Scenarios: "dump" writes every hammer piece's size and snap points to pieces.txt;
     /// "blueprints" builds every shipped kit and checks unlocks, cost and support;
     /// "probe" measures what the in-game editor will be built on and writes probe.txt;
+    /// "probe_build" measures what building from chests and partial builds rest on, to probe-build.txt
+    /// (a probe like "probe", but left out of editor_all: it places and removes chests and floors);
     /// "editor_open" opens the editor window with its key and checks the input takeover;
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
@@ -187,6 +189,9 @@ namespace ValheimTomrer.Dev
                 case "probe":
                     scenario = Probe(player);
                     break;
+                case "probe_build":
+                    scenario = ProbeBuild(player);
+                    break;
                 case "editor_open":
                     scenario = TestEditorOpen(player);
                     break;
@@ -333,6 +338,7 @@ namespace ValheimTomrer.Dev
             {
                 case "dump": return DumpPieces(player);
                 case "probe": return Probe(player);
+                case "probe_build": return ProbeBuild(player);
                 case "blueprints": return TestBlueprints(player);
                 case "editor_open": return TestEditorOpen(player);
                 case "editor_view": return TestEditorView(player);
@@ -2166,6 +2172,770 @@ namespace ValheimTomrer.Dev
             report.AppendLine("  on-demand asset loading triggered by reading the prefabs: "
                 + (meshesAfter > meshesBefore || texturesAfter > texturesBefore ? "YES" : "no"));
             Check(seen == tool.m_pieces.Count, $"walked all {seen} piece prefabs in {total:0} ms");
+        }
+
+        // ---------- scenario: probe_build ----------
+
+        /// <summary>
+        /// Measures what building from chests, partial builds and the materials list rest on, so no
+        /// later phase leans on a guess. Writes probe-build.txt: one line per question, details
+        /// indented under it. It places chests, a cart, a karve and floors, and removes them all.
+        /// Checks only prove the probe itself ran; the answers are facts, not pass or fail.
+        /// </summary>
+        private static IEnumerator ProbeBuild(Player player)
+        {
+            var report = new StringBuilder();
+            report.AppendLine($"ValheimTomrer build probe | Unity {Application.unityVersion} | {DateTime.Now:yyyy-MM-dd HH:mm}");
+            report.AppendLine();
+            var path = Path.Combine(OutDir, "probe-build.txt");
+            void Save() => File.WriteAllText(path, report.ToString());
+
+            ProbeGameSource(report);
+            report.AppendLine("baseline | run outside the game before any change: "
+                + "./scripts/autotest.sh editor_capture and blueprints (numbers in .claude/handoff/build-sites.md)");
+            Save();
+
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            yield return null;
+            yield return null;
+            PieceCatalog.Ensure();
+            Check(PieceCatalog.Ready, "the piece catalog is built");
+
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Name == "Workshop")
+                ?? BlueprintLibrary.All.FirstOrDefault(b => b.Pieces.Count > 2);
+            ResolvedBlueprint resolved = null;
+            var error = "no kit";
+            if (kit == null || !ResolvedBlueprint.TryResolve(kit, out resolved, out error))
+            {
+                Check(false, "the workshop kit resolves: " + error);
+                Save();
+                yield break;
+            }
+
+            ProbeGround(report, player.transform.position);
+            Save();
+            ProbeSupportTimes(report, resolved);
+            Save();
+            yield return ProbeCardAndGhost(report, player, resolved);
+            Save();
+            yield return ProbeChests(report, player);
+            Save();
+            yield return ProbeGlow(report, player);
+            Save();
+
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(1f);
+            var left = new List<Piece>();
+            Piece.GetAllPiecesInRadius(player.transform.position, 60f, left);
+            var mine = left.Count(p => p != null && p.GetCreator() == player.GetPlayerID());
+            Check(mine == 0, $"the probe left nothing standing: {mine} of its pieces remain");
+            Check(File.Exists(path), "build probe written to " + path);
+        }
+
+        /// <summary>Whether the decompiled game is where later phases will look for it.</summary>
+        private static void ProbeGameSource(StringBuilder report)
+        {
+            const string folder = "/tmp/valheim-src";
+            var present = Directory.Exists(folder);
+            var files = present ? Directory.GetFiles(folder, "*.cs", SearchOption.AllDirectories).Length : 0;
+            report.AppendLine($"game source | {folder} {(present ? "present" : "missing")}, {files} .cs files");
+            Log($"game source: {folder} {(present ? "present" : "missing")}, {files} .cs files");
+        }
+
+        /// <summary>What one ground-height call costs, and how flat the levelled build spot really is.</summary>
+        private static void ProbeGround(StringBuilder report, Vector3 centre)
+        {
+            var zones = ZoneSystem.instance;
+            zones.GetGroundHeight(centre); // the first ray can pay for set-up
+            const int calls = 2000;
+            var sum = 0f;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (var i = 0; i < calls; i++)
+            {
+                var x = ((i % 40) * 0.6f) - 12f;
+                var z = ((i / 40) * 0.48f) - 12f;
+                sum += zones.GetGroundHeight(new Vector3(centre.x + x, centre.y, centre.z + z));
+            }
+
+            var micros = watch.Elapsed.TotalMilliseconds * 1000.0 / calls;
+
+            var misses = 0;
+            float Spread(float reach)
+            {
+                var min = float.MaxValue;
+                var max = float.MinValue;
+                for (var x = -reach; x <= reach; x += 1f)
+                {
+                    for (var z = -reach; z <= reach; z += 1f)
+                    {
+                        if (!zones.GetGroundHeight(new Vector3(centre.x + x, centre.y, centre.z + z), out var h))
+                        {
+                            misses++;
+                            continue;
+                        }
+
+                        min = Mathf.Min(min, h);
+                        max = Mathf.Max(max, h);
+                    }
+                }
+
+                return max >= min ? max - min : 0f;
+            }
+
+            var near = Spread(8f);
+            var wide = Spread(12f);
+            var edge = Spread(16f);
+            report.AppendLine($"ground height | GetGroundHeight {micros:0.0} us a call ({calls} calls, mean height {sum / calls:0.00});"
+                + $" spread over the levelled spot: {near:0.000} m within 8 m, {wide:0.000} m within 12 m,"
+                + $" {edge:0.000} m within 16 m (levelled to 14 m); {misses} misses");
+            Check(misses == 0, $"ground height: {micros:0.0} us a call, spread {near:0.000} m within 8 m, {misses} misses");
+        }
+
+        /// <summary>
+        /// The cost of the support rule for Phase 3's pass loop: one Solve of the kit, one of the kit
+        /// repeated 5 x 5 (400 pieces), and one Evaluate of the top piece against the rest of each.
+        /// All in blueprint space, nothing in the world.
+        /// </summary>
+        private static void ProbeSupportTimes(StringBuilder report, ResolvedBlueprint kit)
+        {
+            var one = KitScene(kit, 1, 0f);
+            var grid = KitScene(kit, 5, 8f);
+            var oneSolve = TimeSolve(one, 20, out var oneMap, out var oneFirst);
+            var gridSolve = TimeSolve(grid, 10, out var gridMap, out var gridFirst);
+            var oneEval = TimeEvaluate(one, 200, out var oneTop, out var oneFalls, out var oneValue);
+            var gridEval = TimeEvaluate(grid, 200, out var gridTop, out var gridFalls, out var gridValue);
+
+            report.AppendLine($"support | Solve: kit ({one.Count} pieces) {oneSolve:0.00} ms (first call {oneFirst:0.00}),"
+                + $" grid ({grid.Count} pieces) {gridSolve:0.00} ms (first call {gridFirst:0.00});"
+                + $" Evaluate one piece: {oneEval:0.000} ms against the kit, {gridEval:0.000} ms against the grid");
+            report.AppendLine($"  pieces the model says fall with everything built: kit {oneMap.Fallen.Count}, grid {gridMap.Fallen.Count}");
+            report.AppendLine($"  the candidate: kit {oneTop} -> {(oneFalls ? "falls" : oneValue.ToString("0.00"))},"
+                + $" grid {gridTop} -> {(gridFalls ? "falls" : gridValue.ToString("0.00"))}");
+            Check(one.Count == kit.Parts.Count && grid.Count == kit.Parts.Count * 25,
+                $"support: kit {oneSolve:0.00} ms, {grid.Count} pieces {gridSolve:0.00} ms, Evaluate {oneEval:0.000} / {gridEval:0.000} ms");
+        }
+
+        /// <summary>The kit, copied n x n times with a gap, as the editor's scene pieces.</summary>
+        private static List<ScenePiece> KitScene(ResolvedBlueprint kit, int n, float spacing)
+        {
+            var scene = new List<ScenePiece>();
+            for (var gx = 0; gx < n; gx++)
+            {
+                for (var gz = 0; gz < n; gz++)
+                {
+                    var offset = new Vector3((gx - ((n - 1) * 0.5f)) * spacing, 0f, (gz - ((n - 1) * 0.5f)) * spacing);
+                    foreach (var part in kit.Parts)
+                    {
+                        scene.Add(new ScenePiece
+                        {
+                            Id = scene.Count,
+                            Prefab = part.Prefab.name,
+                            Pos = part.Source.Position + offset,
+                            Rot = part.Source.Rotation,
+                            Entry = PieceCatalog.Find(part.Prefab.name),
+                        });
+                    }
+                }
+            }
+
+            return scene;
+        }
+
+        private static double TimeSolve(List<ScenePiece> scene, int runs, out SupportMap map, out double first)
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            map = Support.Solve(scene);
+            first = watch.Elapsed.TotalMilliseconds;
+            watch.Restart();
+            for (var i = 0; i < runs; i++)
+            {
+                map = Support.Solve(scene);
+            }
+
+            return watch.Elapsed.TotalMilliseconds / runs;
+        }
+
+        /// <summary>The highest piece (the last one on a tie) against a map solved without it.</summary>
+        private static double TimeEvaluate(List<ScenePiece> scene, int runs, out string top, out bool falls, out float value)
+        {
+            var candidate = scene[0];
+            foreach (var piece in scene)
+            {
+                if (piece.Pos.y >= candidate.Pos.y)
+                {
+                    candidate = piece;
+                }
+            }
+
+            var map = Support.Solve(scene.Where(p => p != candidate).ToList());
+            var placed = new List<PlacedPiece>
+            {
+                new PlacedPiece { Id = candidate.Id, Prefab = candidate.Prefab, Pos = candidate.Pos, Rot = candidate.Rot, Entry = candidate.Entry },
+            };
+            var values = new float[1];
+            var fallen = new bool[1];
+            Support.Evaluate(map, placed, values, fallen);
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (var i = 0; i < runs; i++)
+            {
+                Support.Evaluate(map, placed, values, fallen);
+            }
+
+            top = $"{candidate.Prefab} at {V(candidate.Pos)}";
+            falls = fallen[0];
+            value = values[0];
+            return watch.Elapsed.TotalMilliseconds / runs;
+        }
+
+        /// <summary>The kit in the hammer: its card, then whether its see-through workbench counts as a real one.</summary>
+        private static IEnumerator ProbeCardAndGhost(StringBuilder report, Player player, ResolvedBlueprint kit)
+        {
+            foreach (var part in kit.Parts)
+            {
+                player.m_knownRecipes.Add(part.Piece.m_name);
+            }
+
+            player.UpdateAvailablePiecesList();
+            yield return EquipHammer(player);
+            BlueprintMode.Select(player, kit);
+            yield return AimAtGround(player);
+
+            // Hud.Update fills the card, and the copies' CraftingStation.Start runs a frame after they are made.
+            for (var frame = 0; frame < 5; frame++)
+            {
+                yield return null;
+            }
+
+            ProbeCard(report);
+            ProbeGhostStation(report, player);
+            yield return Screenshot("probe-build-1-card");
+            yield return ProbeEditorStation(report, player, kit);
+            BlueprintMode.Exit();
+            yield return null;
+        }
+
+        /// <summary>The build card: where the requirement slots sit, so Phase 6 can put its list under it.</summary>
+        private static void ProbeCard(StringBuilder report)
+        {
+            var hud = Hud.instance;
+            var slots = hud != null ? hud.m_requirementItems : null;
+            if (slots == null || slots.Length == 0 || slots[0] == null)
+            {
+                report.AppendLine("card | no requirement slots on the HUD");
+                Check(false, "the build card has requirement slots");
+                return;
+            }
+
+            var slot = slots[0].transform;
+            var slotParent = slot.parent;
+            var layout = slotParent != null ? slotParent.GetComponent<UnityEngine.UI.LayoutGroup>() : null;
+            var canvas = slot.GetComponentInParent<Canvas>();
+            var rootCanvas = canvas != null ? canvas.rootCanvas : null;
+
+            // The card is the ancestor right under the build HUD.
+            Transform card = null;
+            var buildHud = hud.m_buildHud != null ? hud.m_buildHud.transform : null;
+            for (var t = slot; t != null; t = t.parent)
+            {
+                if (t.parent == buildHud)
+                {
+                    card = t;
+                    break;
+                }
+            }
+
+            var cardFrom = card != null ? "the child of m_buildHud" : "the slots' grandparent (m_buildHud is not above the slots)";
+            card = card ?? (slotParent != null ? slotParent.parent : null);
+            var cardRect = card as RectTransform;
+            var active = slots.Count(s => s != null && s.activeInHierarchy);
+            report.AppendLine($"card | {slots.Length} slots ({active} on now); card root '{(card != null ? card.name : "none")}' ({cardFrom})"
+                + (cardRect != null ? $" size {V2(cardRect.rect.size)} anchors {V2(cardRect.anchorMin)}-{V2(cardRect.anchorMax)}"
+                    + $" pivot {V2(cardRect.pivot)} pos {V2(cardRect.anchoredPosition)}" : "")
+                + $"; slots' parent '{(slotParent != null ? slotParent.name : "none")}' layout group:"
+                + $" {(layout != null ? layout.GetType().Name : "none")}; canvas scale {(rootCanvas != null ? rootCanvas.scaleFactor : 0f):0.###}");
+
+            var chain = new List<string>();
+            for (var t = slot; t != null; t = t.parent)
+            {
+                chain.Add(t.name);
+                if (rootCanvas != null && t == rootCanvas.transform)
+                {
+                    break;
+                }
+            }
+
+            report.AppendLine("  path: " + string.Join(" < ", chain));
+            for (var t = slot; t != null; t = t.parent)
+            {
+                report.AppendLine("  " + DescribeRect(t));
+                if (rootCanvas != null && t == rootCanvas.transform)
+                {
+                    break;
+                }
+            }
+
+            for (var i = 0; i < slots.Length; i++)
+            {
+                var rect = slots[i] != null ? slots[i].transform as RectTransform : null;
+                if (rect != null)
+                {
+                    report.AppendLine($"  slot {i} '{rect.name}' on={slots[i].activeSelf} pos {V2(rect.anchoredPosition)} size {V2(rect.rect.size)}"
+                        + $" parent '{rect.parent.name}'");
+                }
+            }
+
+            if (cardRect != null)
+            {
+                var corners = new Vector3[4];
+                cardRect.GetWorldCorners(corners);
+                report.AppendLine($"  card on screen (pixels, overlay canvas): bottom left {V2(corners[0])} top right {V2(corners[2])};"
+                    + $" screen {Screen.width}x{Screen.height}");
+            }
+
+            var scaler = rootCanvas != null ? rootCanvas.GetComponent<UnityEngine.UI.CanvasScaler>() : null;
+            if (rootCanvas != null)
+            {
+                report.AppendLine($"  canvas '{rootCanvas.name}' mode {rootCanvas.renderMode} scale {rootCanvas.scaleFactor:0.####}"
+                    + (scaler != null ? $" | scaler {scaler.uiScaleMode} ref {V2(scaler.referenceResolution)} match {scaler.matchWidthOrHeight:0.##}"
+                        + $" pixels per unit {scaler.referencePixelsPerUnit:0}" : " | no CanvasScaler"));
+            }
+
+            Check(active > 0 && card != null, $"the build card: {slots.Length} slots, root '{(card != null ? card.name : "none")}'");
+        }
+
+        private static string DescribeRect(Transform t)
+        {
+            var groups = t.GetComponents<UnityEngine.UI.LayoutGroup>().Select(g => g.GetType().Name).ToList();
+            if (t.GetComponent<UnityEngine.UI.ContentSizeFitter>() != null)
+            {
+                groups.Add("ContentSizeFitter");
+            }
+
+            if (t.GetComponent<UnityEngine.UI.LayoutElement>() != null)
+            {
+                groups.Add("LayoutElement");
+            }
+
+            var extra = groups.Count > 0 ? " [" + string.Join(", ", groups) + "]" : "";
+            if (!(t is RectTransform rect))
+            {
+                return $"'{t.name}' (no RectTransform){extra}";
+            }
+
+            return $"'{t.name}' on={t.gameObject.activeSelf} size {V2(rect.rect.size)} anchors {V2(rect.anchorMin)}-{V2(rect.anchorMax)}"
+                + $" pivot {V2(rect.pivot)} pos {V2(rect.anchoredPosition)} scale {rect.localScale.x:0.##}{extra}";
+        }
+
+        /// <summary>
+        /// The hammer preview holds a see-through workbench. Its ZNetView removes itself, and
+        /// CraftingStation.Start lists any station without one, so it may count as a real workbench.
+        /// </summary>
+        private static void ProbeGhostStation(StringBuilder report, Player player)
+        {
+            var root = BlueprintMode.PreviewRoot;
+            if (root == null)
+            {
+                report.AppendLine("ghost workbench | no hammer preview to test");
+                Check(false, "the kit's hammer preview is up");
+                return;
+            }
+
+            var copies = root.GetComponentsInChildren<CraftingStation>(true);
+            var listed = CraftingStation.m_allStations.Count(s => s != null && s.transform.IsChildOf(root));
+            var noCircle = copies.Count(c => c.m_areaMarker != null && c.m_areaMarkerCircle == null);
+            var real = CraftingStation.m_allStations.Count(s => s != null && !s.transform.IsChildOf(root)
+                && s.m_name == "$piece_workbench" && s.transform.position.y > -1000f
+                && Flat(s.transform.position, root.position) < 50f);
+            var found = StationInRange("$piece_workbench", root.position, out var throws, out var why);
+            var fromGhost = found != null && found.transform.IsChildOf(root);
+            var atPlayer = StationInRange("$piece_workbench", player.transform.position, out var playerThrows, out _);
+            report.AppendLine($"ghost workbench | {(fromGhost ? "YES" : "no")}: HaveBuildStationInRange(\"$piece_workbench\", preview) returns "
+                + $"{(found == null ? "null" : found.name + (fromGhost ? " (the preview's own copy)" : " (a real one)"))};"
+                + $" real workbenches within 50 m: {real}; preview station copies: {copies.Length}"
+                + $" (enabled {copies.Count(c => c.enabled)}), listed in m_allStations: {listed};"
+                + $" at the player: {(atPlayer == null ? "null" : atPlayer.transform.IsChildOf(root) ? "the preview's copy" : "a real one")}");
+            report.AppendLine($"  the call threw {throws} times before it answered ({why ?? "no error"}), {playerThrows} more at the player;"
+                + $" preview copies with an area marker but no CircleProjector (stripped by BlueprintPreview): {noCircle}");
+            Check(real == 0 && copies.Length > 0, $"ghost workbench test set up: {copies.Length} copies in the preview, {real} real ones within 50 m");
+            Log($"ghost workbench counts as real: {fromGhost}");
+        }
+
+        /// <summary>
+        /// The editor's own solid model is made by the same builder, 8000 m down. The station range
+        /// check ignores height, so a copy there may count for a player standing over it.
+        /// </summary>
+        private static IEnumerator ProbeEditorStation(StringBuilder report, Player player, ResolvedBlueprint kit)
+        {
+            EditorSession.Open(kit);
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            var ready = ViewportHost.Ready;
+            for (var frame = 0; frame < 3; frame++)
+            {
+                yield return null;
+            }
+
+            List<CraftingStation> Deep() => CraftingStation.m_allStations
+                .Where(s => s != null && s.transform.position.y < -1000f).ToList();
+
+            var threw = 0;
+            bool CountsOver(CraftingStation deep)
+            {
+                var over = new Vector3(deep.transform.position.x, player.transform.position.y, deep.transform.position.z);
+                var hit = StationInRange(deep.m_name, over, out var throws, out _);
+                threw += throws;
+                return hit != null && hit.transform.position.y < -1000f;
+            }
+
+            var open = Deep();
+            var openCounts = open.Count > 0 && CountsOver(open[0]);
+            var where = open.Count > 0 ? V(open[0].transform.position) : "none";
+
+            EditorSession.Close();
+            BlueprintMode.Exit();
+            for (var frame = 0; frame < 3; frame++)
+            {
+                yield return null;
+            }
+
+            var asleep = Deep();
+            var asleepCounts = asleep.Count > 0 && CountsOver(asleep[0]);
+
+            EditorSession.Forget();
+            for (var frame = 0; frame < 3; frame++)
+            {
+                yield return null;
+            }
+
+            var forgotten = Deep();
+            report.AppendLine($"  editor model: ready={ready}; {open.Count} station copies listed 8000 m down while open (first at {where}),"
+                + $" counts for a player standing over it: {(openCounts ? "YES" : "no")};"
+                + $" after closing (scene asleep): {asleep.Count} listed, counts: {(asleepCounts ? "YES" : "no")};"
+                + $" after Forget: {forgotten.Count} listed; the range call threw {threw} times on the way");
+            Log($"editor model stations: open {open.Count} (counts {openCounts}), asleep {asleep.Count} (counts {asleepCounts}), forgotten {forgotten.Count}");
+        }
+
+        /// <summary>
+        /// HaveBuildStationInRange, but a copy that throws is counted instead of ending the probe. A
+        /// throw resets that copy's timer first, so asking again gets past it.
+        /// </summary>
+        private static CraftingStation StationInRange(string name, Vector3 point, out int throws, out string why)
+        {
+            throws = 0;
+            why = null;
+            for (var attempt = 0; attempt < 5; attempt++)
+            {
+                try
+                {
+                    return CraftingStation.HaveBuildStationInRange(name, point);
+                }
+                catch (Exception e)
+                {
+                    throws++;
+                    why = $"{e.GetType().Name} in CraftingStation.{(e.TargetSite != null ? e.TargetSite.Name : "?")}";
+                }
+            }
+
+            return null;
+        }
+
+        private static float Flat(Vector3 a, Vector3 b)
+        {
+            return new Vector2(a.x - b.x, a.z - b.z).magnitude;
+        }
+
+        /// <summary>
+        /// Ten wood chests, a cart and a karve within 20 m: does the piece list find their
+        /// containers, which need a look into the children, and does taking an item out of a chest
+        /// reach its saved items at once.
+        /// </summary>
+        private static IEnumerator ProbeChests(StringBuilder report, Player player)
+        {
+            var centre = player.transform.position;
+            var before = new HashSet<Piece>(PiecesAround(player, centre));
+            var chest = PiecePrefab("piece_chest_wood");
+            var cart = PiecePrefab("Cart");
+            var karve = PiecePrefab("Karve");
+            if (chest == null || cart == null || karve == null)
+            {
+                report.AppendLine($"chest finder | a prefab is missing: chest={chest != null} cart={cart != null} karve={karve != null}");
+                Check(false, "the chest, cart and karve prefabs exist");
+                yield break;
+            }
+
+            for (var i = 0; i < 10; i++)
+            {
+                var angle = i * 36f;
+                player.PlacePiece(chest, OnGround(centre, angle, 10f), Quaternion.Euler(0f, angle + 180f, 0f), false);
+            }
+
+            player.PlacePiece(cart, OnGround(centre, 18f, 14f) + (Vector3.up * 0.3f), Quaternion.Euler(0f, 108f, 0f), false);
+            player.PlacePiece(karve, OnGround(centre, 198f, 16f) + (Vector3.up * 0.5f), Quaternion.Euler(0f, 288f, 0f), false);
+            yield return new WaitForSeconds(2f);
+
+            var placed = PiecesAround(player, centre).Where(p => !before.Contains(p)).ToList();
+            Check(placed.Count == 12, $"placed 10 chests, a cart and a karve: {placed.Count} new pieces");
+
+            // One search as Phase 2 would run it, timed over many runs.
+            var inRange = new List<Piece>();
+            var hits = 0;
+            Piece.GetAllPiecesInRadius(centre, 20f, inRange);
+            const int runs = 200;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (var r = 0; r < runs; r++)
+            {
+                inRange.Clear();
+                Piece.GetAllPiecesInRadius(centre, 20f, inRange);
+                foreach (var piece in inRange)
+                {
+                    var box = piece.GetComponent<Container>() ?? piece.GetComponentInChildren<Container>();
+                    if (box != null)
+                    {
+                        hits++;
+                    }
+                }
+            }
+
+            var ms = watch.Elapsed.TotalMilliseconds / runs;
+
+            var direct = 0;
+            var children = new List<string>();
+            var missed = new List<string>();
+            var detail = new StringBuilder();
+            foreach (var piece in placed)
+            {
+                var own = piece.GetComponent<Container>();
+                var child = own == null ? piece.GetComponentInChildren<Container>() : null;
+                var hidden = own == null && child == null ? piece.GetComponentInChildren<Container>(true) : null;
+                var inside = inRange.Contains(piece);
+                var box = own ?? child;
+                if (inside && own != null)
+                {
+                    direct++;
+                }
+                else if (inside && child != null)
+                {
+                    children.Add(piece.name);
+                }
+                else
+                {
+                    missed.Add(piece.name + (inside ? "" : " (out of range)") + (hidden != null ? " (container switched off)" : ""));
+                }
+
+                var access = box != null ? box.CheckAccess(player.GetPlayerID()).ToString() : "-";
+                detail.AppendLine($"  {piece.gameObject.name.Replace("(Clone)", "")} at {Vector3.Distance(centre, piece.transform.position):0.0} m:"
+                    + $" {(own != null ? "own Container" : child != null ? "Container on child '" + child.name + "'" : "no Container")}"
+                    + (box != null ? $" '{box.m_name}' {box.m_width}x{box.m_height} guard={box.m_checkGuardStone} access={access}"
+                        + $" inventory={(box.GetInventory() != null)}" : ""));
+            }
+
+            report.AppendLine($"chest finder | found {direct + children.Count} of {placed.Count} placed (10 chests, a cart, a karve) within 20 m;"
+                + $" with GetComponent: {direct}; needed InChildren: {(children.Count > 0 ? string.Join(", ", children.Select(n => n.Replace("(Clone)", ""))) : "none")};"
+                + $" missed: {(missed.Count > 0 ? string.Join(", ", missed) : "none")};"
+                + $" one search {ms:0.000} ms ({inRange.Count} pieces within 20 m of {Piece.s_allPieces.Count} loaded, {hits / runs} containers)");
+            report.Append(detail);
+            Log($"chest finder: {direct} direct, {children.Count} in children, {missed.Count} missed, {ms:0.000} ms");
+
+            yield return ProbeChestSave(report, placed);
+
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(1f);
+            Check(placed.All(p => p == null), "every chest, the cart and the karve are removed again");
+        }
+
+        /// <summary>Takes wood out of a chest the game's way and watches its saved items.</summary>
+        private static IEnumerator ProbeChestSave(StringBuilder report, List<Piece> placed)
+        {
+            var box = placed.Select(p => p != null ? p.GetComponent<Container>() : null).FirstOrDefault(c => c != null);
+            var zdo = box != null && box.m_nview != null ? box.m_nview.GetZDO() : null;
+            if (zdo == null)
+            {
+                report.AppendLine("chest keeps what we took | no chest with a ZDO to test");
+                Check(false, "a placed chest has a ZDO");
+                yield break;
+            }
+
+            var wood = ObjectDB.instance.GetItemPrefab("Wood").GetComponent<ItemDrop>().m_itemData.m_shared.m_name;
+            var inventory = box.GetInventory();
+            inventory.AddItem("Wood", 20, 1, 0, 0L, "", false);
+            yield return null;
+
+            var start = zdo.GetByteArray(ZDOVars.s_items);
+            var startRevision = zdo.DataRevision;
+            inventory.RemoveItem(wood, 5);
+            var sameFrame = zdo.GetByteArray(ZDOVars.s_items);
+            var sameRevision = zdo.DataRevision;
+            yield return null;
+            var nextFrame = zdo.GetByteArray(ZDOVars.s_items);
+            yield return new WaitForSeconds(1f);
+            var later = zdo.GetByteArray(ZDOVars.s_items);
+
+            var when = !SameBytes(start, sameFrame) ? "in the same frame"
+                : !SameBytes(start, nextFrame) ? "one frame later"
+                : !SameBytes(start, later) ? "within 1 s"
+                : "not within 1 s";
+            var inSave = WoodIn(sameFrame, box, wood);
+            report.AppendLine($"chest keeps what we took | the ZDO items field changed {when}: wood in it {WoodIn(start, box, wood)} -> {inSave}"
+                + $" (the chest's inventory says {inventory.CountItems(wood)}), data revision {startRevision} -> {sameRevision};"
+                + $" the field is a byte array ({(sameFrame != null ? sameFrame.Length : 0)} bytes), not a string");
+            Check(inSave >= 0, $"the chest's saved items read back: {inSave} wood, changed {when}");
+        }
+
+        private static bool SameBytes(byte[] a, byte[] b)
+        {
+            if (a == null || b == null)
+            {
+                return a == b;
+            }
+
+            return a.SequenceEqual(b);
+        }
+
+        /// <summary>How much wood a chest's saved items hold, read back through the game's own loader.</summary>
+        private static int WoodIn(byte[] bytes, Container box, string wood)
+        {
+            if (bytes == null)
+            {
+                return -1;
+            }
+
+            var copy = new Inventory("probe", null, box.m_width, box.m_height);
+            copy.Load(new ZPackage(bytes));
+            return copy.CountItems(wood);
+        }
+
+        private static Piece PiecePrefab(string name)
+        {
+            var prefab = ZNetScene.instance != null ? ZNetScene.instance.GetPrefab(name) : null;
+            return prefab != null ? prefab.GetComponent<Piece>() : null;
+        }
+
+        private static Vector3 OnGround(Vector3 centre, float angle, float distance)
+        {
+            var spot = centre + (Quaternion.Euler(0f, angle, 0f) * Vector3.forward * distance);
+            spot.y = ZoneSystem.instance.GetGroundHeight(spot);
+            return spot;
+        }
+
+        /// <summary>
+        /// Phase 1's refresh budget: 100 world pieces glow through MaterialMan the way
+        /// WearNTear.Highlight does it, then go back. MaterialMan applies in its own Update, so that
+        /// is called by hand to time the whole thing.
+        /// </summary>
+        private static IEnumerator ProbeGlow(StringBuilder report, Player player)
+        {
+            var centre = player.transform.position;
+            var before = new HashSet<Piece>(PiecesAround(player, centre));
+            var floor = PiecePrefab("wood_floor");
+            if (floor == null)
+            {
+                report.AppendLine("glow | no wood_floor prefab");
+                Check(false, "the wood_floor prefab exists");
+                yield break;
+            }
+
+            for (var x = 0; x < 10; x++)
+            {
+                for (var z = 0; z < 10; z++)
+                {
+                    var spot = centre + new Vector3((x * 2f) - 9f, 0f, (z * 2f) - 9f);
+                    spot.y = ZoneSystem.instance.GetGroundHeight(spot);
+                    player.PlacePiece(floor, spot, Quaternion.identity, false);
+                }
+            }
+
+            yield return new WaitForSeconds(1f);
+            var pieces = PiecesAround(player, centre).Where(p => !before.Contains(p)).Select(p => p.gameObject).ToList();
+            Check(pieces.Count == 100, $"placed 100 floors to glow: {pieces.Count}");
+
+            var man = MaterialMan.instance;
+            var color = new Color(1f, 0.9f, 0.12f);
+            var emission = color * 0.35f;
+
+            double Glow()
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                foreach (var go in pieces)
+                {
+                    man.SetValue(go, ShaderProps._EmissionColor, emission);
+                    man.SetValue(go, ShaderProps._Color, color);
+                }
+
+                return watch.Elapsed.TotalMilliseconds;
+            }
+
+            double Unglow()
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                foreach (var go in pieces)
+                {
+                    man.ResetValue(go, ShaderProps._Color);
+                    man.ResetValue(go, ShaderProps._EmissionColor);
+                }
+
+                return watch.Elapsed.TotalMilliseconds;
+            }
+
+            double Apply()
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                man.Update();
+                return watch.Elapsed.TotalMilliseconds;
+            }
+
+            var firstSet = Glow();
+            var firstApply = Apply();
+            var lit = pieces.Count(go => HasColor(go, color));
+            yield return Screenshot("probe-build-2-glow");
+
+            var resetSet = Unglow();
+            var resetApply = Apply();
+            var clean = pieces.Count(go => !HasColor(go, color));
+
+            var againSet = Glow();
+            var againApply = Apply();
+            var againReset = Unglow() + Apply();
+
+            report.AppendLine($"glow | {pieces.Count} pieces: first glow {firstSet + firstApply:0.00} ms ({firstSet:0.00} to set, {firstApply:0.00} to apply),"
+                + $" again {againSet + againApply:0.00} ms, reset {resetSet + resetApply:0.00} ms (again {againReset:0.00});"
+                + $" the colour reached {lit} of them, the reset cleared {clean}");
+            Check(lit == pieces.Count && clean == pieces.Count,
+                $"glow on {pieces.Count} pieces took {firstSet + firstApply:0.00} ms and came off again: lit {lit}, clean {clean}");
+
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>True when the first renderer of a piece carries this colour in its property block.</summary>
+        private static bool HasColor(GameObject go, Color color)
+        {
+            var renderer = go != null ? go.GetComponentInChildren<MeshRenderer>() : null;
+            if (renderer == null)
+            {
+                return false;
+            }
+
+            var block = new MaterialPropertyBlock();
+            renderer.GetPropertyBlock(block);
+            if (block.isEmpty)
+            {
+                return false;
+            }
+
+            var got = block.GetColor(ShaderProps._Color);
+            return Mathf.Abs(got.r - color.r) < 0.01f && Mathf.Abs(got.g - color.g) < 0.01f && Mathf.Abs(got.b - color.b) < 0.01f;
+        }
+
+        private static string V2(Vector2 v)
+        {
+            return $"({v.x:0.#},{v.y:0.#})";
         }
 
         // ---------- scenario: editor_open ----------
