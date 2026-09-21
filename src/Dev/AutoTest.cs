@@ -4945,21 +4945,59 @@ namespace ValheimTomrer.Dev
             var gap = RingGap();
             Check(gap < 4f, $"the ring sits on the focused widget: {gap:0.0} px between the two centres");
 
+            // The top bar is one row: right walks it in screen order and stops at the end.
             var steps = new List<int>();
             var widgets = FocusNav.Count;
+            var ordered = true;
             for (var i = 0; i < widgets; i++)
             {
-                yield return FocusTap(PadButton.Down);
+                var x = Middle((RectTransform)FocusNav.Focused.transform).x;
+                yield return FocusTap(PadButton.Right);
                 steps.Add(FocusNav.Index);
+                ordered &= i == widgets - 1 || Middle((RectTransform)FocusNav.Focused.transform).x > x;
             }
 
-            Check(steps.Count > 1 && steps[0] == 1 && steps[steps.Count - 2] == steps.Count - 1
-                && FocusNav.Index == 0,
-                $"the D-pad walks the bar one step at a time and wraps: 0 -> {steps[0]} -> ... -> "
-                + $"{steps[steps.Count - 2]} -> {FocusNav.Index}");
+            Check(steps.Count > 1 && steps[0] == 1 && steps[steps.Count - 2] == widgets - 1
+                && FocusNav.Index == widgets - 1 && FocusNav.Current == FocusRegion.TopBar && ordered,
+                $"D-pad right walks the bar one button at a time, left to right, and stops at the end: "
+                + $"0 -> {steps[0]} -> ... -> {steps[steps.Count - 2]} -> {FocusNav.Index} of {widgets}");
 
             var moved = RingGap();
             Check(moved < 4f, $"and the ring follows it: {moved:0.0} px on '{WidgetName(FocusNav.Focused)}'");
+
+            // The left stick goes sideways too, and a slanted push is one step on its bigger half.
+            yield return FocusStick(new Vector2(-1f, 0f));
+            var back = FocusNav.Index;
+            yield return FocusStick(new Vector2(1f, 0f));
+            var on = FocusNav.Index;
+            yield return FocusStick(new Vector2(-0.8f, 0.6f));
+            Check(back == widgets - 2 && on == widgets - 1 && FocusNav.Index == widgets - 2
+                && FocusNav.Current == FocusRegion.TopBar,
+                $"the left stick walks the bar: left -> {back}, right -> {on}, slanted up-left -> "
+                + $"{FocusNav.Index} on the {FocusNav.Current}");
+
+            yield return FocusTap(PadButton.Up);
+            Check(FocusNav.Index == widgets - 2 && FocusNav.Current == FocusRegion.TopBar,
+                "up on the top bar does nothing, there is nothing above it");
+
+            // The bar's last buttons sit over the right panel: down goes into it, up comes back
+            // to the same button.
+            var top = FocusNav.Focused;
+            yield return FocusTap(PadButton.Down);
+            var under = FocusNav.Current;
+            var landed = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Up);
+            Check(under == FocusRegion.Right && FocusNav.Current == FocusRegion.TopBar && FocusNav.Focused == top,
+                $"down from '{WidgetName(top)}' goes into the {under} panel, on '{landed}', and up comes "
+                + $"back to '{WidgetName(FocusNav.Focused)}'");
+
+            for (var i = 0; i < widgets; i++)
+            {
+                yield return FocusTap(PadButton.Left);
+            }
+
+            Check(FocusNav.Index == 0 && FocusNav.Current == FocusRegion.TopBar,
+                $"left walks back to the first button and stops there: {FocusNav.Index}");
         }
 
         /// <summary>L1 and R1 walk the three regions, and the left panel's list follows its tab.</summary>
@@ -5001,12 +5039,59 @@ namespace ValheimTomrer.Dev
                 $"the left panel's walk is the two tabs, the search box and the chips: {tab0} widgets "
                 + $"({Palette.TagChipCount} tag chips, the probe measured 22)");
 
-            // Down four times: the two tabs, the search box, then the first chip.
-            for (var i = 0; i < 4; i++)
-            {
-                yield return FocusTap(PadButton.Down);
-            }
+            // The two tabs are one row, the search box sits under them, the chips flow in rows
+            // under that. The pad moves by what is on screen.
+            var pieces = FocusNav.Focused;
+            yield return FocusTap(PadButton.Right);
+            var blueprintTab = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Right);
+            var across = FocusNav.Current;
+            yield return FocusTap(PadButton.Left);
+            var backTab = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Left);
+            Check(blueprintTab == "In blueprint" && across == FocusRegion.Right && backTab == "In blueprint"
+                && FocusNav.Focused == pieces,
+                $"right goes Pieces -> '{blueprintTab}' -> the {across} panel across the 3D pane, left comes "
+                + $"back -> '{backTab}' -> '{WidgetName(FocusNav.Focused)}'");
 
+            // Up from the tabs goes into the top bar, down comes back to the same tab.
+            yield return FocusTap(PadButton.Up);
+            var over = FocusNav.Current;
+            var overName = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Down);
+            Check(over == FocusRegion.TopBar && FocusNav.Current == FocusRegion.Left && FocusNav.Focused == pieces,
+                $"up from Pieces goes into the {over}, on '{overName}', and down comes back to "
+                + $"'{WidgetName(FocusNav.Focused)}'");
+
+            yield return FocusTap(PadButton.Down);
+            var search = FocusNav.Focused is TMPro.TMP_InputField;
+            yield return FocusTap(PadButton.Down);
+            var firstChip = FocusNav.Focused;
+            Check(search && WidgetName(firstChip) == "Chip All",
+                $"down goes to the search box, then to the first chip: '{WidgetName(firstChip)}'");
+
+            yield return FocusTap(PadButton.Right);
+            var secondChip = FocusNav.Focused;
+            var along = secondChip != firstChip && Mathf.Abs(Mid(secondChip).y - Mid(firstChip).y) < 1f
+                && Mid(secondChip).x > Mid(firstChip).x;
+            yield return FocusTap(PadButton.Down);
+            var below = FocusNav.Focused;
+            var lower = below != null && WidgetName(below).StartsWith("Chip ")
+                && Mid(below).y < Mid(secondChip).y - 10f;
+            yield return FocusTap(PadButton.Up);
+            var returned = FocusNav.Focused == secondChip;
+            Check(along && lower && returned,
+                $"right goes along the chip row to '{WidgetName(secondChip)}', down to the row under it "
+                + $"('{WidgetName(below)}'), up back to '{WidgetName(FocusNav.Focused)}'");
+
+            yield return FocusStick(new Vector2(0f, -1f));
+            var stickDown = FocusNav.Focused;
+            yield return FocusStick(new Vector2(0f, 1f));
+            Check(stickDown == below && FocusNav.Focused == secondChip,
+                $"the left stick does the same: down to '{WidgetName(stickDown)}', up to "
+                + $"'{WidgetName(FocusNav.Focused)}'");
+
+            yield return FocusTap(PadButton.Down);
             Check(RingGap() < 4f, $"the ring follows it into the chips, on '{WidgetName(FocusNav.Focused)}'");
             yield return Screenshot("editor-focus-1-ring");
 
@@ -5042,7 +5127,7 @@ namespace ValheimTomrer.Dev
             var steps = 0;
             while (WidgetName(FocusNav.Focused) != "Undo" && steps < 20)
             {
-                yield return FocusTap(PadButton.Down);
+                yield return FocusTap(PadButton.Right);
                 steps++;
             }
 
@@ -5119,12 +5204,124 @@ namespace ValheimTomrer.Dev
             Check(FocusNav.InDialog && FocusNav.Focused == at,
                 $"R1 cannot walk out of it: still '{WidgetName(FocusNav.Focused)}'");
 
+            // Down runs the list, scrolling it, to the Close button under it, and no further.
+            var taps = 0;
+            var inSight = true;
+            while (WidgetName(FocusNav.Focused) != "Left" && taps < 60)
+            {
+                yield return FocusTap(PadButton.Down);
+                inSight &= RingGap() < 4f && InModal(FocusNav.Focused);
+                taps++;
+            }
+
+            var close = FocusNav.Focused;
+            yield return FocusTap(PadButton.Down);
+            Check(WidgetName(close) == "Left" && FocusNav.Focused == close && FocusNav.InDialog && inSight,
+                $"down walks the {Dialogs.RowCount} rows to the Close button in {taps} steps, every one "
+                + $"scrolled into sight, and stops there: '{WidgetName(FocusNav.Focused)}'");
+
+            yield return FocusTap(PadButton.Up);
+            Check(FocusNav.InDialog && FocusNav.Focused != close && InModal(FocusNav.Focused),
+                $"up goes back into the list: '{WidgetName(FocusNav.Focused)}'");
+
             yield return FocusTap(PadButton.Circle);
             yield return null;
             yield return null;
             Check(!Dialogs.IsOpen, "circle closes the dialog");
             Check(FocusNav.Active && FocusNav.Current == before,
                 $"and the walk is back on the {FocusNav.Current} region it came from");
+
+            yield return FocusSaveAs();
+            yield return FocusQuestion();
+            yield return FocusHelp();
+            Check(FocusNav.Active && FocusNav.Current == before && !Dialogs.IsOpen,
+                $"after the three dialogs the walk is back on the {FocusNav.Current} region");
+        }
+
+        /// <summary>Save as: the name box, and under it Cancel and Save side by side.</summary>
+        private static IEnumerator FocusSaveAs()
+        {
+            Dialogs.SaveAs("focus test");
+            yield return null;
+            yield return null;
+            var box = FocusNav.Focused;
+            var typing = ModUi.Typing;
+
+            // Circle hands the keyboard back first, the dialog stays.
+            yield return FocusTap(PadButton.Circle);
+            var waited = 0f;
+            while (ModUi.Typing && waited < 1f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(Dialogs.Kind == "saveAs" && box is TMPro.TMP_InputField && typing && !ModUi.Typing
+                && FocusNav.InDialog && FocusNav.Focused == box,
+                $"Save as opens typing in the name box, circle stops the typing and keeps the dialog: "
+                + $"'{WidgetName(FocusNav.Focused)}'");
+
+            yield return FocusTap(PadButton.Down);
+            var down = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Right);
+            var right = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Left);
+            var left = WidgetName(FocusNav.Focused);
+            yield return FocusStick(new Vector2(0f, 1f));
+            Check(down == "Left" && right == "Right" && left == "Left" && FocusNav.Focused == box
+                && FocusNav.InDialog,
+                $"down goes to Cancel ('{down}'), right to Save ('{right}'), left back ('{left}'), "
+                + $"the stick up to the name box ('{WidgetName(FocusNav.Focused)}')");
+
+            yield return FocusTap(PadButton.Circle);
+            yield return null;
+            yield return null;
+            Check(!Dialogs.IsOpen, "circle closes Save as");
+        }
+
+        /// <summary>A yes or no question: the two buttons side by side, and the X over them.</summary>
+        private static IEnumerator FocusQuestion()
+        {
+            Dialogs.Confirm("Focus test", "A question for the walk.", "Discard", () => { });
+            yield return null;
+            yield return null;
+            var start = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Left);
+            var left = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Right);
+            var right = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Up);
+            var up = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Down);
+            Check(Dialogs.Kind == "confirm" && start == "Right" && left == "Left" && right == "Right"
+                && up == "Close" && WidgetName(FocusNav.Focused) == "Right" && FocusNav.InDialog,
+                $"the question starts on its answer ('{start}'), left goes to Cancel ('{left}'), right "
+                + $"back ('{right}'), up to the X ('{up}'), down back ('{WidgetName(FocusNav.Focused)}')");
+
+            yield return FocusTap(PadButton.Circle);
+            yield return null;
+            yield return null;
+            Check(!Dialogs.IsOpen, "circle closes the question and nothing was answered");
+        }
+
+        /// <summary>The help: the Close button at the bottom and the X at the top.</summary>
+        private static IEnumerator FocusHelp()
+        {
+            yield return FocusTap(PadButton.Options);
+            yield return null;
+            var start = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Up);
+            var up = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Down);
+            Check(Dialogs.Kind == "help" && start == "Left" && up == "Close"
+                && WidgetName(FocusNav.Focused) == "Left" && FocusNav.InDialog,
+                $"the help starts on Close ('{start}'), up goes to the X ('{up}'), down back "
+                + $"('{WidgetName(FocusNav.Focused)}')");
+
+            yield return FocusTap(PadButton.Circle);
+            yield return null;
+            yield return null;
+            Check(!Dialogs.IsOpen, "circle closes the help");
         }
 
         /// <summary>Circle gives the pane back, and the sticks fly again.</summary>
@@ -5152,6 +5349,47 @@ namespace ValheimTomrer.Dev
             {
                 _focusSelected++;
             }
+        }
+
+        /// <summary>The left stick pushed one way for one read, then let go, watched like a tap.</summary>
+        private static IEnumerator FocusStick(Vector2 stick)
+        {
+            _pad.Ls = stick;
+            yield return null;
+            yield return null;
+            _pad.Ls = Vector2.zero;
+            yield return null;
+            if (ModUi.HasSelection && !ModUi.Typing)
+            {
+                _focusSelected++;
+            }
+        }
+
+        private static Vector3 Mid(UnityEngine.UI.Selectable widget)
+        {
+            return widget != null ? Middle((RectTransform)widget.transform) : Vector3.zero;
+        }
+
+        /// <summary>The widget's middle is inside the dialog, and inside its scroll list's window if it has one.</summary>
+        private static bool InModal(UnityEngine.UI.Selectable widget)
+        {
+            if (widget == null || Dialogs.Modal == null)
+            {
+                return false;
+            }
+
+            var middle = Mid(widget);
+            var scroll = widget.GetComponentInParent<UnityEngine.UI.ScrollRect>();
+            var inList = scroll == null || scroll.viewport == null || Inside(scroll.viewport, middle);
+            return inList && Inside(Dialogs.Modal, middle);
+        }
+
+        private static bool Inside(RectTransform rect, Vector3 point)
+        {
+            var corners = new Vector3[4];
+            rect.GetWorldCorners(corners);
+            return point.x >= corners[0].x && point.x <= corners[2].x
+                && point.y >= corners[0].y && point.y <= corners[2].y;
         }
 
         private static string WidgetName(UnityEngine.UI.Selectable widget)

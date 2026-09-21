@@ -242,22 +242,27 @@ namespace ValheimTomrer.Editor.Input
         }
 
         /// <summary>
-        /// In the panel walk: the D-pad and the left stick move, L1 and R1 change panel, cross
-        /// presses. Everything else does nothing, the way the piece menu holds the pad.
+        /// In the panel walk: the D-pad and the left stick step up, down, left and right by what
+        /// is on screen, L1 and R1 change panel, cross presses. Everything else does nothing, the
+        /// way the piece menu holds the pad.
         /// </summary>
         private static void Focus(PadFrame pad, float dt)
         {
-            var down = Dir(pad.Held(PadButton.Up) || pad.Ls.y > NavStick,
-                pad.Held(PadButton.Down) || pad.Ls.y < -NavStick);
-            var right = Dir(pad.Held(PadButton.Left), pad.Held(PadButton.Right));
-            if (NavY.Step(down, dt))
+            // The stick counts on the axis it is pushed along most, so a slanted push is one step.
+            var ls = pad.Ls;
+            var sideways = Mathf.Abs(ls.x) >= Mathf.Abs(ls.y);
+            var right = Dir(pad.Held(PadButton.Left) || (sideways && ls.x < -NavStick),
+                pad.Held(PadButton.Right) || (sideways && ls.x > NavStick));
+            var up = Dir(pad.Held(PadButton.Down) || (!sideways && ls.y < -NavStick),
+                pad.Held(PadButton.Up) || (!sideways && ls.y > NavStick));
+            if (NavY.Step(up, dt))
             {
-                FocusNav.Move(down);
+                FocusNav.Step(0, up);
             }
 
             if (NavX.Step(right, dt))
             {
-                FocusNav.Move(right);
+                FocusNav.Step(right, 0);
             }
 
             if (pad.Pressed(PadButton.L1))
@@ -436,7 +441,7 @@ namespace ValheimTomrer.Editor.Input
                 new HelpRow($"{l3} (in the view)",
                     $"Leave the view and walk the panels. {circle} comes back to the view."),
                 new HelpRow($"{l3} (in the panels)",
-                    $"{g.Dpad} or {g.Ls} moves, {r1} goes left, top, right and {l1} back, "
+                    $"{g.Dpad} or {g.Ls} moves up, down, left, right, {r1} goes left, top, right and {l1} back, "
                     + $"{cross} presses, {circle} goes back to the view"),
                 new HelpRow($"{l3}, {r3} (while placing)", "Pick the snap point, like Q and E"),
                 new HelpRow($"{r3} (in the view)", "Look at the selection, or at everything"),

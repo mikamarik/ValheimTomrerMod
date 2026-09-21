@@ -423,12 +423,16 @@ namespace ValheimTomrer.Editor.Input
             switch (key)
             {
                 case KeyCode.UpArrow:
-                case KeyCode.LeftArrow:
-                    FocusNav.Move(-1);
+                    FocusNav.Step(0, 1);
                     break;
                 case KeyCode.DownArrow:
+                    FocusNav.Step(0, -1);
+                    break;
+                case KeyCode.LeftArrow:
+                    FocusNav.Step(-1, 0);
+                    break;
                 case KeyCode.RightArrow:
-                    FocusNav.Move(1);
+                    FocusNav.Step(1, 0);
                     break;
                 case KeyCode.Return:
                 case KeyCode.KeypadEnter:
@@ -622,7 +626,8 @@ namespace ValheimTomrer.Editor.Input
                 "Walk the top bar and the two side panels, on and back. In a dialog it walks "
                 + "what the dialog holds."),
             new HelpRow("Arrows, Enter (while walking)",
-                "Step to the next widget, and press it. A text box starts typing, Esc gives it back."),
+                "Step to the widget above, below, left or right, and press it. A text box starts "
+                + "typing, Esc gives it back."),
             new HelpRow("Esc",
                 "Close the dialog, else stop placing, else give the mouse back, else leave the "
                 + "walk, else clear the selection, else close the editor"),
