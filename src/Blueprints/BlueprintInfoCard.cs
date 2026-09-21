@@ -4,14 +4,14 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
 using ValheimTomrer.Blueprints.Sites;
-using ValheimTomrer.Editor.Input;
 using ValheimTomrer.Editor.Ui;
 
 namespace ValheimTomrer.Blueprints
 {
     /// <summary>
     /// Fills the vanilla build card (bottom of the screen in build mode) with the active blueprint:
-    /// its name, icon and a hint line. The game's six requirement slots are hidden; a materials list
+    /// its name ("Continue: Workshop" in Continue), icon and its piece count. The controls are in the
+    /// game's hint row (<see cref="HintRow"/>). The game's six requirement slots are hidden; a materials list
     /// (<see cref="MaterialList"/>) stands on the card's right instead, with every item, every
     /// station and what the next click builds. The list is a child of the card, so it hides with the
     /// game's HUD (Ctrl+F3). For a normal piece the list hides and the game fills its own slots.
@@ -108,7 +108,9 @@ namespace ValheimTomrer.Blueprints
         public static void Show(Hud hud, Player player, ResolvedBlueprint blueprint)
         {
             var site = BlueprintMode.CurrentSite;
-            hud.m_buildSelection.text = blueprint.Name;
+
+            // A click that leaves parts goes to Continue on its own, so the title says which mode this is.
+            hud.m_buildSelection.text = site != null ? $"Continue: {site.Name}" : blueprint.Name;
             hud.m_pieceDescription.text = Description(blueprint, site != null);
             hud.m_buildIcon.enabled = blueprint.Icon != null;
             hud.m_buildIcon.sprite = blueprint.Icon;
@@ -436,64 +438,27 @@ namespace ValheimTomrer.Blueprints
             }
         }
 
-        /// <summary>
-        /// The card's text: the blueprint's own line, then the hint line. The hint names pad buttons
-        /// while the game says the pad is in use, the keys otherwise.
-        /// </summary>
+        /// <summary>In Continue the footer already counts what is built, so there is no count.</summary>
         private static string Description(ResolvedBlueprint blueprint, bool continuing)
         {
-            var text = ZInput.IsGamepadActive() ? PadHint(blueprint, continuing) : KeyHint(blueprint, continuing);
-            return string.IsNullOrEmpty(blueprint.Blueprint.Description)
-                ? text
-                : blueprint.Blueprint.Description + "\n" + text;
+            return Description(blueprint.Blueprint.Description, continuing ? (int?)null : blueprint.Parts.Count);
         }
 
         /// <summary>
-        /// "16 pieces. L2 + right stick: rotate. □: next blueprint. L2 + □: edit it.", in the names of
-        /// the pad in hand and the game's layout (the modifier is L1 in the alternative one).
+        /// The card's text: the blueprint's own line, then how many pieces it has (no count when
+        /// <paramref name="pieces"/> is null). The controls are in the game's hint row along the bottom
+        /// of the screen (<see cref="HintRow"/>), not here. The editor's copy of the card
+        /// (<see cref="Editor.BlueprintCard"/>) writes its text with this too.
         /// </summary>
-        private static string PadHint(ResolvedBlueprint blueprint, bool continuing)
+        public static string Description(string own, int? pieces)
         {
-            var g = EditorInput.Glyphs;
-            var next = g.Of(PadButton.Square);
-            var edit = $"{WorldPad.NameOf(WorldPad.Modifier, g)} + {next}: edit it.";
-            if (continuing)
+            var count = pieces.HasValue ? $"{pieces.Value} pieces." : "";
+            if (string.IsNullOrEmpty(own))
             {
-                return $"{WorldPad.NameOf("JoyPlace", g)}: build what you can. {WorldPad.NameOf("JoyRemove", g)} twice: "
-                    + $"forget the plan. {next}: next. {edit}";
+                return count;
             }
 
-            var rotate = ZInput.InputLayout == InputLayout.Default
-                ? $"{WorldPad.NameOf(WorldPad.Modifier, g)} + {g.Rs.ToLowerInvariant()}"
-                : $"{WorldPad.NameOf("JoyRotate", g)}, {WorldPad.NameOf("JoyRotateRight", g)}";
-            return $"{blueprint.Parts.Count} pieces. {rotate}: rotate. {next}: next blueprint. {edit}";
-        }
-
-        private static string KeyHint(ResolvedBlueprint blueprint, bool continuing)
-        {
-            var next = ValheimTomrerPlugin.BlueprintKey.Value;
-            var edit = Editor.EditorConfig.Key != null
-                ? $" {Editor.EditorConfig.Key.Value}: edit it."
-                : "";
-            if (continuing)
-            {
-                // Locked onto the build: the wheel does nothing, Remove twice forgets the plan.
-                return $"Click: build what you can. {RemoveName()} twice: forget the plan. {next}: next.{edit}";
-            }
-
-            return $"{blueprint.Parts.Count} pieces. Wheel: rotate. {next}: next blueprint.{edit}";
-        }
-
-        /// <summary>"Remove (Left System)": the game's own name for the key, as its hint bar shows it.</summary>
-        private static string RemoveName()
-        {
-            if (Localization.instance == null)
-            {
-                return "Remove";
-            }
-
-            var key = Localization.instance.GetBoundKeyString("Remove", emptyStringOnMissing: true);
-            return string.IsNullOrEmpty(key) || key.Contains("<") ? "Remove" : $"Remove ({key})";
+            return count.Length > 0 ? own + "\n" + count : own;
         }
     }
 }

@@ -223,6 +223,22 @@ namespace ValheimTomrer.Blueprints.Sites
         /// <summary>Fills <see cref="Site.Built"/> from the pieces standing in the world now.</summary>
         public static void ReadBuilt(Site site)
         {
+            ReadBuilt(site, null);
+        }
+
+        /// <summary>
+        /// The same read, and the world piece that stands for each built part, by part index (null
+        /// where none does). What "Whole structure" takes down (<see cref="SiteRemoval"/>).
+        /// </summary>
+        public static Piece[] BuiltPieces(Site site)
+        {
+            var pieces = new Piece[site.Total];
+            ReadBuilt(site, pieces);
+            return pieces;
+        }
+
+        private static void ReadBuilt(Site site, Piece[] pieces)
+        {
             ClearLists();
             Piece.GetAllPiecesInRadius(site.WorldBox.center, site.WorldBox.extents.magnitude + MatchDistance, Near);
             foreach (var piece in Near)
@@ -260,6 +276,11 @@ namespace ValheimTomrer.Blueprints.Sites
                         {
                             Used.Add(piece);
                             found = true;
+                            if (pieces != null)
+                            {
+                                pieces[i] = piece;
+                            }
+
                             break;
                         }
                     }

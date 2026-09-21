@@ -13,9 +13,11 @@
 #   ./scripts/autotest.sh build_sites  keep what a partial or empty click left as an unfinished build: its file,
 #                                      its ghosts with the hammer out nearby, what is built read from the world
 #   ./scripts/autotest.sh build_continue  continue an unfinished build: the key offers it first, the ghost stays put,
-#                                      a click builds what the materials pay for, Remove twice forgets it
+#                                      a click builds what the materials pay for, Remove and its window (keys, mouse, pad)
 #   ./scripts/autotest.sh card_materials  the hammer card's materials list: a row per item and station, have / need,
 #                                      colours, the footer, Continue, 12 items in two columns, a normal piece
+#   ./scripts/autotest.sh hint_row     the controls of blueprint mode, Continue and a capture in the game's own hint
+#                                      row: exactly each set, keyboard and pad, the game's look, the game's row back after
 #   ./scripts/autotest.sh editor_open  open the editor window with its key, check the input takeover
 #   ./scripts/autotest.sh editor_view  fill the 3D pane with a kit and drive the camera
 #   ./scripts/autotest.sh editor_files round-trip every blueprint and run the file commands

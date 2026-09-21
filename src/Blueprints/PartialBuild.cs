@@ -90,12 +90,7 @@ namespace ValheimTomrer.Blueprints
             var exempt = Exempt(scene, ground, stats);
 
             // 4. Height, then distance from the middle of the footprint, then file order.
-            var middle = FootprintMiddle(parts);
-            var order = unbuilt
-                .OrderBy(i => parts[i].Source.Position.y)
-                .ThenBy(i => Flat(parts[i].Source.Position, middle))
-                .ThenBy(i => i)
-                .ToList();
+            var order = BuildOrder(blueprint, unbuilt);
 
             // 5. Rounds.
             var stations = new StationCheck(blueprint, rootPosition, rootYaw);
@@ -133,8 +128,23 @@ namespace ValheimTomrer.Blueprints
             return Rounds(rest, taken, scene, ground, Exempt(scene, ground, null), stations, free, new Dictionary<string, int>(), null);
         }
 
-        /// <summary>Every part as the support model sees it, in the blueprint's own space.</summary>
-        private static ScenePiece[] SceneOf(ResolvedBlueprint blueprint)
+        /// <summary>
+        /// Step 4's order: pivot height, then distance from the middle of the footprint, then file
+        /// order. Taken backwards, it is the order a whole structure comes down in (<see cref="Sites.SiteRemoval"/>).
+        /// </summary>
+        internal static List<int> BuildOrder(ResolvedBlueprint blueprint, IEnumerable<int> indexes)
+        {
+            var parts = blueprint.Parts;
+            var middle = FootprintMiddle(parts);
+            return indexes
+                .OrderBy(i => parts[i].Source.Position.y)
+                .ThenBy(i => Flat(parts[i].Source.Position, middle))
+                .ThenBy(i => i)
+                .ToList();
+        }
+
+        /// <summary>Every part as the support model sees it, in the blueprint's own space. Index = part index.</summary>
+        internal static ScenePiece[] SceneOf(ResolvedBlueprint blueprint)
         {
             PieceCatalog.Ensure();
             var parts = blueprint.Parts;

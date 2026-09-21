@@ -105,7 +105,7 @@ replacement and silently block injection.
 
 ## Project structure, every file
 
-Nothing here is a guess. Use this instead of searching. All 82 source files, and every other
+Nothing here is a guess. Use this instead of searching. All 86 source files, and every other
 file in the repo outside `bin/`, `obj/` and `.devtest/`.
 
 **Build, scripts, data**
@@ -165,6 +165,9 @@ FejdStartupAwakePatch.cs          main-menu smoke test, prints harmony=OK | publ
 GameCameraAwakePatch.cs           clears layer 30 from the player camera's culling mask
 HudSetupPieceInfoPatch.cs         the vanilla build card shows the blueprint and its materials list,
                                   not the piece. Anything else hides the list
+KeyHintsUpdateHintsPatch.cs       the game's hint row along the bottom: while blueprint mode, Continue
+                                  or a capture is up, HintRow shows its set and the game's update
+                                  is skipped. Else the game runs as always
 PlayerCanRotatePiecePatch.cs      stops the wheel zooming the camera in blueprint mode
 PlayerInRepairModePatch.cs        same thing, the repair-mode branch of the camera zoom
 PlayerSetSelectedPiecePatch.cs    picking any piece leaves blueprint mode
@@ -200,15 +203,20 @@ MaterialTally.cs                  the numbers of a materials list: a row per ite
 BlueprintPreview.cs               the prefab copies. Three users: the see-through hammer preview,
                                   an unfinished build's ghost (SetPart: hidden, light blue, red) and
                                   the editor's solid model. No copy is ever a crafting station
-BlueprintInfoCard.cs              fills the vanilla build card: name, icon, hint line, and the
-                                  materials list on the card's right in place of the six slots.
-                                  Refreshes every 0.5 s and right after a click
+BlueprintInfoCard.cs              fills the vanilla build card: name, icon, piece count (no
+                                  controls, those are in HintRow), and the materials list on the
+                                  card's right in place of the six slots. Refreshes every 0.5 s and
+                                  right after a click
+HintRow.cs                        the controls of blueprint mode, Continue and the capture in the
+                                  game's own hint row, keyboard and pad, made of copies of the
+                                  game's own entries (label, key cap, "+", wheel, pad entry)
 BlueprintMode.cs                  blueprint mode of the hammer: the key cycles (unfinished builds
                                   within 40 m first, as "Continue: X (6/16)"), the wheel or L2 +
                                   right stick turns (the game's own rule), a click builds what
                                   the materials pay for (all of it when they pay for all) and
                                   keeps the rest as an unfinished build. Continue: the site's
-                                  ghost is the preview, Remove twice within 3 s forgets the plan
+                                  ghost is the preview, Remove removes it (at once when nothing
+                                  stands, else through the remove window)
 
 Sites/Site.cs                     one unfinished build: its own copy of the blueprint, the root
                                   pose, the file, and the built flags (read from the world)
@@ -216,7 +224,14 @@ Sites/SiteStore.cs                the per-world folder config/ValheimTomrer/site
                                   Load, Add, Save, Delete. #Site: and #SiteSource: headers.
                                   RootOverride for the tests
 Sites/SiteTracker.cs              once a second: what is built, finished builds, the ghosts with
-                                  the hammer out within 64 m, and the next click's parts (cached)
+                                  the hammer out within 64 m, and the next click's parts (cached).
+                                  BuiltPieces: the world piece of each built part
+Sites/SiteRemovePopup.cs          the remove window: the game's own popup (UnifiedPopup) with
+                                  three copies of its No button: Cancel, Unbuilt parts, Whole
+                                  structure. Mouse, Esc, and the pad (D-pad, cross, circle)
+Sites/SiteRemoval.cs              "Whole structure": takes a site's built pieces down top to bottom
+                                  the way the hammer's Remove does (Player.RemovePiece's checks and
+                                  calls), keeps what a refused piece needs to stand, and the message
 ```
 
 **`src/Editor/`**, the in-game editor (its own section below for the rules)
@@ -248,8 +263,7 @@ Input/Glyphs.cs                   button names for on-screen hints, PlayStation 
 Input/Repeater.cs                 a held direction that repeats
 Input/WorldPad.cs                 the pad in the world, through the game's own button names: square
                                   (next blueprint), L2 + square (editor), L2 + triangle, the D-pad
-                                  and circle (capture), which buttons the game must not see, and a
-                                  game button's pad name for hints (NameOf)
+                                  and circle (capture), which buttons the game must not see
 
 Placement/Placement.cs            Placer, the game's placing rule in plain C#: ray in, landing
                                   spot and snap out. No GameObject, no physics call
@@ -305,13 +319,14 @@ View/ViewportRaycast.cs           screen pixels to the pane's space and back, ma
 View/CaptureBox.cs                the capture's yellow outline on the ground, one LineRenderer
 View/CaptureTint.cs               the capture's glow on world pieces: yellow taken, orange across
                                   the edge. Through MaterialMan, and every one taken off again
-View/CaptureHud.cs                the capture's two status lines top left, under the HUD root
+View/CaptureHud.cs                the capture's status line top left, under the HUD root. No
+                                  controls, those are in HintRow
 ```
 
 **`src/Dev/`**, Debug builds only, stripped from a Release build
 
 ```
-AutoTest.cs                       the scripted session: 23 scenarios, PASS/FAIL lines, screenshots,
+AutoTest.cs                       the scripted session: 24 scenarios, PASS/FAIL lines, screenshots,
                                   and the art guard at the end of editor_all
 AutoTestPeace.cs                  stops the AI, the spawns and the raids in the test world
 ```
@@ -333,8 +348,11 @@ AutoTestPeace.cs                  stops the AI, the spawns and the raids in the 
 | Change the materials list: its numbers / its look / where it sits on the hammer card / in the editor | `src/Blueprints/MaterialTally.cs` / `src/Editor/Ui/MaterialList.cs` / `src/Blueprints/BlueprintInfoCard.cs` / `src/Editor/Ui/BlueprintPanel.cs` |
 | Change how an unfinished build is kept, found or shown | `src/Blueprints/Sites/` (file: `SiteStore`, world and ghosts: `SiteTracker`) |
 | Change an unfinished build's ghost colours | `BlueprintPreview.ReadyTint` / `RedTint` in `src/Blueprints/BlueprintPreview.cs` |
-| Change Continue: the key's order, the click, Remove twice | `src/Blueprints/BlueprintMode.cs` |
-| Change the capture: keys, sizes, the glow, the status lines | `src/Editor/WorldCapture.cs`, `View/CaptureTint.cs`, `View/CaptureHud.cs` |
+| Change Continue: the key's order, the click, what Remove does | `src/Blueprints/BlueprintMode.cs` |
+| Change the remove window: its buttons, text, keys, pad | `src/Blueprints/Sites/SiteRemovePopup.cs` (the text is in `BlueprintMode.PressRemove`) |
+| Change how "Whole structure" takes pieces down, or its message | `src/Blueprints/Sites/SiteRemoval.cs` |
+| Change the capture: keys, sizes, the glow, the status line | `src/Editor/WorldCapture.cs`, `View/CaptureTint.cs`, `View/CaptureHud.cs` |
+| Change the hints in blueprint mode or capture (the game's row along the bottom) | `src/Blueprints/HintRow.cs` (the sets are in `Hints`) |
 | Add a top-bar button | `src/Editor/Ui/TopBar.cs` + the verb in `src/Editor/EditorCommands.cs` |
 | Change what an edit does | `src/Editor/EditorState.cs`, the undo step in `Doc/BlueprintDocument.cs` |
 | Change snapping | `src/Editor/Placement/Placement.cs` |
@@ -594,9 +612,10 @@ stay white, they sit on their own wooden background.
   circle that stopped the capture.
 - Only where the combos work (`WorldPad.Live`): mod on, window closed, `EditorSession.CanOpen`, and no
   game menu (inventory, build menu, map, radial, trader). There the game has every button as usual.
-- Hints: the hammer card's line and the capture's status line name pad buttons while
-  `ZInput.IsGamepadActive()`, in `EditorInput.Glyphs` (PlayStation or Xbox by the pad's name), with
-  `WorldPad.NameOf` for the game buttons ("L2", "R1", "R2" follow the game's layout).
+- Hints: in blueprint mode, Continue and a capture the game's own hint row along the bottom lists
+  them (`HintRow`, see "The controls row" below): the game's key caps, and on a pad the game's own
+  icons (`ZInput.GetBoundKeyString`), so they follow the game's layout and the pad in hand. The card
+  and the capture's status line carry no controls.
 
 **The pad works off the crosshair.** Square moves, triangle copies and R1 deletes, each on its
 own with no second button and nothing selected first: `PadBindings.TakeAimed` selects what the
@@ -691,8 +710,10 @@ vanilla, and next to F7). It works like Homestead's area save:
   `Mouse.current.scroll` itself with the game's scale), and `Menu.Update` skips the one frame the
   capture uses Esc (`WorldCapture.TakesEscape`), or Esc would also pause the game. The pad's D-pad and
   circle are held back from the game while it is up (see "The pad in the world").
-- The status lines' second line names pad buttons while the game says the pad is in use.
-- The status lines sit at (28, -170) HUD units, under the game's own top-left message line (124 to
+- The status line (`CaptureHud`) says the size, the turn and the counts, nothing else. The controls
+  are in the game's hint row along the bottom (`HintRow`, capture set), and no "press the key again"
+  message comes up when a capture starts.
+- The status line sits at (28, -170) HUD units, under the game's own top-left message line (124 to
   154 down, "Built ..."), not on it.
 
 **Support colours.** `Placement/Support.cs` ports `WearNTear.UpdateSupport` the way `Placer` ports
@@ -723,7 +744,8 @@ frames later. `editor_support` counts world objects under -1000 m before and aft
 new one.
 
 **The materials list in the editor.** The blueprint panel's card copy shows the same `MaterialList`
-under the name and text, in place of the six squares it had. There is no 6-slot limit and no
+under the name and text, in place of the six squares it had. The text is the hammer card's own
+(`BlueprintInfoCard.Description`): the description, then "16 pieces.", no controls. There is no 6-slot limit and no
 "card shows only 6" problem any more. Numbers: `BlueprintCard.Materials(document, sources, costsOff,
 at)`, the document's hammer pieces (others are left out, the problem list already flags them) through
 `MaterialTally.For` on a plain list of pieces. Have = the bag and the chests in range of the player
@@ -749,7 +771,9 @@ Phase 8 (ItemDrawers) was skipped at the user's request: there is no drawer sour
 **The world-save rule.** The mod writes nothing of its own into the world save:
 
 - no ZDO keys, no RPCs, no network messages, no ServerSync;
-- pieces go down only through the game's `Player.PlacePiece`, one call per piece;
+- pieces go up only through the game's `Player.PlacePiece`, one call per piece, and come down only
+  through the game's own remove calls, the ones `Player.RemovePiece` makes (`WearNTear.Remove`, and
+  the same fallbacks), one piece at a time (`SiteRemoval`);
 - items leave only through the game's `Inventory` calls, on the player's or a chest's inventory;
 - an unfinished build is a `.blueprint` file under `config/ValheimTomrer/sites/`, never in the world.
 
@@ -807,7 +831,8 @@ could be built with no real bench near. The game's own one-piece ghost still kee
 its first range call throws in `CraftingStation.GetExtensions`. So read `m_buildRange` /
 `m_rangeBuild`, never `GetStationBuildRange()`, on a station that may be a ghost.
 
-**Unfinished builds (sites).** A click that leaves parts unbuilt, even all of them, keeps a site.
+**Unfinished builds (sites).** A click that leaves parts unbuilt, even all of them, keeps a site
+and goes straight to Continue on it (see "After a click" below).
 
 - **The file:** `sites/<world name>_<world uid>/<name>_<yyyyMMdd-HHmmss>.blueprint` under
   `config/ValheimTomrer`, a folder `BlueprintLibrary` never reads. The blueprint as it was at the
@@ -846,19 +871,91 @@ preview is the tracker's own ghost (no second copy), so nothing follows the aim 
 the pad turn do nothing. The click reads the world again, takes the plan from the tracker's cache
 (`Site.ReadyOrder`), refuses on a `BlockedReason`, then leaves out each part whose own box (grown
 0.6 m) holds a character, and whatever would need it (`PartialBuild.Without`); a part left out stays
-ready. The click that puts the last part up deletes the file and ends Continue. Remove (the game's
-`Remove` on release, or `JoyRemove`) once asks, twice within 3 s forgets the plan; built pieces stay.
-The site's ghost is never tinted by the click, so nothing stays red after Continue ends. On the pad:
-square is the key, R2 the click, R1 (the game's `JoyRemove`) twice forgets the plan.
+ready. The click that puts the last part up deletes the file and ends blueprint mode. While
+blueprint mode is on (Continue too) the game's own `UpdatePlacement` does not run, so Remove never
+takes down the aimed piece there. The site's ghost is never tinted by the click, so nothing stays
+red after Continue ends. On the pad: square is the key, R2 the click, R1 (the game's `JoyRemove`)
+is Remove.
+
+**Remove in Continue** (`BlueprintMode.PressRemove`: the game's `Remove` on release, or `JoyRemove`,
+never with L2 held). It reads the world first.
+
+| What stands | What one press does |
+|---|---|
+| none of the build | the plan goes at once (file and ghost), blueprint mode ends, "Plan for Workshop removed." No window |
+| some of it | the remove window: "Remove Workshop?", "6 of 16 pieces are built.", three buttons |
+
+| Button | Does |
+|---|---|
+| Cancel (left) | nothing. Continue stays on. Also Esc, circle, or cross while Cancel is picked |
+| Unbuilt parts | the plan goes, the built pieces stay. "Plan for Workshop removed. The 6 built pieces stay." |
+| Whole structure | the plan goes and every built piece comes down (`SiteRemoval.TakeDown`). "Workshop removed: 6 pieces taken down." |
+
+Either removal ends blueprint mode. The window (`SiteRemovePopup`):
+
+- **The game's own popup.** `UnifiedPopup` has one row for two buttons (No, Yes), so this pushes a
+  popup of its own `PopupType` (100, none of the game's). The game shows its panel, dark background
+  and title for it, and none of its own buttons. Three copies of the game's No button (`buttonLeft`)
+  go on the panel, which widens to fit (about 580 units, the game's is 400). The panel's
+  width and the popup's default button go back, and the copies hide, whenever this popup is not
+  the one showing (closed, or a game popup pushed over it). Copies are made once per popup object;
+  a world load makes a new one.
+- **It blocks like the game's popups**, through the game's own checks: `Menu.IsVisible()` is true
+  while a `UnifiedPopup` shows, so the player cannot move, act, build, open the inventory, the map
+  or the editor, and the cursor is free. No input patch was needed for it.
+- **Pad.** Cancel is picked at first (the game's "are you sure" dialogs start on No). The D-pad and
+  the left stick move along the row (explicit navigation, the game's UI module), cross presses the
+  picked button, circle cancels (the Cancel copy keeps the game's `UIGamePad` on Esc and
+  `JoyButtonB`). The icons sit where the game puts them, on the button's top right corner: circle on
+  Cancel, cross on the picked button. Their text is set from the game's `$KEY_JoyButtonB` /
+  `$KEY_JoyButtonA`: the copies are not in the game's list of texts it translates again, and the
+  prefab's own hint text reads `MISSING BUTTON DEF "ButtonB"`.
+- **The closing press stays out of the game.** Circle that closed it was a jump in the next physics
+  step, when the popup no longer holds the player (1.4 m, measured), so every game button bound to
+  cross and circle is reset (`ZInput.ResetButtonStatus`, as `InventoryGui` does). The Esc that cancelled
+  would open the pause menu in the same frame, so `Menu.Update` skips that frame
+  (`SiteRemovePopup.TakesEscape`).
+
+**Whole structure** (`SiteRemoval.TakeDown`), the rules of the hammer's Remove (`Player.RemovePiece`):
+
+- The world is read again (`SiteTracker.BuiltPieces`). Refused as a whole, with the plan kept and
+  Continue on: more than 40 m from the site's box, no stamina for one swing.
+- Each piece gets the game's checks, silently: the tool can remove it (`m_canRemovePieces`, feasts
+  apart), `m_canBeRemoved`, not in a no-build zone, `PrivateArea.CheckAccess` (no flash), the station
+  rule of `CheckCanRemovePiece` (the station near the **player**, unless costs are off or
+  `NoWorkbench`), a `ZNetView`, `Piece.CanBeRemoved()` (a chest must be empty, a ship empty).
+- Then the body of `RemovePiece`, call for call: `IRemoved.OnRemoved`, `WearNTear.Remove()` (which
+  drops the materials and plays the break), else the same fallbacks. So the materials come back
+  exactly as the hammer's Remove gives them: dropped where each piece stood, picked up as usual.
+  Per piece the skill's remove debt and the game's "pieces removed" count, as `UpdatePlacement` does.
+  One swing for the whole take-down (stamina, durability, noise), as for a build click.
+- Top to bottom: the reverse of the build order (`PartialBuild.BuildOrder`), all in one frame.
+- A refused piece stays, and so does every piece it needs to stand (the support model, tried top to
+  bottom near it), so nothing is left to fall. The message counts them: "Workshop removed: 12 of 15
+  pieces taken down. Left standing: 1 can't be removed, 2 hold it up.", "... 5 need a workbench
+  nearby." The plan is removed all the same.
+- The station check reads the range the station worked out last (`m_buildRange`, `m_rangeBuild`) and
+  counts only real network stations, never a ghost (see "No copy is a crafting station").
+
+**After a click** (`BlueprintMode.Build`, the mouse and R2 alike):
+
+| The click | Then |
+|---|---|
+| builds all of it | blueprint mode ends (`Exit`): the hammer is back on its own piece, as after picking one from the build menu |
+| leaves parts, even all of them | keeps a site and goes to Continue on it (`ContinueAfterClick`), with the key's label ("Continue: Workshop (6/16)"). No second message |
+| Continue's last part | "Workshop finished.", the file goes, blueprint mode ends. No normal blueprint is left in hand |
+
+The site's ghost is built over the next few frames (8 pieces a frame, 0.05 s at most for the
+Workshop), so for those frames nothing shows the missing parts. If the site file cannot be written, the blueprint stays in hand as before.
+The card's title reads "Continue: Workshop" in Continue, from the key or from a click.
 
 **The materials list on the hammer card.** In blueprint mode `BlueprintInfoCard` hides the card's six
 requirement slots and puts a `MaterialList` on the card's right, bottom edges level, never lower than
 the card. A row per item: its icon, its name, have / need (have green when enough, red when short)
 and a bar under it; then a row per station: "in range", "not in range", "in blueprint" or "not
-needed". Past 10 rows it takes two columns, nothing is hidden. The hint line under the name names
-pad buttons while `ZInput.IsGamepadActive()` ("16 pieces. L2 + right stick: rotate. □: next
-blueprint. L2 + □: edit it.", Continue: "R2: build what you can. R1 twice: forget the plan. □: next.
-L2 + □: edit it."), the keys otherwise. The footer is one line: "Can build now: 6 of 16 pieces", in Continue "Built 6 of 16. Can
+needed". Past 10 rows it takes two columns, nothing is hidden. The text under the name is the
+blueprint's own description and "16 pieces." (Continue: the description only). No controls: those
+are in the game's hint row (`HintRow`). The footer is one line: "Can build now: 6 of 16 pieces", in Continue "Built 6 of 16. Can
 build now: 3 more." Where the materials come from (bag, chests) is not shown: the user took that line
 out. When the list is shorter than the card, the footer still sits at the bottom
 (`MaterialList.MinHeight`) and the spare room goes above its line, so nothing is empty under it.
@@ -875,6 +972,43 @@ until the preview holds still for one refresh, so moving a 400-piece blueprint (
 stutters. With no aim it keeps the last spot the preview stood on. `MaterialList` knows nothing of
 the card (parent, width, most columns and least height come from the caller).
 
+**The controls row.** `HintRow` puts the controls of blueprint mode, Continue and the capture in the
+game's own hint row along the bottom of the screen (`KeyHints`), in its look:
+
+| Set | Keyboard | Pad (default layout, Xbox icons as the game shows them) |
+|---|---|---|
+| Blueprint | Build Mouse-1, Next blueprint B, Edit F7, Build Menu Mouse-2, Rotate wheel | RT, X, LT + X, A, LT + RS |
+| Continue | Build what you can Mouse-1, Remove (the game's Remove key), Next B, Edit F7, Build Menu Mouse-2 | RT, RB, X, LT + X, A |
+| Capture | Capture F8, Turn wheel, Width Shift + wheel, Depth Alt + wheel, Both sides Shift + Alt + wheel, Stop Esc | LT + Y, D-pad left / right, LT + left / right, LT + up / down, up / down, B |
+
+- **How.** A group of our own under `KeyHints`, next to the game's `BuildHints`, with the same rect
+  and a copy of its `Keyboard` and `Gamepad` rows (right-aligned layouts, spacing 36 and 40), emptied.
+  Each entry is a copy of the game's own: the keyboard `Place` entry (label, `key_bkg` cap), the `+`
+  of its Copy entry, the `mousew_icon` of its Rotate entry, the pad `Text - Place` entry. So font,
+  size, colour, material and caps are the game's, never look-alikes. The labels' auto-size is
+  switched off at their largest size (18), which is what the game's own show at.
+- **Which set, which row.** Capture wins over blueprint mode. The pad row shows while
+  `ZInput.IsGamepadActive()`, the keyboard row while not and `IsMouseActive()` (the game's own
+  `UIInputHint` rule), checked every frame, so it switches when the game's does.
+- **Taking over.** `KeyHintsUpdateHintsPatch` is a prefix on `KeyHints.UpdateHints`. While a set
+  shows, the game's groups go off once and its update is skipped, so its build group is not switched
+  on and off every frame (that re-ran its `UIInputHint.OnEnable` and a layout rebuild each frame).
+  When the mode ends the game's update runs again and sets every group as always: the vanilla row
+  is back with nothing to undo. After a game update, check `KeyHints.UpdateHints` still exists.
+- **When not.** Only where the game would show its row: its key hints setting on, the player alive,
+  no chat, no pause, no skills or trophies panel, no inventory, radial, build menu or barber. Those
+  keep the game's row. The editor window open: the game's row too, as before.
+- **Texts.** Pad icons: `Localization.GetBoundKeyString("Joy...")`, the same call the game's own
+  entries go through, so the same family (xbox, ps5, switch2) and layout. Keys: the game's names for
+  its own buttons (`Attack`, `Remove`, `BuildMenu`), `ZInput.KeyCodeToDisplayName` for the mod's
+  config keys and Esc; Shift and Alt are plain "Shift" and "Alt" (either side works). The pad's build
+  menu button is `JoyUse`, or `JoyBuildMenu` in the alternative layouts (`Player.UpdateBuildGuiInput`);
+  Rotate is `JoyRotate` + `JoyRStick` in the default layout, `JoyRotate / JoyRotateRight` in the
+  others. Written again only when a text changes; a rebound key shows within a second.
+- Our copies are not in the game's localization table, so its re-localizing never touches them.
+- Rotate is the last blueprint entry, where the game's own row has it: the wheel is taller than a
+  key cap, and further left it sat right under the materials list.
+
 ---
 
 ## Autotest
@@ -886,29 +1020,30 @@ the card (parent, width, most columns and least height come from the caller).
 | `probe`, `dump` | measures layers, UI, input and pieces into `.devtest/*.txt`. No feature. |
 | `probe_build` | measures chests, support speed, ground height, glow and the build card into `.devtest/probe-build.txt`. Places and removes its own chests and floors. Not in `editor_all` |
 | `build_sources` | the kit paid from the inventory and chests at 5, 15 and 30 m: counts, take order (a cart between them), the exact amounts left, the chests' saved items, `ChestRange` and `UseChests`, and that a chest no player placed, another player's private chest and a chest behind another player's ward do not count |
-| `build_partial` | a click builds what the materials pay for and what would stand, bottom to top: half the kit's wood (paid exactly, stands in the game and the model, lower part first), a made-up two-storey house with wood for one and a half, nothing affordable, everything, costs off, `Plan` on 400 pieces within 3 x Phase 0's Solve time per round, and the preview's workbench copy is no station |
+| `build_partial` | a click builds what the materials pay for and what would stand, bottom to top: half the kit's wood (paid exactly, stands in the game and the model, lower part first), a made-up two-storey house with wood for one and a half, nothing affordable, everything, costs off, `Plan` on 400 pieces within 3 x Phase 0's Solve time per round, and the preview's workbench copy is no station. Half the wood and nothing affordable go straight to Continue on the new site (the key's label, its ghost as the preview, the card's "Continue: Workshop"); everything and costs off leave blueprint mode with the game's own piece and card back |
 | `build_sites` | a partial or empty click keeps the rest as an unfinished build: the file in `.devtest/sites/<world>_<uid>/` with the preview's pose, never read by the library; ghosts for the missing parts (red when not paid, light blue when the next click builds them, each part's `_Color` and glow read back from `MaterialMan`; red again, and no blue left, once the wood is gone; the hammer's normal preview has no tint), shown only with the hammer out within 64 m; the plan not run again when nothing changed; Load reads it back and the world says what is built; a destroyed piece's ghost comes back; a site built in full is finished and its file deleted; nothing left under -1000 m |
-| `build_continue` | the key offers "Continue:" first, and square on a pad the game reads offers the same; square then R1 twice forgets a plan; the ghost stays put when the camera and the wheel turn; one click finishes the site from a chest (file gone, chest empty, nothing falls in 15 s); thirds finish in three clicks; Remove twice within 3 s forgets the plan and keeps what stands, 4 s apart does not; two sites told apart; 60 m away only blueprints; picking a piece ends Continue; the player standing in a ready part leaves only that one out, the parts the click built lose their blue, the one left out keeps it |
-| `card_materials` | the hammer card's list: a row per item and station with `MaterialTally`'s numbers and icons, short in Warn and full in Good, "in blueprint" for the kit's bench, the footer's count equals `PartialBuild.Plan`'s, no "From:" text anywhere (with a chest in range), the footer the last line with only the padding under it, slots hidden, own text material, on screen, hides with Ctrl+F3, no plan rerun while still, the list updated right after a click; Continue: need = the missing parts' cost, footer "Built 6 of 16. Can build now: 3 more.", the Continue hint line; with the pad in use both hint lines name pad buttons (PlayStation names), back on the keyboard the keys return; 12 items in two columns, none cut or overlapping; a 400-piece plan waits while the preview moves and runs once when it stops; a normal piece brings the game's slots back. Screenshots `card-materials-1..3`, `card-materials-pad` |
-| `blueprints` | every shipped kit is built with the hammer: unlocks, cost, support, and turned by a real wheel notch and a made-up pad's L2 + right stick; square cycles the same entries in the same order as B; L2 + square does not cycle, it opens the editor on the one in hand |
+| `build_continue` | every set-up click goes straight to Continue on its site (one through the pad's R2); the key offers "Continue:" first, and square on a pad the game reads offers the same; the ghost stays put when the camera and the wheel turn; one click finishes the site from a chest (file gone, chest empty, nothing falls in 15 s, blueprint mode off, the game's own piece back); thirds finish in three clicks, the third through R2, also back to the game's piece; Remove with nothing built forgets the plan at once, no window; with some built Remove opens the window (the game's popup, `Menu.IsVisible`, three buttons in a row that fit, the press did nothing else), W, B, a click beside it, Tab, M and F7 do nothing, a click on Cancel and Esc change nothing and keep Continue (no pause menu), a click on Unbuilt parts removes the plan and keeps what stands; on the pad R1 opens it on Cancel with the game's circle icon, cross there and circle cancel with no jump, the stick, R2, square and triangle do nothing, the D-pad walks the row and stops at its ends, the cross icon follows, cross on Whole structure takes every built piece down with the materials back as `Piece.DropResources` gives them; an unremovable top piece stays with the 2 pieces under it and nothing falls in 5 s; 28 m from the only workbench the 5 walls stay and "5 need a workbench nearby"; two sites told apart; 60 m away only blueprints; picking a piece ends Continue; the player standing in a ready part leaves only that one out, the parts the click built lose their blue, the one left out keeps it |
+| `card_materials` | the hammer card's list: a row per item and station with `MaterialTally`'s numbers and icons, short in Warn and full in Good, "in blueprint" for the kit's bench, the footer's count equals `PartialBuild.Plan`'s, no "From:" text anywhere (with a chest in range), the footer the last line with only the padding under it, slots hidden, own text material, on screen, hides with Ctrl+F3, no plan rerun while still, the list updated right after a click and the card on Continue at once ("Continue: Workshop"); Continue: need = the missing parts' cost, footer "Built 6 of 16. Can build now: 3 more."; the card lists no controls ("16 pieces." only, Continue the description only), with a press on a pad the game reads it still lists none and the game's hint row under it shows the pad set, back on the keyboard the keyboard set; 12 items in two columns, none cut or overlapping; a 400-piece plan waits while the preview moves and runs once when it stops; a normal piece brings the game's slots back. Screenshots `card-materials-1..3`, `card-materials-pad` |
+| `hint_row` | the controls in the game's hint row: the game's own row first (keyboard, then a press on a pad the game reads); a blueprint in hand, Continue and a capture with the hammer out and with it away each show exactly their set (labels, key caps, "+", wheel; the game's icon tags on the pad, the build icon the same as the game's own Place), keyboard and pad, and switch live (a pad press, a mouse move); every game group off, and not switched on and off each frame; the game's font, size, colour, material, caps, wheel and spacing; in the game's row, on screen, left to right, the game's gaps, right-aligned, nothing drawn on the card or the materials list (the wheel's visible pixels read back); the card and the capture's status line carry no controls, no message when a capture starts; after each mode the game's row is back exactly (keyboard and pad), with the hammer away nothing, with a club the combat hints. Screenshots `hints-vanilla-keys/pad`, `hints-blueprint-keys/pad`, `hints-continue-keys/pad`, `hints-capture-hammer-keys/pad`, `hints-capture-nohammer-keys/pad` |
+| `blueprints` | every shipped kit is built with the hammer: unlocks, cost, support, and turned by a real wheel notch and a made-up pad's L2 + right stick; the empty click goes to Continue, one Remove forgets it with no window; the build in full leaves blueprint mode; square cycles the same entries in the same order as B; L2 + square does not cycle, it opens the editor on the one in hand |
 | `editor_open` | the key opens the window and the game stops taking input; L2 + square on a pad the game reads opens it on the blueprint in hand (no inventory, no sitting), L2 + square on the editor's fake pad closes it and does not start a move |
 | `editor_view` | a kit stands in the 3D pane, the camera turns, zooms and flies, nothing leaks on close |
 | `editor_files` | the writer round-trips every blueprint, and the file commands work |
 | `editor_palette` | the catalog, the palette counts, the filters |
 | `editor_snap` | the placing and snapping engine against a table of rays, no UI |
 | `editor_edit` | place, select, copy, turn, nudge, undo |
-| `editor_panels` | the build card, the selection fields, the problem list; L3, R1 and the right stick scroll the right panel up and down, the ring shown only while its widget is in sight; the materials list: a row per item and station of the document, have = `MaterialSources.Around(player).Count`, stations by the player, no footer, one column, nothing the walk can reach, the region grows so a 4-row card needs no scroll, 12 items + the workbench in one card with none cut or overlapping, no card-slots problem, the bag followed within a second, 2 to 3 refreshes in 2.5 s. Screenshots `editor-panels-1-right-panel`, `editor-panels-card` |
+| `editor_panels` | the build card (its text: the description and "N pieces.", no controls), the selection fields, the problem list; L3, R1 and the right stick scroll the right panel up and down, the ring shown only while its widget is in sight; the materials list: a row per item and station of the document, have = `MaterialSources.Around(player).Count`, stations by the player, no footer, one column, nothing the walk can reach, the region grows so a 4-row card needs no scroll, 12 items + the workbench in one card with none cut or overlapping, no card-slots problem, the bag followed within a second, 2 to 3 refreshes in 2.5 s. Screenshots `editor-panels-1-right-panel`, `editor-panels-card` |
 | `editor_keys` | every key, the wheel, the mouse, the top bar, the dialogs |
 | `editor_pad` | every controller button through a made-up pad, and the piece menu. The help table has 22 rows, the close row included |
 | `editor_focus` | the pad and Tab walk the top bar and both panels, and press what they find |
 | `editor_keep` | close and open again finds everything as it was, with F7 and with L2 + square, the hand blueprint asks over unsaved changes, a dead pane is built again on the same view, Forget leaves nothing |
-| `editor_build` | a blueprint made in the editor, built in the world, then edited again |
-| `editor_capture` | F8 on bare ground; a kit built turned 45 degrees, a wall across the edge and a cultivator piece inside; real wheel notches turn and size the rectangle (no camera zoom); yellow and orange glow counts; the capture holds the kit file unturned; Save as up, and after "Discard?" over a kept blueprint; Esc leaves no colour; the whole capture on a pad the game reads (L2 + triangle, each D-pad step, the pad status line, taken into Save as, a second one stopped by circle) with the hotbar, the forsaken power, the camera and minimap zoom, the inventory and the jump untouched, then the same presses with no capture up reaching the game; the glow's cost on 400 floors. Screenshot `editor-capture-3-pad` |
+| `editor_build` | a blueprint made in the editor, built in the world (blueprint mode off after), taken back with the key, then edited again |
+| `editor_capture` | F8 on bare ground; a kit built turned 45 degrees, a wall across the edge and a cultivator piece inside; real wheel notches turn and size the rectangle (no camera zoom); yellow and orange glow counts; the capture holds the kit file unturned; Save as up, and after "Discard?" over a kept blueprint; Esc leaves no colour; the whole capture on a pad the game reads (L2 + triangle, each D-pad step, the status line one line with no controls and the game's hint row on the capture's pad set, taken into Save as, a second one stopped by circle) with the hotbar, the forsaken power, the camera and minimap zoom, the inventory and the jump untouched, then the same presses with no capture up reaching the game; the glow's cost on 400 floors. Screenshot `editor-capture-3-pad` |
 | `editor_support` | the support rule against the game's own numbers on test structures and a kit, the ghost's colours on the picture, a refused drop, nothing left in the world. `VT_SUPPORT_EDITOR_ONLY=1` skips the world half |
-| `editor_all` | all of the above except `probe_build`, in one game: the 17 editor ones and `blueprints`, then `build_sources`, `build_partial`, `build_sites`, `build_continue`, `card_materials`. Then the art guard. **This is the one to run.** |
+| `editor_all` | all of the above except `probe_build`, in one game: the 17 editor ones and `blueprints`, then `build_sources`, `build_partial`, `build_sites`, `build_continue`, `card_materials`, `hint_row`. Then the art guard. **This is the one to run.** |
 
 `editor_all` is the release check: `DONE pass=N fail=0` plus `art guard:` in the output. It takes
-about 10 minutes (22 scenarios, 1082 checks on 21-09-2026, with the pad checks). Every
+about 11 minutes (23 scenarios, 1308 checks on 21-09-2026, with the pad checks). Every
 world-building scenario shares one build spot (`AutoTest.MoveToBuildSpot`): searched from the
 middle of the world, found once a run, always faced the same way, and **levelled flat with a
 terrain op** before anything is built. All three matter. Valheim's meadows roll by 1 to 2 m over a
@@ -919,7 +1054,7 @@ the blueprint leaves the hammer, the fake pad is dropped, the library reloads, e
 build is forgotten and `.devtest/sites` deleted, and every editor and build setting goes back to its
 default, so no run changes the player's config file. `VT_CHAIN="editor_build,blueprints"
 ./scripts/autotest.sh editor_all` runs only those two, in that order, which is how to reproduce a
-scenario that leaves something behind without sitting through all twenty-two.
+scenario that leaves something behind without sitting through all twenty-three.
 
 Every run of `autotest.sh` deletes `.devtest/*.png` first. To look at one scenario's screenshots,
 run it alone or last.
@@ -1001,10 +1136,15 @@ What is still true while it exists:
 | Materials taken from a chest come back after a reload | the chest's ZDO belongs to another client, which saves over the take. `MaterialSources` skips such chests |
 | A house stays yellow or orange after a capture | an exit path missed `CaptureTint.Clear` (capture, Esc, mod off, window open, world change) |
 | Esc during a capture also opens the pause menu | `Menu.Update` did not skip that frame (`WorldCapture.TakesEscape`) |
-| Remove twice in Continue does nothing | the game reads Remove on release (`GetButtonUp`). On this Mac it is Left Command, not the middle mouse |
+| Remove in Continue does nothing | the game reads Remove on release (`GetButtonUp`). On this Mac it is Left Command, not the middle mouse |
+| The remove window's circle icon reads `MISSING BUTTON DEF "ButtonB"` down the screen | a copied button's hint kept the prefab's text. `SiteRemovePopup.ShowHints` sets it from `$KEY_JoyButtonB`; the game re-translates only its own texts |
+| A test's mouse click on a button does nothing, the button stays pressed | `MouseState.WithButton` changes the struct it is called on, so the "release" state still had the button down. Build the press state on its own (`AutoTest.ClickScreen`) |
+| Circle that closed the remove window also jumps | circle is the jump in the default layout, read in FixedUpdate after the popup is gone (1.4 m measured). `SiteRemovePopup.SwallowPad` resets every game button bound to cross and circle |
 | A site's ready parts look like built wood | they lost the blue `ReadyTint`: the ghost material is nearly opaque, so without a tint nothing shows |
 | An unfinished build's ghost has a zero or wrong size | it was filled with its root switched off: `MeasureBounds` skips inactive renderers. Fill with `forceRenderingOff` |
 | The art guard fails with "the walk saw 0 unfinished-build files" | the guard's folder list (`AutoTest.WalkWrittenFiles`) lost the sites folder, or no scenario in the chain kept a site until `ClearSites` |
 | Screenshots of an earlier run are gone | every `autotest.sh` run deletes `.devtest/*.png` |
 | The pad's L2 + triangle opens the inventory, or the D-pad moves the hotbar during a capture | `ZInputTryGetButtonStatePatch` did not apply (`ZInput.TryGetButtonState` renamed or inlined), or `WorldPad.Live` is false (a game menu is up) |
+| In blueprint mode or a capture the bottom row still shows the game's snapping and copy hints | `KeyHintsUpdateHintsPatch` did not apply (`KeyHints.UpdateHints` renamed), or the log says "hint row: the game's build hints do not look as expected" (the game renamed its `Place`, `key_bkg`, `Text - Place` entries or the wheel sprite) |
+| A test says the game's pad entry reads `MISSING BUTTON DEF "Place"` | normal while the keyboard is in use: the game localizes its hidden pad row with keyboard names. Compare pad icons only while `ZInput.IsGamepadActive()` |
 | A pad test presses a button and nothing happens | the button went to a real pad: test presses go to `AutoTest`'s own "AutoTestPad DualSense" device, never `InputSystem.FindControl`, which can pick the real DualSense |

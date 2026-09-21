@@ -83,7 +83,6 @@ namespace ValheimTomrer.Editor
         private static Vector3 _shownShape;
         private static int _shownInside;
         private static int _shownLeft;
-        private static string _shownPad;
 
         /// <summary>The rectangle is on the ground right now.</summary>
         public static bool Active { get; private set; }
@@ -216,9 +215,10 @@ namespace ValheimTomrer.Editor
             Centre = OnGround(centre);
             Refresh();
             ShowStatus();
-            Say(Player.m_localPlayer, ZInput.IsGamepadActive()
-                ? $"Press {PadCaptureName()} again to capture, {EditorInput.Glyphs.Of(PadButton.Circle)} to stop."
-                : $"Press {KeyName()} again to capture, Esc to stop.");
+
+            // No "press the key again" message: the game's hint row lists the capture's controls (HintRow).
+            LastMessage = "";
+            ValheimTomrerPlugin.Log.LogInfo($"capture: started at {Centre}");
         }
 
         /// <summary>
@@ -246,7 +246,7 @@ namespace ValheimTomrer.Editor
             Depth = DefaultSide;
         }
 
-        /// <summary>Takes the rectangle, the glow and the status lines away. Safe to call at any time.</summary>
+        /// <summary>Takes the rectangle, the glow and the status line away. Safe to call at any time.</summary>
         public static void Cancel()
         {
             Active = false;
@@ -256,7 +256,7 @@ namespace ValheimTomrer.Editor
             CaptureHud.Hide();
         }
 
-        /// <summary>Plugin OnDestroy: the outline and the status lines go with it.</summary>
+        /// <summary>Plugin OnDestroy: the outline and the status line go with it.</summary>
         public static void Shutdown()
         {
             Cancel();
@@ -408,7 +408,7 @@ namespace ValheimTomrer.Editor
             taken.Sort((a, b) => a.transform.position.y.CompareTo(b.transform.position.y));
         }
 
-        /// <summary>Works out the glow again and keeps the counts the status lines show.</summary>
+        /// <summary>Works out the glow again and keeps the counts the status line shows.</summary>
         private static void Refresh()
         {
             _refreshedAt = Time.unscaledTime;
@@ -632,7 +632,10 @@ namespace ValheimTomrer.Editor
             return point;
         }
 
-        /// <summary>The two lines top left. Written again only when a number in them changed.</summary>
+        /// <summary>
+        /// The status line top left, written again only when a number in it changed. The controls are
+        /// in the game's hint row along the bottom (HintRow), not here.
+        /// </summary>
         private static void ShowStatus()
         {
             if (!Active)
@@ -643,8 +646,7 @@ namespace ValheimTomrer.Editor
 
             var left = EdgeNow + SkippedNow;
             var shape = new Vector3(Width, Depth, Yaw);
-            var pad = ZInput.IsGamepadActive() ? PadCaptureName() + "|" + EditorInput.Glyphs.Of(PadButton.Circle) : null;
-            if (CaptureHud.Visible && shape == _shownShape && InsideNow == _shownInside && left == _shownLeft && pad == _shownPad)
+            if (CaptureHud.Visible && shape == _shownShape && InsideNow == _shownInside && left == _shownLeft)
             {
                 return;
             }
@@ -652,43 +654,12 @@ namespace ValheimTomrer.Editor
             _shownShape = shape;
             _shownInside = InsideNow;
             _shownLeft = left;
-            _shownPad = pad;
-            CaptureHud.Show(
-                $"Capture  {Width:0} x {Depth:0} m, turned {Yaw:0.#}°, {Pieces(InsideNow)}, {left} left out",
-                pad != null ? PadKeys() : KeyKeys());
-        }
-
-        /// <summary>The second status line with the keyboard and the mouse.</summary>
-        private static string KeyKeys()
-        {
-            return $"Wheel: turn   Shift+wheel: width   Alt+wheel: depth   Shift+Alt+wheel: both   {KeyName()}: capture   Esc: cancel";
-        }
-
-        /// <summary>The second status line with the pad, in its own button names.</summary>
-        private static string PadKeys()
-        {
-            var g = EditorInput.Glyphs;
-            var mod = WorldPad.NameOf(WorldPad.Modifier, g);
-            return $"{g.Dpad} left, right: turn   {g.Dpad} up, down: both   {mod} + {g.Dpad} left, right: width   "
-                + $"{mod} + {g.Dpad} up, down: depth   {PadCaptureName()}: capture   {g.Of(PadButton.Circle)}: cancel";
-        }
-
-        /// <summary>"L2 + △": the pad's capture combo, in the names of the pad in hand.</summary>
-        private static string PadCaptureName()
-        {
-            var g = EditorInput.Glyphs;
-            return $"{WorldPad.NameOf(WorldPad.Modifier, g)} + {g.Of(PadButton.Triangle)}";
+            CaptureHud.Show($"Capture  {Width:0} x {Depth:0} m, turned {Yaw:0.#}°, {Pieces(InsideNow)}, {left} left out");
         }
 
         private static string Pieces(int count)
         {
             return count == 1 ? "1 piece" : $"{count} pieces";
-        }
-
-        private static string KeyName()
-        {
-            var key = EditorConfig.CaptureKey;
-            return key != null ? key.Value.ToString() : "F8";
         }
 
         /// <summary>Where the player is looking, the same ray the hammer places with, but longer.</summary>

@@ -26,8 +26,11 @@ Make blueprints in the game, then build them with the hammer. **Valheim 1.0**, s
   build later, opening the editor (L2 + □), copying a building (L2 + △ and the D-pad) and all of the
   editor. In the editor L3 walks the top bar, the side panels and every window, so Save, Open, the
   filters and the name field work without a mouse. The controls along the bottom of the 3D view
-  show the game's own button icons, and the build card's hint line names the pad's buttons while
-  you use the pad.
+  show the game's own button icons.
+- **The controls where the game shows its own.** With a blueprint in hand, and during a capture,
+  the game's row of controls along the bottom of the screen lists what works now, in the game's
+  own look: key caps on the keyboard, the game's button icons on a pad. It switches the moment you
+  switch, and the game's usual row comes back when you are done.
 - **Plain text files.** A blueprint is a small text file you can read, edit or send to a friend.
 - **Nothing added to your world.** No custom pieces, no custom items, no files but the blueprints.
   A build you have not finished yet is a blueprint file too, not part of your world save.
@@ -102,8 +105,9 @@ own modifier button: L2 (LT) in the default controller layout, L1 (LB) in the al
 | ○ (B) | Stop it, like `Esc` |
 
 While the rectangle is up, the D-pad and ○ only work the capture: no hotbar, no forsaken power,
-no zoom, no jump. L2 + △ never opens the inventory. The status lines at the top left name the pad's
-buttons while you use the pad.
+no zoom, no jump. L2 + △ never opens the inventory. The row of controls along the bottom of the
+screen lists the capture's keys (or the pad's buttons while you use the pad) in place of the game's
+usual ones.
 
 The rectangle takes everything from 8 m under the ground to 64 m over it, so a roof comes along.
 A house built at an angle comes back straight. Only pieces the hammer can build come along.
@@ -119,6 +123,12 @@ many.
 4. Look at the materials list next to the build card (below).
 5. Click. Every piece it can pay for goes down at once, and costs what it would cost one by one.
 
+After the click:
+
+- **All of it built:** the hammer goes back to its normal piece.
+- **Part of it built, or nothing:** the hammer switches to Continue on that build at once (see
+  "Finish a build later"). Click again when you have more materials.
+
 **Controller in build mode.** PlayStation names first, Xbox names in brackets. L2 is the game's own
 modifier (L1 in the alternative controller layout).
 
@@ -127,10 +137,36 @@ modifier (L1 in the alternative controller layout).
 | □ (X) | Next blueprint, like B. Unfinished builds nearby come first. |
 | R2 (RT) | Build, like the click |
 | L2 (LT) + right stick left, right | Turn it 22.5 degrees, like the wheel |
-| R1 (RB) twice within 3 s | In Continue: forget the plan, like Remove twice |
+| R1 (RB) | In Continue: remove the build, like Remove (see "Remove an unfinished build") |
 | L2 (LT) + □ (X) | Open the editor on the blueprint in hand, like F7 |
 
-The build card's hint line names these buttons while you use the pad.
+The row of controls along the bottom of the screen lists these, in the game's own look (next
+section).
+
+**The controls row.** In blueprint mode the game's row along the bottom of the screen shows the
+blueprint's controls in place of the game's snapping and copy ones:
+
+| Blueprint in hand | Keyboard | Pad |
+|---|---|---|
+| Build | Mouse-1 | R2 (RT) |
+| Next blueprint | B | □ (X) |
+| Edit | F7 | L2 (LT) + □ (X) |
+| Build Menu | Mouse-2 | × (A) |
+| Rotate | wheel | L2 (LT) + right stick |
+
+| Continue | Keyboard | Pad |
+|---|---|---|
+| Build what you can | Mouse-1 | R2 (RT) |
+| Remove | the game's Remove key | R1 (RB) |
+| Next | B | □ (X) |
+| Edit | F7 | L2 (LT) + □ (X) |
+| Build Menu | Mouse-2 | × (A) |
+
+During a capture: Capture, Turn, Width, Depth, Both sides, Stop, with the keys and buttons above.
+The row names your own keys: a key you changed in the game's settings or in the config shows as
+you set it, and the pad shows the icons of the pad in hand. It follows the game's key hints setting
+(off there, off here too). With the build menu or the inventory open, the game's own
+row stays.
 
 **Where the materials come from.** Your bag first, then every chest within 20 m, nearest first.
 Carts and ship holds count too. A chest counts only when you may open it (not someone else's
@@ -144,7 +180,7 @@ private chest, not behind someone else's ward). Change the range or turn chests 
 - the message says how many went down and what is still missing.
 
 With nothing at all to pay with, nothing is built, but the plan is kept anyway. Either way the rest
-waits for you as an unfinished build (next section).
+waits for you as an unfinished build (next section), and the hammer switches to it at once.
 
 It refuses when a piece is not unlocked, the workbench is out of range or the ground is blocked.
 The message says which.
@@ -168,18 +204,47 @@ Near an unfinished build, with the hammer out:
 
 - the pieces still missing show as ghost pieces. **Light blue**: the next click builds them.
   **Red**: they wait for more materials;
+- right after a click that left pieces, the hammer is already in Continue on that build;
 - **B** offers "Continue: Workshop (6/16)" first, before your normal blueprints. It only shows
   within 40 m;
 - in Continue the preview stays on the build, whatever you aim at. Click to build what your
   materials pay for now. Stand inside the house if you like: a piece where you stand is left out
   and the message says so;
-- the last piece up says "Workshop finished." and the plan is gone;
-- to drop a plan, press the hammer's **Remove** button (the one that takes a piece down) twice
-  within 3 seconds. The pieces already built stay.
+- the last piece up says "Workshop finished.", the plan is gone and the hammer goes back to its
+  normal piece;
+- to remove it, press the hammer's **Remove** button (below).
 
 Quit and come back later: the plan is still there. What is built is read from the world, so a
 piece you built or broke by hand counts too. Unfinished builds are kept per world in
 `BepInEx/config/ValheimTomrer/sites/`.
+
+### Remove an unfinished build
+
+In Continue, press the hammer's **Remove** button once: the key that takes a piece down (the game
+calls it Left System, Left Command on a Mac), or **R1 (RB)** on a controller.
+
+- **Nothing of it built yet:** the plan is gone at once. No question.
+- **Some of it built:** a window asks "Remove Workshop?" and says how many pieces stand.
+
+| Button | What it does |
+|---|---|
+| Cancel | Nothing changes. You stay in Continue. |
+| Unbuilt parts | The plan and its ghost pieces go. What you built stays. |
+| Whole structure | The plan goes and every built piece comes down, top to bottom, the same as taking each one down with the hammer. The materials drop where the pieces stood, as the hammer gives them. |
+
+After either removal the hammer goes back to normal building, and a message says what happened.
+
+A piece the hammer would not let you take down stays, and the message says why: for example "2 need
+a workbench nearby" (stand near a workbench), a chest that is not empty, or someone else's ward.
+The pieces holding it up stay too, so nothing falls. The plan is removed anyway.
+
+| Keyboard and mouse | Controller | In the window |
+|---|---|---|
+| Click a button | D-pad or left stick left, right | Pick a button (the controller starts on Cancel) |
+| | × (A) | Press the picked button |
+| Esc | ○ (B) | Cancel |
+
+While the window is up you cannot move, build or open other menus, as with the game's own windows.
 
 The check whether a piece would stand is made for flat ground. On a steep slope the game may still
 let a piece fall; its materials drop on the ground.

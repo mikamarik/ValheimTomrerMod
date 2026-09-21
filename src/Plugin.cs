@@ -64,6 +64,7 @@ namespace ValheimTomrer
         {
             EditorSession.Tick();
             SiteTracker.Tick();
+            SiteRemovePopup.Tick();
         }
 
         /// <summary>
@@ -72,6 +73,8 @@ namespace ValheimTomrer
         /// </summary>
         private void OnDestroy()
         {
+            SiteRemovePopup.Destroy();
+            HintRow.Destroy();
             BlueprintMode.Exit();
             BlueprintInfoCard.Destroy();
             SiteStore.Clear();

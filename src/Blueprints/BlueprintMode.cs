@@ -9,10 +9,12 @@ namespace ValheimTomrer.Blueprints
     /// Blueprint mode of the build tool. The blueprint key cycles through the unfinished builds near
     /// the player ("Continue: Workshop (6/16)"), then the blueprints the player can build with the
     /// tool in hand, then off. A click builds every piece the materials pay for. While active, this
-    /// replaces the vanilla single-piece preview and click.
+    /// replaces the vanilla single-piece preview and click. A click that builds all of it ends
+    /// blueprint mode; one that leaves parts goes straight to Continue on the build it kept.
     ///
     /// In Continue the preview is the site's own ghost (<see cref="SiteTracker"/>): it stays where the
-    /// build stands, the wheel and the pad turn do nothing, and Remove twice within 3 s forgets the plan.
+    /// build stands, the wheel and the pad turn do nothing, and Remove removes it: at once when none of
+    /// it is built, else through a window that asks what to remove (<see cref="PressRemove"/>).
     /// </summary>
     internal static class BlueprintMode
     {
@@ -21,9 +23,6 @@ namespace ValheimTomrer.Blueprints
 
         /// <summary>The key offers an unfinished build while the player is this close to its box.</summary>
         public const float ContinueRange = 40f;
-
-        /// <summary>The second Remove press forgets the plan when it comes within this many seconds of the first.</summary>
-        public const float ForgetWindow = 3f;
 
         /// <summary>A character this close to a part's box (the box grows by this much in x and z) keeps it from going up.</summary>
         private const float CharacterMargin = 0.6f;
@@ -36,7 +35,6 @@ namespace ValheimTomrer.Blueprints
         private static float _padTurnTimer;
         private static bool _hasTarget;
         private static string _blockedReason;
-        private static float _removePressedAt = float.NegativeInfinity;
 
         public static ResolvedBlueprint Current { get; private set; }
 
@@ -112,12 +110,8 @@ namespace ValheimTomrer.Blueprints
 
             if (next < sites.Count)
             {
-                // Two builds of the same blueprint are told apart by how far they are and which way.
-                var site = sites[next];
-                var twin = sites.Count(s => s.Site.Name == site.Site.Name) > 1;
-                Continue(site.Site);
-                EntryName = $"Continue: {site.Site.Name} ({site.Site.BuiltCount}/{site.Site.Total})"
-                    + (twin ? Where(player, site.Site, site.Distance) : "");
+                Continue(sites[next].Site);
+                EntryName = ContinueLabel(player, sites, sites[next].Site, sites[next].Distance);
                 player.Message(MessageHud.MessageType.Center, EntryName);
                 return;
             }
@@ -157,8 +151,34 @@ namespace ValheimTomrer.Blueprints
             _padTurnTimer = 0f;
             _hasTarget = true;
             _blockedReason = null;
-            _removePressedAt = float.NegativeInfinity;
             SiteTracker.RefreshSoon();
+        }
+
+        /// <summary>
+        /// "Continue: Workshop (6/16)". Two builds of the same blueprint are told apart by how far they
+        /// are and which way: "Continue: Workshop (0/16), 6 m behind".
+        /// </summary>
+        private static string ContinueLabel(Player player, List<(Site Site, float Distance)> sites, Site site, float distance)
+        {
+            var twin = sites.Count(s => s.Site.Name == site.Name) > 1;
+            return $"Continue: {site.Name} ({site.BuiltCount}/{site.Total})" + (twin ? Where(player, site, distance) : "");
+        }
+
+        /// <summary>
+        /// Right after a click that left parts unbuilt: Continue on the build that click kept, as if the
+        /// key had picked it. No message: the click already said what it built.
+        /// </summary>
+        private static void ContinueAfterClick(Player player, Site site)
+        {
+            if (site == null)
+            {
+                // The file could not be written. The blueprint stays in hand, as it used to.
+                return;
+            }
+
+            Continue(site);
+            var distance = Mathf.Sqrt(site.WorldBox.SqrDistance(player.transform.position));
+            EntryName = ContinueLabel(player, NearSites(player), site, distance);
         }
 
         /// <summary>Back to normal building. The aim preview is destroyed; a site's ghost is the tracker's and stays.</summary>
@@ -169,7 +189,6 @@ namespace ValheimTomrer.Blueprints
             Current = null;
             CurrentSite = null;
             EntryName = null;
-            _removePressedAt = float.NegativeInfinity;
         }
 
         /// <summary>Which way the blueprint faces now, in steps of <see cref="RotationStep"/>.</summary>
@@ -183,7 +202,7 @@ namespace ValheimTomrer.Blueprints
         {
             if (CurrentSite != null)
             {
-                // Locked onto the build: nothing turns it. Remove, twice, forgets it.
+                // Locked onto the build: nothing turns it. Remove removes it, or asks how.
                 if (RemovePressed())
                 {
                     PressRemove(player);
@@ -228,28 +247,85 @@ namespace ValheimTomrer.Blueprints
         }
 
         /// <summary>
-        /// Remove in Continue. The first press only asks; a second within <see cref="ForgetWindow"/>
-        /// deletes the plan and its ghost. What stands in the world stays.
+        /// Remove in Continue. The world is read first. None of the build stands: the plan (its file
+        /// and its ghost) goes at once. Else the game's popup asks what to remove
+        /// (<see cref="SiteRemovePopup"/>):
+        ///   - Unbuilt parts: the plan goes, the built pieces stay;
+        ///   - Whole structure: the plan goes and the built pieces come down, as the hammer's Remove
+        ///     would take each one (<see cref="SiteRemoval"/>);
+        ///   - Cancel: nothing changes, Continue stays on.
+        /// Either removal leaves blueprint mode and says what it did.
         /// </summary>
         public static void PressRemove(Player player)
         {
             var site = CurrentSite;
-            if (site == null)
+            if (site == null || SiteRemovePopup.IsOpen)
             {
                 return;
             }
 
-            if (Time.time - _removePressedAt > ForgetWindow)
+            SiteTracker.ReadBuilt(site);
+            if (site.BuiltCount == 0)
             {
-                _removePressedAt = Time.time;
-                Say(player, MessageHud.MessageType.Center, "Press again to remove the plan.");
+                ForgetPlan(player, site, $"Plan for {site.Name} removed.");
                 return;
             }
 
+            var built = site.BuiltCount;
+            var text = built == 1
+                ? $"1 of {site.Total} pieces is built.\n\nUnbuilt parts: it stays.\nWhole structure: it comes down too."
+                : $"{built} of {site.Total} pieces are built.\n\nUnbuilt parts: they stay.\nWhole structure: they come down too.";
+            if (!SiteRemovePopup.Show($"Remove {site.Name}?", text, choice => Removed(player, site, choice)))
+            {
+                Say(player, MessageHud.MessageType.Center, "Cannot ask right now. Try again.");
+            }
+        }
+
+        /// <summary>What the remove window's choice does. Runs after the window closed.</summary>
+        private static void Removed(Player player, Site site, SiteRemovePopup.Choice choice)
+        {
+            if (choice == SiteRemovePopup.Choice.Cancel || player == null || !SiteStore.All.Contains(site))
+            {
+                return;
+            }
+
+            if (choice == SiteRemovePopup.Choice.UnbuiltParts)
+            {
+                SiteTracker.ReadBuilt(site);
+                var stay = site.BuiltCount == 1 ? "The 1 built piece stays." : $"The {site.BuiltCount} built pieces stay.";
+                ForgetPlan(player, site, $"Plan for {site.Name} removed. {stay}");
+                return;
+            }
+
+            var result = SiteRemoval.TakeDown(player, site);
+            if (result.Blocked != null)
+            {
+                // Nothing came down and the plan stays: Continue goes on.
+                Say(player, MessageHud.MessageType.Center, result.Blocked);
+                return;
+            }
+
+            SiteStore.Delete(site);
+            if (CurrentSite == site)
+            {
+                Exit();
+            }
+
+            ValheimTomrerPlugin.Log.LogInfo($"site taken down: {site.Name} at {site.RootPosition}, file {site.Path} deleted");
+            Say(player, MessageHud.MessageType.TopLeft, SiteRemoval.Message(site, result));
+        }
+
+        /// <summary>The plan goes: its file, its ghost, blueprint mode. What stands in the world stays.</summary>
+        private static void ForgetPlan(Player player, Site site, string message)
+        {
             ValheimTomrerPlugin.Log.LogInfo($"site forgotten: {site.Name} at {site.RootPosition}, {site.BuiltCount} of {site.Total} built, file {site.Path} deleted");
             SiteStore.Delete(site);
-            Exit();
-            Say(player, MessageHud.MessageType.Center, $"Plan for {site.Name} removed. Built pieces stay.");
+            if (CurrentSite == site)
+            {
+                Exit();
+            }
+
+            Say(player, MessageHud.MessageType.Center, message);
         }
 
         /// <summary>
@@ -378,7 +454,10 @@ namespace ValheimTomrer.Blueprints
         /// <summary>
         /// Builds every piece the materials pay for and that would stand, bottom to top, where the
         /// preview is (<see cref="PartialBuild"/>). With enough for all of it, the whole blueprint.
-        /// When anything is left, even everything, it is kept as an unfinished build (<see cref="SiteStore"/>).
+        /// After the click:
+        ///   - all of it stands: blueprint mode ends, the hammer is back on its normal piece;
+        ///   - anything is left, even everything: it is kept as an unfinished build (<see cref="SiteStore"/>)
+        ///     and blueprint mode goes straight to Continue on it.
         /// In Continue it builds on the unfinished build instead (<see cref="TryContinue"/>).
         /// Returns false and tells the player why when nothing goes up.
         /// </summary>
@@ -464,17 +543,14 @@ namespace ValheimTomrer.Blueprints
             }
 
             var total = Current.Parts.Count;
-            if (placed < total)
-            {
-                KeepSite(root, built, placed);
-            }
-
+            var kept = placed < total ? KeepSite(root, built, placed) : null;
             if (placed == 0)
             {
                 var missing = PartialBuild.MissingText(PartialBuild.Missing(Current, null, sources));
                 Say(player, MessageHud.MessageType.Center,
                     $"{Current.Name} planned, nothing built yet." + (missing.Length > 0 ? " Missing: " + missing : ""));
                 ValheimTomrerPlugin.Log.LogInfo($"built nothing of {Current.Name}: {(missing.Length > 0 ? "missing " + missing : "no piece would stand")}");
+                ContinueAfterClick(player, kept);
                 return false;
             }
 
@@ -483,12 +559,16 @@ namespace ValheimTomrer.Blueprints
             if (placed == total)
             {
                 Say(player, MessageHud.MessageType.TopLeft, $"Built {Current.Name}");
+
+                // Done: back to normal building, as if a piece had been picked from the build menu.
+                Exit();
                 return true;
             }
 
             var still = PartialBuild.MissingText(PartialBuild.Missing(Current, built, sources));
             Say(player, MessageHud.MessageType.TopLeft,
                 $"Built {placed} of {total} pieces of {Current.Name}." + (still.Length > 0 ? $" Still missing: {still}." : ""));
+            ContinueAfterClick(player, kept);
             return true;
         }
 
@@ -605,7 +685,10 @@ namespace ValheimTomrer.Blueprints
             return true;
         }
 
-        /// <summary>Every part stands: the tracker says so and deletes the file, and Continue ends.</summary>
+        /// <summary>
+        /// Every part stands: the tracker says so and deletes the file, and blueprint mode ends. The
+        /// hammer is back on its normal piece, not on the blueprint the build came from.
+        /// </summary>
         private static void Finished(Player player, Site site)
         {
             SiteTracker.Finish(player, site);
@@ -678,25 +761,28 @@ namespace ValheimTomrer.Blueprints
         /// <summary>
         /// The rest of the blueprint is kept as an unfinished build, at the preview's pose. The file is
         /// written now; what stands is read from the world again on the tracker's next refresh.
+        /// Returns the site, or null when it could not be kept.
         /// </summary>
-        private static void KeepSite(Transform root, bool[] built, int placed)
+        private static Site KeepSite(Transform root, bool[] built, int placed)
         {
             var site = Site.Start(Current, root.position, root.eulerAngles.y);
             if (site == null)
             {
                 ValheimTomrerPlugin.Log.LogWarning($"cannot keep {Current.Name} as an unfinished build");
-                return;
+                return null;
             }
 
             // A first answer until the tracker reads the world.
             System.Array.Copy(built, site.Built, site.Built.Length);
             site.BuiltCount = placed;
-            if (SiteStore.Add(site))
+            var added = SiteStore.Add(site);
+            if (added)
             {
                 LastSite = site;
             }
 
             SiteTracker.RefreshSoon();
+            return added ? site : null;
         }
 
         /// <summary>The unfinished build the last partial or empty click kept. For the tests.</summary>

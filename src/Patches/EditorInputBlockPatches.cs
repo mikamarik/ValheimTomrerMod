@@ -1,5 +1,6 @@
 using HarmonyLib;
 using UnityEngine;
+using ValheimTomrer.Blueprints.Sites;
 using ValheimTomrer.Editor;
 using ValheimTomrer.Editor.Ui;
 
@@ -75,12 +76,13 @@ namespace ValheimTomrer.Patches
 
         /// <summary>
         /// Esc and the pad's menu button open the pause menu. Also held back on the one frame
-        /// the world capture uses Esc to stop, or the same press would pause the game too.
+        /// the world capture uses Esc to stop, and the one the remove window closes on, or the
+        /// same press would pause the game too.
         /// </summary>
         [HarmonyPatch(typeof(Menu), "Update")]
         private static class MenuUpdate
         {
-            private static bool Prefix() => !ModUi.Blocking && !WorldCapture.TakesEscape;
+            private static bool Prefix() => !ModUi.Blocking && !WorldCapture.TakesEscape && !SiteRemovePopup.TakesEscape;
         }
 
         /// <summary>The map key.</summary>

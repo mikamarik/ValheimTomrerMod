@@ -34,8 +34,9 @@ namespace ValheimTomrer.Dev
     /// "build_sources" builds a kit paid from the inventory and the chests in range, nearest first;
     /// "build_partial" builds what the materials pay for and what would stand, bottom to top;
     /// "build_sites" keeps what a click left unbuilt in a file, and shows its missing parts as ghosts;
-    /// "build_continue" continues an unfinished build: locked preview, the finishing click, Remove twice;
+    /// "build_continue" continues an unfinished build: locked preview, the finishing click, Remove and its window;
     /// "card_materials" checks the hammer card's materials list: rows, numbers, colours, footer, Continue, two columns;
+    /// "hint_row" checks the controls of blueprint mode, Continue and the capture in the game's own hint row, keyboard and pad;
     /// "editor_open" opens the editor window with its key and checks the input takeover;
     /// "editor_view" fills the 3D pane with a kit and drives the camera through both its modes;
     /// "editor_files" round-trips every blueprint through the writer and runs the file commands;
@@ -219,6 +220,9 @@ namespace ValheimTomrer.Dev
                 case "card_materials":
                     scenario = TestCardMaterials(player);
                     break;
+                case "hint_row":
+                    scenario = TestHintRow(player);
+                    break;
                 case "editor_open":
                     scenario = TestEditorOpen(player);
                     break;
@@ -336,7 +340,7 @@ namespace ValheimTomrer.Dev
                 ?? "dump,probe,editor_open,editor_view,editor_files,editor_palette,editor_snap,"
                 + "editor_edit,editor_panels,editor_keys,editor_pad,editor_focus,editor_keep,editor_build,"
                 + "editor_capture,editor_support,blueprints,build_sources,build_partial,build_sites,"
-                + "build_continue,card_materials")
+                + "build_continue,card_materials,hint_row")
                 .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
 
             foreach (var name in names)
@@ -372,6 +376,7 @@ namespace ValheimTomrer.Dev
                 case "build_sites": return TestBuildSites(player);
                 case "build_continue": return TestBuildContinue(player);
                 case "card_materials": return TestCardMaterials(player);
+                case "hint_row": return TestHintRow(player);
                 case "blueprints": return TestBlueprints(player);
                 case "editor_open": return TestEditorOpen(player);
                 case "editor_view": return TestEditorView(player);
@@ -397,6 +402,7 @@ namespace ValheimTomrer.Dev
             // Closing keeps the blueprint for the next open. The next scenario starts from nothing.
             EditorSession.Forget();
             FocusNav.Leave();
+            SiteRemovePopup.Press(SiteRemovePopup.Choice.Cancel);
             BlueprintMode.Exit();
             WorldCapture.Cancel();
             WorldCapture.ResetShape();
@@ -1478,6 +1484,40 @@ namespace ValheimTomrer.Dev
             CheckGhostLook(resolved);
             yield return Screenshot(Slug(kit.Name) + "-1-preview");
 
+            if (withRefusals)
+            {
+                // Materials never refuse a click any more: it builds what they pay for, here nothing,
+                // keeps the plan and goes straight to Continue on it.
+                var planAt = BlueprintMode.PreviewRoot;
+                var planPos = planAt != null ? planAt.position : player.transform.position;
+                var planRot = planAt != null ? planAt.rotation : Quaternion.identity;
+                var before = PiecesAround(player, planPos).Count;
+                var bagBefore = player.GetInventory().GetAllItems().Sum(i => i.m_stack);
+                var sites = SiteStore.All.Count;
+                Check(!BlueprintMode.TryBuild(player), "without materials the click builds nothing");
+                Check(PiecesAround(player, planPos).Count == before
+                    && player.GetInventory().GetAllItems().Sum(i => i.m_stack) == bagBefore,
+                    "without materials nothing is built and nothing is taken");
+                var said = BlueprintMode.LastMessage ?? "";
+                var named = resolved.TotalCost.All(c => said.Contains(Localization.instance.Localize(c.m_resItem.m_itemData.m_shared.m_name)));
+                Check(said.Contains("Missing") && named, $"and the message names what is missing: '{said}'");
+                yield return CheckContinuesAfterClick(sites, "no materials");
+                var plan = BlueprintMode.LastSite;
+                Check(plan != null && Vector3.Distance(plan.RootPosition, planPos) < 0.001f && Quaternion.Angle(plan.RootRotation, planRot) < 0.1f,
+                    "the plan stands where the preview stood");
+
+                // Nothing of it stands, so one Remove forgets the plan with no window. Then the
+                // blueprint again, for the turn and the build below.
+                var opened = SiteRemovePopup.Opened;
+                BlueprintMode.PressRemove(player);
+                Check(plan != null && !SiteStore.All.Contains(plan) && !BlueprintMode.Active && plan.Ghost == null
+                    && SiteRemovePopup.Opened == opened && !UnifiedPopup.IsVisible() && BlueprintMode.LastMessage == $"Plan for {kit.Name} removed.",
+                    $"nothing built: one Remove forgets it at once, no window, blueprint mode off: '{BlueprintMode.LastMessage}'");
+                BlueprintMode.Select(player, resolved);
+                yield return AimAtGround(player);
+                Check(BlueprintMode.HasTarget && BlueprintMode.Blocked == null, "the blueprint is in hand again: " + (BlueprintMode.Blocked ?? "ok"));
+            }
+
             // Once, on the first kit: the turn, then the build below proves it reached the pieces.
             var turnedTo = BlueprintMode.RotationSteps;
             if (withRefusals)
@@ -1489,19 +1529,7 @@ namespace ValheimTomrer.Dev
 
             var root = BlueprintMode.PreviewRoot;
             var center = root != null ? root.position : player.transform.position;
-            if (withRefusals)
-            {
-                // Materials never refuse a click any more: it builds what they pay for, here nothing.
-                var before = PiecesAround(player, center).Count;
-                var bagBefore = player.GetInventory().GetAllItems().Sum(i => i.m_stack);
-                Check(!BlueprintMode.TryBuild(player), "without materials the click builds nothing");
-                Check(PiecesAround(player, center).Count == before
-                    && player.GetInventory().GetAllItems().Sum(i => i.m_stack) == bagBefore,
-                    "without materials nothing is built and nothing is taken");
-                var said = BlueprintMode.LastMessage ?? "";
-                var named = resolved.TotalCost.All(c => said.Contains(Localization.instance.Localize(c.m_resItem.m_itemData.m_shared.m_name)));
-                Check(said.Contains("Missing") && named, $"and the message names what is missing: '{said}'");
-            }
+            var rootRot = root != null ? root.rotation : Quaternion.identity;
 
             foreach (var cost in resolved.TotalCost)
             {
@@ -1530,15 +1558,17 @@ namespace ValheimTomrer.Dev
                 + $" stamina={player.GetStamina():0}/{player.GetMaxStamina():0}"
                 + $" need={(tool != null ? tool.m_shared.m_attack.m_attackStamina : 0f):0}");
             var turn = Quaternion.Euler(0f, turnedTo * BlueprintMode.RotationStep, 0f);
+            var hadRoot = root != null;
             Check(BlueprintMode.TryBuild(player), "built with exact materials");
             var built = PiecesAround(player, center).Where(p => !existing.Contains(p)).ToList();
             Check(built.Count == resolved.Parts.Count, $"all pieces exist: {built.Count}/{resolved.Parts.Count}");
 
-            // Every piece stands where the turned preview showed it, facing the turned way.
-            var off = root != null ? 0 : resolved.Parts.Count;
-            foreach (var part in root != null ? resolved.Parts : new List<ResolvedPart>())
+            // Every piece stands where the turned preview showed it, facing the turned way. The pose
+            // was read before the click: a build in full ends blueprint mode and drops the preview.
+            var off = hadRoot ? 0 : resolved.Parts.Count;
+            foreach (var part in hadRoot ? resolved.Parts : new List<ResolvedPart>())
             {
-                var position = root.TransformPoint(part.Source.Position);
+                var position = center + (rootRot * part.Source.Position);
                 var rotation = turn * part.Source.Rotation;
                 if (!built.Any(p => Vector3.Distance(p.transform.position, position) < 0.05f
                     && Quaternion.Angle(p.transform.rotation, rotation) < 1f))
@@ -1547,10 +1577,11 @@ namespace ValheimTomrer.Dev
                 }
             }
 
-            Check(root != null && Quaternion.Angle(root.rotation, turn) < 0.01f && off == 0,
+            Check(hadRoot && Quaternion.Angle(rootRot, turn) < 0.01f && off == 0,
                 $"built facing {turnedTo * BlueprintMode.RotationStep:0.#} degrees like the preview, pieces off: {off}");
             var left = resolved.TotalCost.Sum(c => player.GetInventory().CountItems(c.m_resItem.m_itemData.m_shared.m_name));
             Check(left == 0, $"materials taken (left over: {left})");
+            yield return CheckBackToPiece(player, $"{kit.Name} built in full");
 
             yield return new WaitForSeconds(2f);
             yield return Screenshot(Slug(kit.Name) + "-2-built");
@@ -3659,6 +3690,7 @@ namespace ValheimTomrer.Dev
             var root = BlueprintMode.PreviewRoot;
             var centre = root != null ? root.position : player.transform.position;
             var before = PiecesAround(player, centre).Count;
+            var sites = SiteStore.All.Count;
             var built = BlueprintMode.TryBuild(player);
             yield return null;
             Check(!built && PiecesAround(player, centre).Count == before, "nothing affordable: the click builds nothing");
@@ -3668,6 +3700,7 @@ namespace ValheimTomrer.Dev
             var named = items.All(i => said.Contains($"{i.Need - 1} {Localization.instance.Localize(i.Name)}"));
             Check(said.StartsWith("Workshop planned, nothing built yet. Missing:") && named,
                 $"the message names every missing item with its amount: '{said}'");
+            yield return CheckContinuesAfterClick(sites, "nothing affordable");
             BlueprintMode.Exit();
             ClearInventoryExceptHammer(player);
         }
@@ -3714,15 +3747,17 @@ namespace ValheimTomrer.Dev
             var rootPos = root.position;
             var rootRot = root.rotation;
             var existing = new HashSet<Piece>(PiecesAround(player, rootPos));
+            var sites = SiteStore.All.Count;
             var clicked = BlueprintMode.TryBuild(player);
             var said = BlueprintMode.LastMessage ?? "";
-            BlueprintMode.Exit();
             yield return null;
             var built = PiecesAround(player, rootPos).Where(p => !existing.Contains(p)).ToList();
             var total = kit.Parts.Count;
             Check(clicked && built.Count > 0 && built.Count < total, $"half the wood builds part of the kit: {built.Count} of {total} pieces");
             Check(said.StartsWith($"Built {built.Count} of {total} pieces of Workshop. Still missing: "),
                 $"and says so: '{said}'");
+            yield return CheckContinuesAfterClick(sites, "half the wood");
+            BlueprintMode.Exit();
 
             // 1. What left the bag and the chest is what the placed pieces cost, item by item.
             var paid = new Dictionary<string, int>();
@@ -3912,12 +3947,20 @@ namespace ValheimTomrer.Dev
                 }
             }
 
+            if (!costsOff)
+            {
+                // A piece with a ghost of its own in the hand, so the check below sees the game's ghost come back.
+                var wall = PiecePrefab("woodwall");
+                Check(wall != null && player.SetSelectedPiece(wall), "set-up: the hammer holds the wood wall");
+            }
+
             yield return AimBlueprint(player, kit);
             var root = BlueprintMode.PreviewRoot;
             var centre = root != null ? root.position : player.transform.position;
             var existing = new HashSet<Piece>(PiecesAround(player, centre));
             var clicked = BlueprintMode.TryBuild(player);
             var said = BlueprintMode.LastMessage ?? "";
+            yield return CheckBackToPiece(player, costsOff ? "costs off, built in full" : "every material, built in full");
             BlueprintMode.Exit();
             player.m_noPlacementCost = false;
             yield return null;
@@ -4400,7 +4443,8 @@ namespace ValheimTomrer.Dev
         /// <summary>
         /// Near an unfinished build the key offers "Continue: Workshop (6/16)" first. The preview is the
         /// site's own ghost and stays put, a click builds what the materials pay for now, the last one
-        /// finishes it, Remove twice forgets it, and a part the player stands in is left out.
+        /// finishes it, Remove removes it (at once, or through the window on the keyboard, the mouse and
+        /// the pad), and a part the player stands in is left out.
         /// </summary>
         private static IEnumerator TestBuildContinue(Player player)
         {
@@ -4431,8 +4475,10 @@ namespace ValheimTomrer.Dev
 
             yield return ContinueToTheEnd(player, resolved);
             yield return ContinueInThirds(player, resolved);
-            yield return ContinueForget(player, resolved);
-            yield return ContinuePadForget(player, resolved);
+            yield return ContinueRemoveNothing(player, resolved);
+            yield return ContinueRemoveWindow(player, resolved);
+            yield return ContinueRemovePad(player, resolved);
+            yield return ContinueRemoveRefused(player, resolved, spot);
             yield return ContinueFarAway(player, resolved, spot);
             yield return ContinueStandingInside(player);
 
@@ -4451,8 +4497,11 @@ namespace ValheimTomrer.Dev
             Check(mine == 0, $"nothing of the test is left standing: {mine}");
         }
 
-        /// <summary>A new unfinished build in front of the player: these materials, one click, blueprint mode off.</summary>
-        private static IEnumerator StartSite(Player player, ResolvedBlueprint kit, Func<string, int, int> give, Quaternion? facing = null)
+        /// <summary>
+        /// A new unfinished build in front of the player: these materials, one click (the pad's R2 when
+        /// <paramref name="pad"/>), which goes straight to Continue on it; then blueprint mode off.
+        /// </summary>
+        private static IEnumerator StartSite(Player player, ResolvedBlueprint kit, Func<string, int, int> give, Quaternion? facing = null, bool pad = false)
         {
             ClearInventoryExceptHammer(player);
             foreach (var cost in kit.TotalCost)
@@ -4462,8 +4511,19 @@ namespace ValheimTomrer.Dev
 
             yield return AimBlueprint(player, kit, facing);
             var sites = SiteStore.All.Count;
-            BlueprintMode.TryBuild(player);
+            if (pad)
+            {
+                WorldPadOn();
+                yield return PadPlace();
+                yield return WorldPadOff();
+            }
+            else
+            {
+                BlueprintMode.TryBuild(player);
+            }
+
             var said = BlueprintMode.LastMessage ?? "";
+            yield return CheckContinuesAfterClick(sites, pad ? "set-up through the pad's R2" : "set-up");
             BlueprintMode.Exit();
             yield return null;
             yield return null;
@@ -4478,6 +4538,104 @@ namespace ValheimTomrer.Dev
         {
             BlueprintMode.Exit();
             BlueprintMode.Cycle(player);
+        }
+
+        /// <summary>
+        /// After a click that left parts unbuilt (even all of them): blueprint mode went straight to
+        /// Continue on the build that click kept, as if the key had picked it. Its label is the key's,
+        /// the preview is that build's ghost (no aim preview left), and the card says Continue.
+        /// </summary>
+        private static IEnumerator CheckContinuesAfterClick(int sitesBefore, string what)
+        {
+            var site = BlueprintMode.LastSite;
+            var kept = site != null && SiteStore.All.Count == sitesBefore + 1 && SiteStore.All.Contains(site);
+            var entry = BlueprintMode.EntryName ?? "";
+            Check(kept && BlueprintMode.Active && BlueprintMode.CurrentSite == site && BlueprintMode.Current == site.Resolved
+                && entry.StartsWith($"Continue: {site.Name} ({site.BuiltCount}/{site.Total})"),
+                $"{what}: the click went straight to Continue on the build it kept: '{entry}'");
+            if (!kept)
+            {
+                yield break;
+            }
+
+            var waited = 0f;
+            while ((site.Ghost == null || !site.Ghost.Done || !site.Ghost.Visible) && waited < 3f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            yield return CardRefreshed();
+            var root = BlueprintMode.PreviewRoot;
+            Check(BlueprintMode.CurrentSite == site && root != null && site.Ghost != null && root == site.Ghost.Root && site.Ghost.Visible
+                && GameObject.Find("ValheimTomrer_Blueprint_" + site.Name) == null,
+                $"{what}: the preview is that build's ghost ({waited:0.00} s to show), no aim preview is left");
+            var title = Hud.instance.m_buildSelection.text;
+            var list = BlueprintInfoCard.List;
+            var footer = list != null ? list.Footer.text : "";
+            Check(title == $"Continue: {site.Name}" && BlueprintInfoCard.Visible && footer.StartsWith($"Built {site.BuiltCount} of {site.Total}."),
+                $"{what}: the card reads '{title}', its list '{footer}'");
+        }
+
+        /// <summary>
+        /// After a click that put the last part up: blueprint mode is off and the hammer is back on its
+        /// normal piece, as picking a piece from the build menu leaves it. The game's own ghost of that
+        /// piece shows where the player aims (Repair and Remove have none in the game), and the card
+        /// shows that piece with no materials list.
+        /// </summary>
+        private static IEnumerator CheckBackToPiece(Player player, string what)
+        {
+            var off = !BlueprintMode.Active && BlueprintMode.CurrentSite == null && BlueprintMode.EntryName == null;
+            yield return Frames(3);
+            var piece = player.GetSelectedPiece();
+            var noGhost = piece != null && (piece.m_repairPiece || piece.m_removePiece);
+            var ghost = player.m_placementGhost;
+            for (var pitch = 15f; !noGhost && pitch <= 60f && !(ghost != null && ghost.activeSelf); pitch += 3f)
+            {
+                player.m_lookPitch = pitch;
+                yield return Frames(2);
+                ghost = player.m_placementGhost;
+            }
+
+            var same = piece != null && (noGhost ? ghost == null
+                : ghost != null && ghost.activeSelf && Utils.GetPrefabName(ghost) == piece.gameObject.name);
+            Check(off && !BlueprintMode.Active && BlueprintMode.PreviewRoot == null && same,
+                $"{what}: blueprint mode is off at once ({off}) and the hammer shows its own piece again:"
+                + $" selected {(piece != null ? piece.gameObject.name : "none")}, the game's ghost"
+                + $" {(ghost != null ? Utils.GetPrefabName(ghost) + (ghost.activeSelf ? " shown" : " hidden") : "none")}{(noGhost ? " (the game draws none for it)" : "")}");
+            var title = Hud.instance.m_buildSelection.text;
+            Check(piece != null && title == Localization.instance.Localize(piece.m_name) && !BlueprintInfoCard.Visible,
+                $"{what}: the card shows that piece ('{title}') and no materials list (list shown: {BlueprintInfoCard.Visible})");
+        }
+
+        /// <summary>
+        /// The game's build button (JoyPlace) on the world controller, once. R2 in the game's layouts:
+        /// a trigger, so an axis pushed all the way, not a button.
+        /// </summary>
+        private static IEnumerator PadPlace()
+        {
+            var place = WorldPad.ButtonOf("JoyPlace") ?? PadButton.R2;
+            Log($"the game's JoyPlace is {place} on the pad");
+            if (place != PadButton.R2 && place != PadButton.L2)
+            {
+                yield return PadPress(false, PadKeyOf(place));
+                yield break;
+            }
+
+            var state = new UnityEngine.InputSystem.LowLevel.GamepadState();
+            if (place == PadButton.R2)
+            {
+                state.rightTrigger = 1f;
+            }
+            else
+            {
+                state.leftTrigger = 1f;
+            }
+
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(_worldPad, state);
+            yield return Frames(3);
+            PadDown(false);
+            yield return Frames(2);
         }
 
         /// <summary>The site's parts standing in the world now, found the tracker's way.</summary>
@@ -4585,6 +4743,7 @@ namespace ValheimTomrer.Dev
             var inChest = kit.TotalCost.Sum(c => Held(chest.GetInventory(), c.m_resItem.m_itemData.m_shared.m_name));
             var inBag = kit.TotalCost.Sum(c => Held(player.GetInventory(), c.m_resItem.m_itemData.m_shared.m_name));
             Check(inChest == 0 && inBag == 0, $"the chest is empty ({inChest} left) and so is the bag ({inBag})");
+            yield return CheckBackToPiece(player, "Continue's last click");
 
             yield return new WaitForSeconds(15f);
             standing = Standing(player, site);
@@ -4597,7 +4756,7 @@ namespace ValheimTomrer.Dev
             yield return new WaitForSeconds(1f);
         }
 
-        /// <summary>Check 3: the wood in three parts, three clicks. Each one builds more, the third finishes it.</summary>
+        /// <summary>Check 3: the wood in three parts, three clicks. Each one builds more, the third (the pad's R2) finishes it.</summary>
         private static IEnumerator ContinueInThirds(Player player, ResolvedBlueprint kit)
         {
             var wood = kit.TotalCost.First(c => c.m_resItem.m_itemData.m_shared.m_name == "$item_wood");
@@ -4619,9 +4778,24 @@ namespace ValheimTomrer.Dev
             {
                 AddTo(player.GetInventory(), wood.m_resItem.gameObject.name, third);
                 player.m_lastToolUseTime = 0f;
-                var clicked = BlueprintMode.TryBuild(player);
-                var said = BlueprintMode.LastMessage ?? "";
-                yield return null;
+                bool clicked;
+                string said;
+                if (click == 2)
+                {
+                    clicked = BlueprintMode.TryBuild(player);
+                    said = BlueprintMode.LastMessage ?? "";
+                    yield return null;
+                }
+                else
+                {
+                    // The last one through the pad's R2: the same click, the same end.
+                    WorldPadOn();
+                    yield return PadPlace();
+                    said = BlueprintMode.LastMessage ?? "";
+                    clicked = said == "Workshop finished.";
+                    yield return WorldPadOff();
+                }
+
                 counts.Add(site.BuiltCount);
                 Check(clicked && counts[click - 1] > counts[click - 2],
                     $"{third} more wood, click {click}: {counts[click - 2]} -> {counts[click - 1]} built: '{said}'");
@@ -4635,7 +4809,8 @@ namespace ValheimTomrer.Dev
 
             Check(counts.Last() == site.Total && !SiteStore.All.Contains(site) && !File.Exists(path) && !BlueprintMode.Active
                 && Standing(player, site) == site.Total,
-                $"done after the third: {string.Join(" -> ", counts)} of {site.Total}, site kept: {SiteStore.All.Contains(site)}");
+                $"done after the third (R2 on the pad): {string.Join(" -> ", counts)} of {site.Total}, site kept: {SiteStore.All.Contains(site)}");
+            yield return CheckBackToPiece(player, "Continue's last click through R2");
 
             yield return new WaitForSeconds(1f);
             RemoveOldTestBuildings(player);
@@ -4643,8 +4818,39 @@ namespace ValheimTomrer.Dev
             yield return new WaitForSeconds(1f);
         }
 
-        /// <summary>Check 4: Remove twice within 3 s forgets the plan and keeps what stands. Two presses 4 s apart do not.</summary>
-        private static IEnumerator ContinueForget(Player player, ResolvedBlueprint kit)
+        // ---------- build_continue: removing an unfinished build ----------
+
+        /// <summary>Check 4a: none of the build stands. One Remove forgets the plan at once: no window, file and ghost gone, blueprint mode off.</summary>
+        private static IEnumerator ContinueRemoveNothing(Player player, ResolvedBlueprint kit)
+        {
+            yield return StartSite(player, kit, (item, need) => 0);
+            var site = BlueprintMode.LastSite;
+            if (site == null || !SiteStore.All.Contains(site))
+            {
+                yield break;
+            }
+
+            var path = site.Path;
+            FirstEntry(player);
+            Check(BlueprintMode.CurrentSite == site && Standing(player, site) == 0, $"the key continues a build with nothing built: {BlueprintMode.EntryName}");
+            var opened = SiteRemovePopup.Opened;
+            yield return PressBound("Remove");
+            yield return Frames(2);
+            var said = BlueprintMode.LastMessage ?? "";
+            Check(SiteRemovePopup.Opened == opened && !SiteRemovePopup.IsOpen && !UnifiedPopup.IsVisible(), "nothing built: one Remove opens no window");
+            Check(!SiteStore.All.Contains(site) && !File.Exists(path) && site.Ghost == null && !BlueprintMode.Active && BlueprintMode.CurrentSite == null,
+                $"and the plan is gone at once: site kept {SiteStore.All.Contains(site)}, file {File.Exists(path)}, ghost {site.Ghost != null}, blueprint mode {BlueprintMode.Active}");
+            Check(said == "Plan for Workshop removed." && !said.Contains("again"), $"it says so, no \"press again\": '{said}'");
+            ClearInventoryExceptHammer(player);
+            yield return new WaitForSeconds(0.5f);
+        }
+
+        /// <summary>
+        /// Check 4b, keyboard and mouse: part of it stands, so Remove opens the game's popup with three
+        /// buttons. While it is up the game holds the player; Cancel (the button, then Esc) changes
+        /// nothing; Unbuilt parts forgets the plan and leaves what stands.
+        /// </summary>
+        private static IEnumerator ContinueRemoveWindow(Player player, ResolvedBlueprint kit)
         {
             yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? need / 2 : need);
             var site = BlueprintMode.LastSite;
@@ -4656,58 +4862,422 @@ namespace ValheimTomrer.Dev
             var path = site.Path;
             var built = Standing(player, site);
             FirstEntry(player);
-            Check(BlueprintMode.CurrentSite == site, "the key continues it: " + BlueprintMode.EntryName);
+            Check(BlueprintMode.CurrentSite == site && built > 0 && built < site.Total, $"the key continues it, {built} of {site.Total} built");
+
+            // ---- Remove: the window, and the press did nothing else ----
+            yield return PressBound("Remove");
+            yield return Frames(2);
+            CheckRemoveWindow(player, site, built, "Remove (keyboard)");
+            Check(SiteRemovePopup.Selected() == null, "with the mouse no button is picked at first");
+            yield return Screenshot("remove-window-keys");
+
+            // ---- while it is up the game holds the player ----
+            var at = player.transform.position;
+            var entry = BlueprintMode.EntryName;
+            var bag = player.GetInventory().GetAllItems().Sum(i => i.m_stack);
+            yield return HoldKey(UnityEngine.InputSystem.Key.W, 0.6f);
+            yield return PressKey(UnityEngine.InputSystem.Key.B);
+            yield return ClickScreen(new Vector2(Screen.width * 0.12f, Screen.height * 0.5f));
+            yield return PressKey(UnityEngine.InputSystem.Key.Tab);
+            yield return PressKey(UnityEngine.InputSystem.Key.M);
+            yield return PressKey(EditorConfig.Key.Value == KeyCode.F7 ? UnityEngine.InputSystem.Key.F7 : UnityEngine.InputSystem.Key.F8);
+            yield return Frames(3);
+            var moved = Vector3.Distance(player.transform.position, at);
+            Check(moved < 0.05f && BlueprintMode.CurrentSite == site && BlueprintMode.EntryName == entry && Standing(player, site) == built
+                && player.GetInventory().GetAllItems().Sum(i => i.m_stack) == bag && !InventoryGui.IsVisible()
+                && Minimap.instance.m_mode != Minimap.MapMode.Large && !ModUi.Open && SiteRemovePopup.Showing,
+                $"while it is up W, B, a click beside it, Tab, M and F7 do nothing: moved {moved:0.###} m, entry '{BlueprintMode.EntryName}',"
+                + $" {Standing(player, site)} standing, inventory {InventoryGui.IsVisible()}, map {Minimap.instance.m_mode}, editor {ModUi.Open}, still up {SiteRemovePopup.Showing}");
+
+            // ---- Cancel: the button, then Esc ----
+            yield return ClickButton(SiteRemovePopup.ButtonFor(SiteRemovePopup.Choice.Cancel));
+            yield return CheckRemoveCancelled(player, site, path, built, "a click on Cancel");
 
             yield return PressBound("Remove");
-            Check(SiteStore.All.Contains(site) && BlueprintMode.LastMessage == "Press again to remove the plan.",
-                $"one Remove press only asks: '{BlueprintMode.LastMessage}'");
-            yield return new WaitForSeconds(4f);
-            yield return PressBound("Remove");
-            Check(SiteStore.All.Contains(site) && File.Exists(path) && BlueprintMode.CurrentSite == site,
-                $"Remove, 4 s, Remove: the site is still there: '{BlueprintMode.LastMessage}'");
+            yield return Frames(2);
+            Check(SiteRemovePopup.Showing, "Remove opens it again");
+            yield return PressKey(UnityEngine.InputSystem.Key.Escape);
+            yield return CheckRemoveCancelled(player, site, path, built, "Esc");
 
-            yield return new WaitForSeconds(BlueprintMode.ForgetWindow + 0.5f);
+            // ---- Unbuilt parts: the plan goes, what stands stays ----
             yield return PressBound("Remove");
-            yield return new WaitForSeconds(0.5f);
-            yield return PressBound("Remove");
+            yield return Frames(2);
+            Check(SiteRemovePopup.Showing, "Remove opens it a third time");
+            yield return ClickButton(SiteRemovePopup.ButtonFor(SiteRemovePopup.Choice.UnbuiltParts));
+            yield return Frames(3);
             var said = BlueprintMode.LastMessage ?? "";
+            Check(!SiteRemovePopup.IsOpen && !UnifiedPopup.IsVisible() && SiteRemovePopup.LastChoice == SiteRemovePopup.Choice.UnbuiltParts,
+                $"a click on Unbuilt parts closes it: {SiteRemovePopup.LastChoice}");
             Check(!SiteStore.All.Contains(site) && !File.Exists(path) && site.Ghost == null && !BlueprintMode.Active,
-                $"Remove twice within 3 s: site kept {SiteStore.All.Contains(site)}, file there {File.Exists(path)}, ghost {site.Ghost != null}, active {BlueprintMode.Active}");
-            Check(said == "Plan for Workshop removed. Built pieces stay.", $"and says so: '{said}'");
-            Check(built > 0 && Standing(player, site) == built, $"the built pieces are still there: {Standing(player, site)} of {built}");
+                $"Unbuilt parts: plan kept {SiteStore.All.Contains(site)}, file {File.Exists(path)}, ghost {site.Ghost != null}, blueprint mode {BlueprintMode.Active}");
+            Check(Standing(player, site) == built, $"the built pieces are still in the world: {Standing(player, site)} of {built}");
+            Check(said == $"Plan for Workshop removed. The {built} built pieces stay.", $"and it says so: '{said}'");
 
             RemoveOldTestBuildings(player);
             ClearInventoryExceptHammer(player);
             yield return new WaitForSeconds(1f);
         }
 
-        /// <summary>The pad forgets a plan the same way: square picks Continue, the game's Remove (R1) twice.</summary>
-        private static IEnumerator ContinuePadForget(Player player, ResolvedBlueprint kit)
+        /// <summary>
+        /// Check 4c, the pad alone: R2 builds part of it, square continues it, R1 opens the window on
+        /// Cancel. Cross there and circle cancel; the stick, R2, square and triangle do nothing while it
+        /// is up; the D-pad walks the three buttons; cross on Whole structure takes every built piece
+        /// down and the materials come back as the hammer's Remove gives them.
+        /// </summary>
+        private static IEnumerator ContinueRemovePad(Player player, ResolvedBlueprint kit)
         {
-            yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? need / 2 : need);
+            yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? need / 2 : need, pad: true);
             var site = BlueprintMode.LastSite;
             if (site == null || !SiteStore.All.Contains(site))
             {
                 yield break;
             }
 
+            var path = site.Path;
             var built = Standing(player, site);
             var remove = WorldPad.ButtonOf("JoyRemove") ?? PadButton.R1;
             WorldPadOn();
             yield return PadPress(false, PadKey.West);
             Check(BlueprintMode.CurrentSite == site, "square continues it: " + BlueprintMode.EntryName);
+
+            // ---- R1: the window, on Cancel. Cross there cancels, and the player does not jump ----
             yield return PadPress(false, PadKeyOf(remove));
-            Check(SiteStore.All.Contains(site) && BlueprintMode.LastMessage == "Press again to remove the plan.",
-                $"one {remove} press only asks: '{BlueprintMode.LastMessage}'");
+            yield return Frames(3);
+            CheckRemoveWindow(player, site, built, $"{remove} on the pad");
+            var cancel = SiteRemovePopup.ButtonFor(SiteRemovePopup.Choice.Cancel);
+            var unbuilt = SiteRemovePopup.ButtonFor(SiteRemovePopup.Choice.UnbuiltParts);
+            var whole = SiteRemovePopup.ButtonFor(SiteRemovePopup.Choice.WholeStructure);
+            Check(SiteRemovePopup.Selected() == cancel.gameObject, $"the pad starts on Cancel: {Name(SiteRemovePopup.Selected())}");
+            string Hint(UnityEngine.UI.Button b)
+            {
+                var hint = b.transform.Find("gamepad_hint");
+                var label = hint != null ? hint.GetComponentInChildren<TMPro.TMP_Text>(true) : null;
+                return hint != null && hint.gameObject.activeInHierarchy && label != null ? label.text : "-";
+            }
+
+            var circle = Localization.instance.Localize("$KEY_JoyButtonB");
+            var crossGlyph = Localization.instance.Localize("$KEY_JoyButtonA");
+            Check(circle.StartsWith("<sprite") && Hint(cancel) == circle && Hint(unbuilt) == "-" && Hint(whole) == "-",
+                $"the game's circle icon on Cancel's corner, none on the other two: '{Hint(cancel)}', '{Hint(unbuilt)}', '{Hint(whole)}'");
+            var rise = 0f;
+            PadDown(false, PadKey.South);
+            yield return Frames(3);
+            PadDown(false);
+            yield return Rise(player, 1f, r => rise = r);
+            yield return CheckRemoveCancelled(player, site, path, built, "cross on Cancel");
+            Check(rise < 0.2f, $"cross closed it and did not also jump: rose {rise:0.##} m");
+
             yield return PadPress(false, PadKeyOf(remove));
+            yield return Frames(3);
+            Check(SiteRemovePopup.Showing, $"{remove} opens it again");
+            PadDown(false, PadKey.East);
+            yield return Frames(3);
+            PadDown(false);
+            yield return Rise(player, 1f, r => rise = r);
+            yield return CheckRemoveCancelled(player, site, path, built, "circle");
+            Check(rise < 0.2f, $"circle did nothing else: rose {rise:0.##} m");
+
+            // ---- up again: the stick, R2, square and triangle do nothing ----
+            yield return PadPress(false, PadKeyOf(remove));
+            yield return Frames(3);
+            Check(SiteRemovePopup.Showing && SiteRemovePopup.Selected() == cancel.gameObject, $"{remove} opens it a third time, on Cancel");
+            var at = player.transform.position;
+            var entry = BlueprintMode.EntryName;
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(_worldPad, new UnityEngine.InputSystem.LowLevel.GamepadState { leftStick = new Vector2(0f, 1f) });
+            yield return new WaitForSeconds(0.6f);
+            PadDown(false);
+            yield return Frames(2);
+            yield return PadPlace();
+            yield return PadPress(false, PadKey.West);
+            yield return PadPress(false, PadKey.North);
+            yield return Frames(3);
+            var moved = Vector3.Distance(player.transform.position, at);
+            Check(moved < 0.05f && BlueprintMode.CurrentSite == site && BlueprintMode.EntryName == entry && Standing(player, site) == built
+                && !InventoryGui.IsVisible() && SiteRemovePopup.Showing && SiteRemovePopup.Selected() == cancel.gameObject,
+                $"while it is up the stick, R2, square and triangle do nothing: moved {moved:0.###} m, entry '{BlueprintMode.EntryName}',"
+                + $" {Standing(player, site)} standing, inventory {InventoryGui.IsVisible()}, on {Name(SiteRemovePopup.Selected())}");
+
+            // ---- the D-pad walks the row, and stops at its ends ----
+            var walk = new List<string> { Name(SiteRemovePopup.Selected()) };
+            foreach (var step in new[] { PadKey.DpadRight, PadKey.DpadRight, PadKey.DpadRight, PadKey.DpadLeft, PadKey.DpadRight })
+            {
+                yield return PadPress(false, step);
+                yield return Frames(2);
+                walk.Add(Name(SiteRemovePopup.Selected()));
+            }
+
+            var names = new[] { cancel, unbuilt, whole, whole, unbuilt, whole }.Select(b => b.name).ToList();
+            Check(walk.SequenceEqual(names), $"right, right, right, left, right: {string.Join(" -> ", walk)}");
+            Check(crossGlyph.StartsWith("<sprite") && Hint(whole) == crossGlyph && Hint(unbuilt) == "-" && Hint(cancel) == circle,
+                $"on Whole structure the cross icon moved to it, circle stays on Cancel: '{Hint(cancel)}', '{Hint(unbuilt)}', '{Hint(whole)}'");
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("remove-window-pad");
+
+            // ---- cross on Whole structure ----
+            var pieces = MatchParts(site.Resolved, site.RootPosition, site.RootRotation, PiecesAround(player, site.RootPosition)).Values.ToList();
+            var back = Recoverable(pieces);
+            var centre = site.WorldBox.center;
+            var before = back.Keys.ToDictionary(k => k, k => Around(player, centre, k));
+            PadDown(false, PadKey.South);
+            yield return Frames(3);
+            PadDown(false);
+            var said = BlueprintMode.LastMessage ?? "";
+            yield return Rise(player, 1f, r => rise = r);
+            Check(!SiteRemovePopup.IsOpen && SiteRemovePopup.LastChoice == SiteRemovePopup.Choice.WholeStructure && rise < 0.2f,
+                $"cross on Whole structure closes it, no jump: {SiteRemovePopup.LastChoice}, rose {rise:0.##} m");
+            yield return new WaitForSeconds(2f);
+            var standing = Standing(player, site);
+            Check(standing == 0 && pieces.All(p => p == null), $"Whole structure: none of the {built} built pieces is left in the world: {standing}");
+            Check(!SiteStore.All.Contains(site) && !File.Exists(path) && site.Ghost == null && !BlueprintMode.Active,
+                $"the plan went too: kept {SiteStore.All.Contains(site)}, file {File.Exists(path)}, ghost {site.Ghost != null}, blueprint mode {BlueprintMode.Active}");
+            var got = back.Keys.ToDictionary(k => k, k => Around(player, centre, k) - before[k]);
+            Check(back.Count > 0 && back.All(b => got[b.Key] == b.Value),
+                "the materials came back as the hammer's Remove gives them: "
+                + string.Join(", ", back.Select(b => $"{Localization.instance.Localize(b.Key)} {got[b.Key]} of {b.Value}")));
+            Check(said == $"Workshop removed: {built} pieces taken down.", $"and it says so: '{said}'");
             yield return WorldPadOff();
-            Check(!SiteStore.All.Contains(site) && !BlueprintMode.Active && BlueprintMode.LastMessage == "Plan for Workshop removed. Built pieces stay.",
-                $"{remove} twice forgot the plan: '{BlueprintMode.LastMessage}'");
-            Check(built > 0 && Standing(player, site) == built, $"the built pieces are still there: {Standing(player, site)} of {built}");
 
             RemoveOldTestBuildings(player);
             ClearInventoryExceptHammer(player);
+            ClearDrops(centre);
             yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>
+        /// Check 4d: a piece the game will not let go is left standing and counted, with the plan
+        /// removed all the same. First the top piece made unremovable (the pieces under it stay too, so
+        /// it does not fall), then the station rule: 28 m from the only workbench.
+        /// </summary>
+        private static IEnumerator ContinueRemoveRefused(Player player, ResolvedBlueprint kit, Vector3 spot)
+        {
+            // ---- the top piece cannot be removed: it stays, with what holds it up ----
+            yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? need - 2 : need);
+            var site = BlueprintMode.LastSite;
+            if (site == null || !SiteStore.All.Contains(site))
+            {
+                yield break;
+            }
+
+            var path = site.Path;
+            var parts = MatchParts(site.Resolved, site.RootPosition, site.RootRotation, PiecesAround(player, site.RootPosition));
+            var built = parts.Count;
+            var top = parts.OrderByDescending(p => p.Value.transform.position.y).First();
+            top.Value.m_canBeRemoved = false;
+            Log($"{built} of {site.Total} built; the top one, {top.Key} {top.Value.name}, made unremovable");
+            FirstEntry(player);
+            yield return PressBound("Remove");
+            yield return Frames(2);
+            Check(SiteRemovePopup.Showing, "Remove opens the window");
+            yield return ClickButton(SiteRemovePopup.ButtonFor(SiteRemovePopup.Choice.WholeStructure));
+            yield return Frames(3);
+            var said = BlueprintMode.LastMessage ?? "";
+            var last = SiteRemoval.Last;
+            var left = parts.Values.Where(p => p != null).ToList();
+            Check(last != null && top.Value != null && last.LeftCount == 1 && last.HoldingUp > 0
+                && left.Count == 1 + last.HoldingUp && last.Removed == built - left.Count,
+                $"the unremovable top piece stays with the {last?.HoldingUp} under it: {left.Count} of {built} left, {last?.Removed} taken down");
+            Check(said == $"Workshop removed: {built - left.Count} of {built} pieces taken down. Left standing: 1 can't be removed, {last?.HoldingUp} hold it up.",
+                $"the message counts them: '{said}'");
+            Check(!SiteStore.All.Contains(site) && !File.Exists(path) && site.Ghost == null && !BlueprintMode.Active,
+                $"the plan is removed all the same: kept {SiteStore.All.Contains(site)}, file {File.Exists(path)}, blueprint mode {BlueprintMode.Active}");
+            yield return new WaitForSeconds(5f);
+            var still = left.Count(p => p != null);
+            Check(still == left.Count, $"5 s later nothing fell: {still} of {left.Count} still stand");
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            ClearDrops(site.WorldBox.center);
+            yield return new WaitForSeconds(1f);
+
+            // ---- the station rule: 28 m from the only workbench ----
+            yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? need / 2 : need);
+            site = BlueprintMode.LastSite;
+            if (site == null || !SiteStore.All.Contains(site))
+            {
+                yield break;
+            }
+
+            path = site.Path;
+            parts = MatchParts(site.Resolved, site.RootPosition, site.RootRotation, PiecesAround(player, site.RootPosition));
+            built = parts.Count;
+            var away = site.RootPosition;
+            foreach (var angle in new[] { 180f, 90f, 270f, 135f, 225f, 45f, 315f, 0f })
+            {
+                away = site.RootPosition + (Quaternion.Euler(0f, angle, 0f) * Vector3.forward * 28f);
+                if (WorldGenerator.instance.GetHeight(away.x, away.z) > ZoneSystem.instance.m_waterLevel + 1f)
+                {
+                    break;
+                }
+            }
+
+            away.y = WorldGenerator.instance.GetHeight(away.x, away.z) + 1f;
+            yield return TeleportNear(player, away, BuildFacing, "28 m from the build");
+            yield return EquipHammer(player);
+            var needBench = parts.Values.Count(p => p.m_craftingStation != null
+                && CraftingStation.HaveBuildStationInRange(p.m_craftingStation.m_name, player.transform.position) == null);
+            var distance = Mathf.Sqrt(site.WorldBox.SqrDistance(player.transform.position));
+            Log($"{built} of {site.Total} built, {distance:0} m from the build's box, {needBench} need a station the game finds none of");
+            FirstEntry(player);
+            Check(BlueprintMode.CurrentSite == site && needBench > 0 && needBench < built,
+                $"{distance:0} m away the key still continues it, and {needBench} of its {built} pieces need a workbench the player has not near");
+            yield return PressBound("Remove");
+            yield return Frames(2);
+            Check(SiteRemovePopup.Showing, "Remove opens the window");
+            yield return ClickButton(SiteRemovePopup.ButtonFor(SiteRemovePopup.Choice.WholeStructure));
+            yield return Frames(3);
+            said = BlueprintMode.LastMessage ?? "";
+            left = parts.Values.Where(p => p != null).ToList();
+            Check(left.Count == needBench && left.All(p => p.m_craftingStation != null),
+                $"the pieces that need a workbench stay, the rest came down: {left.Count} left of {built}");
+            Check(said == $"Workshop removed: {built - needBench} of {built} pieces taken down. Left standing: {needBench} need a workbench nearby.",
+                $"the message says why: '{said}'");
+            Check(!SiteStore.All.Contains(site) && !File.Exists(path) && site.Ghost == null && !BlueprintMode.Active,
+                $"the plan is removed all the same: kept {SiteStore.All.Contains(site)}, file {File.Exists(path)}, blueprint mode {BlueprintMode.Active}");
+
+            yield return TeleportNear(player, spot + Vector3.up, BuildFacing, "back to the build spot");
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            ClearDrops(site.WorldBox.center);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>The remove window is up as the game's popup, with its three buttons, and the press that opened it did nothing else.</summary>
+        private static void CheckRemoveWindow(Player player, Site site, int built, string what)
+        {
+            var controller = player.GetComponent<PlayerController>();
+            Check(SiteRemovePopup.Showing && UnifiedPopup.IsVisible() && Menu.IsVisible() && !player.TakeInput() && !controller.TakeInput(false),
+                $"{what}: the window is up and the game counts it as a popup: popup {UnifiedPopup.IsVisible()}, Menu.IsVisible {Menu.IsVisible()},"
+                + $" player input {player.TakeInput()}, walking {controller.TakeInput(false)}");
+            var header = SiteRemovePopup.HeaderShown ?? "";
+            var text = SiteRemovePopup.TextShown ?? "";
+            Check(header == $"Remove {site.Name}?" && text.StartsWith($"{built} of {site.Total} pieces are built."),
+                $"{what}: '{header}' / '{text.Replace("\n", " | ")}'");
+
+            var buttons = new[] { SiteRemovePopup.Choice.Cancel, SiteRemovePopup.Choice.UnbuiltParts, SiteRemovePopup.Choice.WholeStructure }
+                .Select(SiteRemovePopup.ButtonFor).ToList();
+            var labels = buttons.Select(b => b != null ? b.transform.Find("Text")?.GetComponent<TMPro.TMP_Text>() : null).ToList();
+            var boxes = buttons.Select(b => b != null ? ScreenBox((RectTransform)b.transform) : Rect.zero).ToList();
+            var panel = buttons[0] != null ? ScreenBox((RectTransform)buttons[0].transform.parent) : Rect.zero;
+            var inRow = buttons.All(b => b != null && b.gameObject.activeInHierarchy && b.interactable)
+                && boxes[0].xMax < boxes[1].xMin && boxes[1].xMax < boxes[2].xMin
+                && Mathf.Abs(boxes[0].y - boxes[2].y) < 0.5f
+                && boxes.All(b => panel.Contains(b.min) && panel.Contains(b.max));
+            var words = string.Join(", ", labels.Select(l => l != null ? l.text : "?"));
+            var fit = labels.All(l => l != null && l.GetPreferredValues(l.text).x <= l.rectTransform.rect.width + 0.5f);
+            Check(inRow && fit && words == "Cancel, Unbuilt parts, Whole structure",
+                $"{what}: three buttons in a row inside the panel, left to right '{words}', every label fits: "
+                + string.Join(" ", boxes.Select(b => $"[{b.xMin:0}-{b.xMax:0}]")) + $" panel [{panel.xMin:0}-{panel.xMax:0}]");
+            Check(SiteStore.All.Contains(site) && BlueprintMode.CurrentSite == site && Standing(player, site) == built
+                && !Menu.instance.m_root.gameObject.activeSelf,
+                $"{what}: the press did nothing else: still Continue, {Standing(player, site)} of {built} standing, pause menu {Menu.instance.m_root.gameObject.activeSelf}");
+        }
+
+        /// <summary>Cancel in any of its ways: the window is gone, nothing changed, still Continue, the pause menu shut, the controls back.</summary>
+        private static IEnumerator CheckRemoveCancelled(Player player, Site site, string path, int built, string what)
+        {
+            yield return Frames(3);
+            Check(!SiteRemovePopup.IsOpen && !UnifiedPopup.IsVisible() && SiteRemovePopup.LastChoice == SiteRemovePopup.Choice.Cancel,
+                $"{what} closes the window as Cancel: {SiteRemovePopup.LastChoice}");
+            Check(SiteStore.All.Contains(site) && File.Exists(path) && site.Ghost != null && BlueprintMode.CurrentSite == site
+                && Standing(player, site) == built,
+                $"{what}: nothing changed and Continue stays on: kept {SiteStore.All.Contains(site)}, file {File.Exists(path)},"
+                + $" ghost {site.Ghost != null}, on '{BlueprintMode.EntryName}', {Standing(player, site)} of {built} standing");
+            Check(!Menu.instance.m_root.gameObject.activeSelf && player.TakeInput(),
+                $"{what}: the pause menu did not open ({Menu.instance.m_root.gameObject.activeSelf}), the player has the controls back ({player.TakeInput()})");
+        }
+
+        /// <summary>A real left click through the input system, where the button shows on screen.</summary>
+        private static IEnumerator ClickButton(UnityEngine.UI.Button button)
+        {
+            if (button == null)
+            {
+                Check(false, "no button to click");
+                yield break;
+            }
+
+            yield return ClickScreen(ScreenBox((RectTransform)button.transform).center);
+        }
+
+        private static IEnumerator ClickScreen(Vector2 at)
+        {
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            if (mouse == null)
+            {
+                Check(false, "no mouse device to click with");
+                yield break;
+            }
+
+            // WithButton changes the struct it is called on, so the press gets a state of its own.
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, new UnityEngine.InputSystem.LowLevel.MouseState { position = at });
+            yield return Frames(2);
+            var down = new UnityEngine.InputSystem.LowLevel.MouseState { position = at }.WithButton(UnityEngine.InputSystem.LowLevel.MouseButton.Left);
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, down);
+            yield return Frames(2);
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, new UnityEngine.InputSystem.LowLevel.MouseState { position = at });
+            yield return Frames(2);
+        }
+
+        /// <summary>A UI rectangle in screen pixels. Every canvas the game draws its popups on is an overlay.</summary>
+        private static Rect ScreenBox(RectTransform rect)
+        {
+            var corners = new Vector3[4];
+            rect.GetWorldCorners(corners);
+            return Rect.MinMaxRect(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
+        }
+
+        private static string Name(GameObject go)
+        {
+            return go != null ? go.name : "nothing";
+        }
+
+        /// <summary>
+        /// What the hammer's Remove gives back for these pieces (Piece.DropResources): every material it
+        /// marks as recovered, in full for a piece a player placed, a third for any other, none when
+        /// the world makes it free.
+        /// </summary>
+        private static Dictionary<string, int> Recoverable(IEnumerable<Piece> pieces)
+        {
+            var back = new Dictionary<string, int>();
+            foreach (var piece in pieces)
+            {
+                if (ZoneSystem.instance.GetGlobalKey(piece.FreeBuildKey()))
+                {
+                    continue;
+                }
+
+                foreach (var requirement in piece.m_resources)
+                {
+                    if (requirement.m_resItem == null || !requirement.m_recover || requirement.m_amount <= 0)
+                    {
+                        continue;
+                    }
+
+                    var amount = piece.IsPlacedByPlayer() ? requirement.m_amount : Mathf.Max(1, requirement.m_amount / 3);
+                    var item = requirement.m_resItem.m_itemData.m_shared.m_name;
+                    back.TryGetValue(item, out var had);
+                    back[item] = had + amount;
+                }
+            }
+
+            return back;
+        }
+
+        /// <summary>How many of an item the player has, in the bag and lying on the ground within 30 m of a point.</summary>
+        private static int Around(Player player, Vector3 centre, string item)
+        {
+            var ground = ItemDrop.s_instances
+                .Where(d => d != null && d.m_itemData.m_shared.m_name == item && Vector3.Distance(d.transform.position, centre) < 30f)
+                .Sum(d => d.m_itemData.m_stack);
+            return player.GetInventory().CountItems(item) + ground;
+        }
+
+        /// <summary>Items lying on the ground within 30 m go, so the next check starts clean.</summary>
+        private static void ClearDrops(Vector3 centre)
+        {
+            foreach (var drop in ItemDrop.s_instances.Where(d => d != null && Vector3.Distance(d.transform.position, centre) < 30f).ToList())
+            {
+                ZNetScene.instance.Destroy(drop.gameObject);
+            }
         }
 
         /// <summary>The input system's button for one of the pad's buttons. The triggers are axes, not buttons.</summary>
@@ -5226,7 +5796,8 @@ namespace ValheimTomrer.Dev
             CheckOnScreen("the Workshop's list");
 
             var description = hud.m_pieceDescription.text;
-            Check(description.Contains("Wheel: rotate."), $"the normal hint line stays: '{description}'");
+            Check(description.EndsWith($"{kit.Parts.Count} pieces.") && NoControls(description),
+                $"the card counts the pieces and lists no controls (they are in the game's hint row): '{description.Replace("\n", " | ")}'");
             yield return CardPadHint(kit, false);
 
             // Still: a refresh every 0.5 s, and the plan is not worked out again.
@@ -5256,6 +5827,7 @@ namespace ValheimTomrer.Dev
             // The click: part of it goes up, and the list says what is left in the next frames.
             yield return AimBlueprint(player, kit);
             refreshes = BlueprintInfoCard.Refreshes;
+            var sites = SiteStore.All.Count;
             var clicked = BlueprintMode.TryBuild(player);
             yield return null;
             yield return null;
@@ -5264,6 +5836,9 @@ namespace ValheimTomrer.Dev
             Check(clicked && BlueprintInfoCard.Refreshes > refreshes && wood != null
                 && wood.Have.text == MaterialList.Short(after.Count("$item_wood")),
                 $"right after the click the list shows the wood left: '{(wood != null ? wood.Have.text : "no row")}', {after.Count("$item_wood")} in the bag");
+
+            // And the card is on Continue already: the click went there on its own.
+            yield return CheckContinuesAfterClick(sites, "the card's click");
         }
 
         /// <summary>
@@ -5289,6 +5864,8 @@ namespace ValheimTomrer.Dev
             yield return CardRefreshed();
             var list = BlueprintInfoCard.List;
             Check(BlueprintMode.CurrentSite == site && list != null && list.Visible, "Continue on it: the list is on the card");
+            var title = Hud.instance.m_buildSelection.text;
+            Check(title == "Continue: Workshop", $"the key's Continue has the same card title: '{title}'");
             if (list == null || BlueprintMode.CurrentSite != site)
             {
                 yield break;
@@ -5333,8 +5910,8 @@ namespace ValheimTomrer.Dev
             Check(footer.StartsWith($"Built {site.BuiltCount} of {site.Total}.") && footer.EndsWith($"Can build now: {site.ReadyCount} more."),
                 $"the footer starts \"Built\" and counts the next click ({site.ReadyCount}): '{footer}'");
             var description = Hud.instance.m_pieceDescription.text;
-            Check(description.Contains("Click: build what you can.") && description.Contains("twice: forget the plan.")
-                && !description.Contains("Wheel"), $"the hint line says what Continue does: '{description}'");
+            Check(description == (site.Resolved.Blueprint.Description ?? "") && NoControls(description),
+                $"the Continue card keeps only the blueprint's own text, no controls: '{description.Replace("\n", " | ")}'");
             yield return CardPadHint(kit, true);
             CheckFooterAtBottom(list, "the Continue list");
             CheckLabels(list);
@@ -5347,38 +5924,34 @@ namespace ValheimTomrer.Dev
         }
 
         /// <summary>
-        /// With the pad in use (the game says so) the card's hint line names the pad's buttons, in the
-        /// PlayStation names of the pad in hand; with the keyboard again, the keys come back.
+        /// With the pad in use (a press on a controller the game reads) the card still lists no
+        /// controls, and the game's hint row under it has switched to the pad set. Back on the
+        /// keyboard, the keyboard set.
         /// </summary>
         private static IEnumerator CardPadHint(ResolvedBlueprint kit, bool continuing)
         {
-            _pad = new PadState { Ps = true };
-            PadReader.Fake = _pad;
-            var source = ZInput.m_inputSource;
-            ZInput.instance.OnInput(ZInput.InputSource.Gamepad, true);
-            yield return Frames(3);
-
-            var g = EditorInput.Glyphs;
-            var mod = WorldPad.NameOf(WorldPad.Modifier, g);
+            var mode = continuing ? HintRow.Mode.Continue : HintRow.Mode.Blueprint;
+            yield return HintsToPad();
+            yield return Frames(2);
             var text = Hud.instance.m_pieceDescription.text;
-            var want = continuing
-                ? $"{WorldPad.NameOf("JoyPlace", g)}: build what you can. {WorldPad.NameOf("JoyRemove", g)} twice: forget the plan. □: next. {mod} + □: edit it."
-                : $"{kit.Parts.Count} pieces. {mod} + right stick: rotate. □: next blueprint. {mod} + □: edit it.";
-            Check(ZInput.IsGamepadActive() && text.EndsWith(want) && !text.Contains("Wheel") && !text.Contains("F7"),
-                $"with the pad in use the {(continuing ? "Continue" : "normal")} hint line names its buttons: '{text.Replace("\n", " | ")}'");
+            Check(ZInput.IsGamepadActive() && NoControls(text),
+                $"with the pad in use the {(continuing ? "Continue" : "normal")} card lists no controls: '{text.Replace("\n", " | ")}'");
+            Check(HintRow.Shown == mode && HintRow.GamepadRow != null && HintRow.GamepadRow.gameObject.activeInHierarchy
+                && HintRow.ShownEntries.Count > 0
+                && HintRow.ShownEntries[0].GamepadEntry.text.Contains(Localization.instance.GetBoundKeyString("JoyPlace", true)),
+                $"and the game's hint row under it shows the {mode} pad set: "
+                + string.Join(", ", HintRow.ShownEntries.Select(e => e.GamepadEntry.text)));
             if (!continuing)
             {
                 yield return new WaitForSeconds(0.6f);
                 yield return Screenshot("card-materials-pad");
             }
 
-            ZInput.instance.OnInput(source, true);
+            yield return WorldPadOff();
             yield return Frames(3);
             text = Hud.instance.m_pieceDescription.text;
-            Check(!ZInput.IsGamepadActive() && text.Contains(continuing ? "Click: build what you can." : "Wheel: rotate.") && !text.Contains("□"),
-                $"back on the keyboard the keys come back: '{text.Replace("\n", " | ")}'");
-            PadReader.Fake = null;
-            _pad = null;
+            Check(!ZInput.IsGamepadActive() && NoControls(text) && HintRow.Shown == mode && HintRow.KeyboardRow.gameObject.activeInHierarchy,
+                $"back on the keyboard: still no controls on the card, the row shows the keyboard set: '{text.Replace("\n", " | ")}'");
         }
 
         /// <summary>A made-up blueprint whose four pieces need 12 different items, all from the workbench.</summary>
@@ -5660,6 +6233,720 @@ namespace ValheimTomrer.Dev
             var screen = ScreenRect(card);
             text.Append($" | card pixels ({screen.xMin:0},{screen.yMin:0})-({screen.xMax:0},{screen.yMax:0}), list pixels {ScreenRect(panel)}");
             Log(text.ToString());
+        }
+
+        // ---------- scenario: hint_row ----------
+
+        /// <summary>Counts how often the object it sits on is switched on.</summary>
+        private sealed class EnableCounter : MonoBehaviour
+        {
+            public int Count;
+
+            private void OnEnable()
+            {
+                Count++;
+            }
+        }
+
+        /// <summary>What the test expects one hint to show, worked out here from the game's own names.</summary>
+        private sealed class WantHint
+        {
+            public string Label;
+
+            /// <summary>The keyboard side, "Shift + wheel".</summary>
+            public string Keys;
+
+            /// <summary>The pad side, the game's icon tags.</summary>
+            public string Pad;
+        }
+
+        /// <summary>The game's own row as it shows it, before a mode: to compare with after.</summary>
+        private sealed class VanillaRow
+        {
+            public TMPro.TMP_Text KbLabel;
+            public TMPro.TMP_Text KbKey;
+            public UnityEngine.UI.Image KbCap;
+            public TMPro.TMP_Text KbPlus;
+            public UnityEngine.UI.Image KbWheel;
+            public TMPro.TMP_Text GpText;
+            public float KbSpacing;
+            public float GpSpacing;
+            public float EntrySpacing;
+            public float KbLabelSize;
+            public float GpSize;
+            public float KbCentreY;
+            public float GpCentreY;
+        }
+
+        /// <summary>
+        /// The controls of blueprint mode, Continue and the capture sit in the game's own hint row, in
+        /// its own look, on the keyboard and on a pad the game reads, and switch when the input does.
+        /// The game's own row comes back unchanged after each. The card and the capture's status line
+        /// carry no controls any more. Screenshots of every state.
+        /// </summary>
+        private static IEnumerator TestHintRow(Player player)
+        {
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            ClearSites();
+            yield return new WaitForSeconds(0.5f);
+            PieceCatalog.Ensure();
+
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Name == "Workshop");
+            ResolvedBlueprint resolved = null;
+            var error = "no Workshop kit";
+            if (kit == null || !ResolvedBlueprint.TryResolve(kit, out resolved, out error))
+            {
+                Check(false, "the workshop kit resolves: " + error);
+                yield break;
+            }
+
+            Unlock(player, resolved);
+            ClearInventoryExceptHammer(player);
+            yield return EquipHammer(player);
+            var hints = KeyHints.instance;
+            Check(hints != null, "the game's hint row is there");
+            if (hints == null)
+            {
+                yield break;
+            }
+
+            // ---- 1. the game's own row with the hammer out, keyboard then pad ----
+            BlueprintMode.Exit();
+            player.m_lookPitch = 20f;
+            yield return new WaitForSeconds(0.5f);
+            var vanilla = ReadVanilla(hints);
+            Check(vanilla != null && HintRow.Shown == HintRow.Mode.None && hints.m_buildHints.activeSelf,
+                "a normal hammer piece: the game's build hints show, none of ours");
+            if (vanilla == null)
+            {
+                yield break;
+            }
+
+            var gameRow = GameRow(hints);
+            Log("the game's row, keyboard: " + gameRow);
+            yield return Screenshot("hints-vanilla-keys");
+            yield return HintsToPad();
+            var gameRowPad = GameRow(hints);
+            vanilla.GpCentreY = ScreenRect(vanilla.GpText.rectTransform).center.y;
+            vanilla.GpSize = vanilla.GpText.fontSize;
+            Log("the game's row, pad: " + gameRowPad);
+            yield return Screenshot("hints-vanilla-pad");
+            yield return HintsToKeyboard();
+
+            // ---- 2. a blueprint in hand ----
+            yield return AimBlueprint(player, resolved);
+            player.m_lookPitch = 20f;
+            yield return Frames(4);
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Blueprint, "a blueprint in hand");
+            var counter = hints.m_buildHints.AddComponent<EnableCounter>();
+            yield return Frames(30);
+            Check(counter.Count == 0 && !hints.m_buildHints.activeSelf,
+                $"the game's build hints stay off while ours show, not switched on and off each frame: on {counter.Count} times in 30 frames");
+            UnityEngine.Object.Destroy(counter);
+            var description = Hud.instance.m_pieceDescription.text;
+            var count = $"{resolved.Parts.Count} pieces.";
+            Check(description == (string.IsNullOrEmpty(kit.Description) ? count : kit.Description + "\n" + count) && NoControls(description),
+                $"the card keeps its own text and the piece count, no controls: '{description.Replace("\n", " | ")}'");
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("hints-blueprint-keys");
+            yield return HintsToPad();
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Blueprint, "a blueprint in hand, pad");
+            description = Hud.instance.m_pieceDescription.text;
+            Check(NoControls(description), $"with the pad in use the card still has no controls: '{description.Replace("\n", " | ")}'");
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("hints-blueprint-pad");
+            yield return HintsToKeyboard();
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Blueprint, "a blueprint in hand, back on the keyboard");
+
+            BlueprintMode.Exit();
+            yield return Frames(4);
+            Check(HintRow.Shown == HintRow.Mode.None && GameRow(hints) == gameRow,
+                "blueprint mode off: the game's row is back exactly as it was: " + GameRow(hints));
+
+            // ---- 3. Continue on an unfinished build ----
+            yield return StartSite(player, resolved, (name, amount) => name == "$item_wood" ? amount / 2 : amount);
+            FirstEntry(player);
+            player.m_lookPitch = 20f;
+            yield return Frames(4);
+            Check(BlueprintMode.CurrentSite != null, "set-up: the key offers Continue on it");
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Continue, "Continue");
+            description = Hud.instance.m_pieceDescription.text;
+            Check(description == (kit.Description ?? "") && NoControls(description),
+                $"the Continue card keeps only the blueprint's own text: '{description.Replace("\n", " | ")}'");
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("hints-continue-keys");
+            yield return HintsToPad();
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Continue, "Continue, pad");
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("hints-continue-pad");
+            yield return HintsToKeyboard();
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Continue, "Continue, back on the keyboard");
+            BlueprintMode.Exit();
+            yield return Frames(4);
+            Check(HintRow.Shown == HintRow.Mode.None && GameRow(hints) == gameRow,
+                "Continue off: the game's row is back exactly as it was: " + GameRow(hints));
+            ClearSites();
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(0.5f);
+
+            // ---- 4. a capture with the hammer out ----
+            player.m_lookPitch = 35f;
+            yield return new WaitForSeconds(0.3f);
+            WorldCapture.Begin(player.transform.position + (player.transform.forward * 8f));
+            WorldCapture.Pin(player.transform.position + (player.transform.forward * 8f));
+            yield return Frames(4);
+            Check(WorldCapture.Active && WorldCapture.LastMessage == "", $"a capture starts with no \"press the key\" message: '{WorldCapture.LastMessage}'");
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Capture, "a capture, hammer out");
+            var status = CaptureHud.Text;
+            Check(CaptureHud.Visible && status.StartsWith("Capture  ") && !status.Contains("\n") && NoControls(status),
+                $"the capture's status is one line with no controls: '{status.Replace("\n", " | ")}'");
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("hints-capture-hammer-keys");
+            yield return HintsToPad();
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Capture, "a capture, hammer out, pad");
+            status = CaptureHud.Text;
+            Check(!status.Contains("\n") && NoControls(status), $"with the pad, still one line with no controls: '{status}'");
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("hints-capture-hammer-pad");
+            WorldCapture.Cancel();
+            yield return Frames(4);
+            Check(HintRow.Shown == HintRow.Mode.None && GameRow(hints) == gameRowPad,
+                "the capture stopped on the pad: the game's pad row is back exactly as it was: " + GameRow(hints));
+            yield return HintsToKeyboard();
+            yield return Frames(2);
+            Check(GameRow(hints) == gameRow, "and back on the keyboard, the game's keyboard row as it was: " + GameRow(hints));
+
+            // ---- 5. a capture with the hammer away: the game showed nothing ----
+            var hammer = player.GetRightItem();
+            player.UnequipItem(hammer);
+            yield return new WaitForSeconds(0.5f);
+            var bare = GameRow(hints);
+            Log("the game's row, hammer away: " + bare);
+            WorldCapture.Begin(player.transform.position + (player.transform.forward * 8f));
+            WorldCapture.Pin(player.transform.position + (player.transform.forward * 8f));
+            yield return Frames(4);
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Capture, "a capture, hammer away");
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("hints-capture-nohammer-keys");
+            yield return HintsToPad();
+            yield return CheckHintRow(hints, vanilla, HintRow.Mode.Capture, "a capture, hammer away, pad");
+            yield return new WaitForSeconds(0.3f);
+            yield return Screenshot("hints-capture-nohammer-pad");
+            yield return HintsToKeyboard();
+            WorldCapture.Cancel();
+            yield return Frames(4);
+            Check(HintRow.Shown == HintRow.Mode.None && GameRow(hints) == bare,
+                "the capture stopped with the hammer away: the game's row is as it was: " + GameRow(hints));
+
+            // ---- 6. the same with a club: the game showed its combat hints ----
+            var club = player.GetInventory().AddItem("Club", 1, 1, 0, 0L, "", false);
+            if (club != null)
+            {
+                player.EquipItem(club);
+                yield return new WaitForSeconds(0.5f);
+                var combat = GameRow(hints);
+                Check(hints.m_combatHints.activeSelf, "set-up: with a club the game shows its combat hints");
+                WorldCapture.Begin(player.transform.position + (player.transform.forward * 8f));
+                WorldCapture.Pin(player.transform.position + (player.transform.forward * 8f));
+                yield return Frames(4);
+                Check(HintRow.Shown == HintRow.Mode.Capture && !hints.m_combatHints.activeSelf,
+                    "a capture with a club: our capture hints in place of the combat hints");
+                WorldCapture.Cancel();
+                yield return Frames(4);
+                Check(HintRow.Shown == HintRow.Mode.None && GameRow(hints) == combat,
+                    "the capture stopped: the combat hints are back as they were: " + GameRow(hints));
+                player.UnequipItem(club);
+                player.GetInventory().RemoveItem(club);
+            }
+            else
+            {
+                Check(false, "set-up: a club to hold");
+            }
+
+            yield return WorldPadOff();
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            ClearSites();
+        }
+
+        /// <summary>
+        /// The controls must be in the hint row, nowhere else: no key, button or wheel names and no
+        /// "do this: that" hints in a text.
+        /// </summary>
+        private static bool NoControls(string text)
+        {
+            var words = new[]
+            {
+                "Wheel", "wheel", "rotate", "next", "edit", "Click", "click", "Esc", "cancel", "R1", "R2", "L2", "RT", "RB", "LT",
+                "□", "△", "○", "D-pad", "<sprite", "Shift", "Alt", "F7", "F8", "B:", "Remove",
+            };
+            return words.All(w => !text.Contains(w));
+        }
+
+        /// <summary>The game's own row as it shows now: which of its groups are on, and every text and picture on screen in them. Ours left out.</summary>
+        private static string GameRow(KeyHints hints)
+        {
+            var text = new StringBuilder();
+            foreach (Transform group in hints.transform)
+            {
+                if (HintRow.Root != null && group == HintRow.Root)
+                {
+                    continue;
+                }
+
+                text.Append(group.name).Append(group.gameObject.activeSelf ? " on" : " off");
+                if (group.gameObject.activeInHierarchy)
+                {
+                    text.Append(" [");
+                    foreach (var label in group.GetComponentsInChildren<TMPro.TMP_Text>(false))
+                    {
+                        text.Append(label.transform.parent.name).Append('/').Append(label.name).Append('=').Append(label.text).Append("; ");
+                    }
+
+                    foreach (var image in group.GetComponentsInChildren<UnityEngine.UI.Image>(false))
+                    {
+                        text.Append(image.name).Append("; ");
+                    }
+
+                    text.Append(']');
+                }
+
+                text.Append(" | ");
+            }
+
+            return text.ToString();
+        }
+
+        /// <summary>The game's own pieces of its build row, and where they sit, read while it shows on the keyboard.</summary>
+        private static VanillaRow ReadVanilla(KeyHints hints)
+        {
+            var build = hints.m_buildHints.transform;
+            var kb = build.Find("Keyboard");
+            var gp = build.Find("Gamepad");
+            var place = kb != null ? kb.Find("Place") : null;
+            var row = new VanillaRow
+            {
+                KbLabel = place != null ? place.Find("Text")?.GetComponent<TMPro.TMP_Text>() : null,
+                KbCap = place != null ? place.Find("key_bkg")?.GetComponent<UnityEngine.UI.Image>() : null,
+                KbKey = place != null ? place.Find("key_bkg/Key")?.GetComponent<TMPro.TMP_Text>() : null,
+                KbPlus = kb != null ? kb.Find("Copy/Text (1)")?.GetComponent<TMPro.TMP_Text>() : null,
+                KbWheel = kb != null ? kb.Find("rotate/mousew_icon")?.GetComponent<UnityEngine.UI.Image>() : null,
+                GpText = gp != null ? gp.Find("Text - Place")?.GetComponent<TMPro.TMP_Text>() : null,
+            };
+            if (row.KbLabel == null || row.KbCap == null || row.KbKey == null || row.KbPlus == null || row.KbWheel == null || row.GpText == null)
+            {
+                Check(false, "the game's build row has its Place, Copy, rotate and pad Place entries");
+                return null;
+            }
+
+            row.KbSpacing = kb.GetComponent<UnityEngine.UI.HorizontalLayoutGroup>().spacing;
+            row.GpSpacing = gp.GetComponent<UnityEngine.UI.HorizontalLayoutGroup>().spacing;
+            row.EntrySpacing = place.GetComponent<UnityEngine.UI.HorizontalLayoutGroup>().spacing;
+            row.KbLabelSize = row.KbLabel.fontSize;
+            row.GpSize = row.GpText.fontSize;
+            row.KbCentreY = ScreenRect((RectTransform)place).center.y;
+            Log($"the game's row: label {row.KbLabel.font.name} {row.KbLabelSize} {row.KbLabel.color} '{row.KbLabel.fontSharedMaterial.name}',"
+                + $" key {row.KbKey.font.name} {row.KbKey.fontSize} {row.KbKey.fontStyle}, cap '{row.KbCap.sprite.name}' {row.KbCap.color},"
+                + $" spacing {row.KbSpacing} / {row.GpSpacing} / {row.EntrySpacing}, row centre y {row.KbCentreY:0.#}");
+            Check(ZInput.IsMouseActive() && !ZInput.IsGamepadActive() && row.KbLabel.gameObject.activeInHierarchy,
+                "the game's keyboard row shows");
+            return row;
+        }
+
+        /// <summary>What each mode must show, from the game's own button names and the mod's keys.</summary>
+        private static List<WantHint> WantHints(HintRow.Mode mode)
+        {
+            string G(string button) => Localization.instance.GetBoundKeyString(button, true);
+            string K(KeyCode key) => ZInput.KeyCodeToDisplayName(key);
+            string Plus(string a, string b) => a + " + " + b;
+            string Or(string a, string b) => a + " / " + b;
+            WantHint W(string label, string keys, string pad) => new WantHint { Label = label, Keys = keys, Pad = pad };
+
+            var edit = W("Edit", K(EditorConfig.Key.Value), Plus(G("JoyAltKeys"), G("JoyButtonX")));
+            var menu = W("Build Menu", G("BuildMenu"), G(ZInput.IsNonClassicFunctionality() ? "JoyBuildMenu" : "JoyUse"));
+            var rotate = ZInput.InputLayout == InputLayout.Default ? Plus(G("JoyRotate"), G("JoyRStick")) : Or(G("JoyRotate"), G("JoyRotateRight"));
+            switch (mode)
+            {
+                case HintRow.Mode.Blueprint:
+                    return new List<WantHint>
+                    {
+                        W("Build", G("Attack"), G("JoyPlace")),
+                        W("Next blueprint", K(ValheimTomrerPlugin.BlueprintKey.Value), G("JoyButtonX")),
+                        edit,
+                        menu,
+                        W("Rotate", "wheel", rotate),
+                    };
+                case HintRow.Mode.Continue:
+                    return new List<WantHint>
+                    {
+                        W("Build", G("Attack"), G("JoyPlace")),
+                        W("Remove", G("Remove"), G("JoyRemove")),
+                        W("Next", K(ValheimTomrerPlugin.BlueprintKey.Value), G("JoyButtonX")),
+                        edit,
+                        menu,
+                    };
+                case HintRow.Mode.Capture:
+                    var leftRight = Or(G("JoyDPadLeft"), G("JoyDPadRight"));
+                    var upDown = Or(G("JoyDPadUp"), G("JoyDPadDown"));
+                    return new List<WantHint>
+                    {
+                        W("Capture", K(EditorConfig.CaptureKey.Value), Plus(G("JoyAltKeys"), G("JoyButtonY"))),
+                        W("Turn", "wheel", leftRight),
+                        W("Width", "Shift + wheel", Plus(G("JoyAltKeys"), leftRight)),
+                        W("Depth", "Alt + wheel", Plus(G("JoyAltKeys"), upDown)),
+                        W("Both sides", "Shift + Alt + wheel", upDown),
+                        W("Stop", K(KeyCode.Escape), G("JoyButtonB")),
+                    };
+                default:
+                    return new List<WantHint>();
+            }
+        }
+
+        /// <summary>A keyboard entry as it shows: its label, then its caps' texts, "+" and "wheel", in order.</summary>
+        private static string ShownKeys(RectTransform entry, out string label)
+        {
+            label = null;
+            var parts = new List<string>();
+            foreach (Transform child in entry)
+            {
+                if (!child.gameObject.activeSelf)
+                {
+                    continue;
+                }
+
+                var image = child.GetComponent<UnityEngine.UI.Image>();
+                var text = child.GetComponent<TMPro.TMP_Text>();
+                if (image != null && image.sprite != null && image.sprite.name == "mousew_icon")
+                {
+                    parts.Add("wheel");
+                }
+                else if (image != null)
+                {
+                    var key = child.GetComponentInChildren<TMPro.TMP_Text>();
+                    parts.Add(key != null ? key.text : "?");
+                }
+                else if (text != null && label == null)
+                {
+                    label = text.text;
+                }
+                else if (text != null)
+                {
+                    parts.Add(text.text);
+                }
+            }
+
+            return string.Join(" ", parts);
+        }
+
+        /// <summary>
+        /// One mode's row: exactly its set, in the game's row and look, on the input in use. The game's
+        /// groups are off, ours on; the entries are the game's own font, size, colour, material, caps,
+        /// icons and spacing; they sit on the game's line, on screen, left to right, with no overlap.
+        /// </summary>
+        private static IEnumerator CheckHintRow(KeyHints hints, VanillaRow vanilla, HintRow.Mode mode, string what)
+        {
+            yield return Frames(2);
+            var pad = ZInput.IsGamepadActive();
+            var want = WantHints(mode);
+            var entries = HintRow.ShownEntries;
+            var gameOff = !hints.m_buildHints.activeSelf && !hints.m_combatHints.activeSelf && !hints.m_fishingHints.activeSelf
+                && !hints.m_inventoryHints.activeSelf && !hints.m_radialHints.activeSelf;
+            Check(HintRow.Shown == mode && HintRow.Root != null && HintRow.Root.gameObject.activeInHierarchy && gameOff,
+                $"{what}: our {mode} hints show in the game's row, every group of the game's is off (shown {HintRow.Shown})");
+            Check(pad ? HintRow.GamepadRow.gameObject.activeInHierarchy && !HintRow.KeyboardRow.gameObject.activeSelf
+                    : HintRow.KeyboardRow.gameObject.activeInHierarchy && !HintRow.GamepadRow.gameObject.activeSelf,
+                $"{what}: the {(pad ? "pad" : "keyboard")} row shows, the other one not (the game says pad {pad})");
+            if (HintRow.Shown != mode || HintRow.Root == null)
+            {
+                yield break;
+            }
+
+            // Exactly the set.
+            var shown = new List<string>();
+            var ok = entries.Count == want.Count;
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                var keys = ShownKeys(entry.KeyboardEntry, out var label);
+                var padText = entry.GamepadEntry.text;
+                shown.Add(pad ? padText : $"{label} [{keys}]");
+                if (i >= want.Count)
+                {
+                    continue;
+                }
+
+                var w = want[i];
+                ok &= label == w.Label && keys == w.Keys && !string.IsNullOrEmpty(w.Pad)
+                    && padText == $"{w.Label} <mspace=0.6em> {w.Pad}</mspace>";
+            }
+
+            Check(ok, $"{what}: exactly {want.Count} entries, "
+                + string.Join(", ", want.Select(w => pad ? w.Label + " " + w.Pad : $"{w.Label} [{w.Keys}]"))
+                + " | shown: " + string.Join(", ", shown));
+
+            // The same buttons, in the same family, as the game's own entries next to them.
+            var vanillaPlace = vanilla.GpText.text;
+            var place = entries.Count > 0 ? entries[0].GamepadEntry.text : "";
+            var placeGlyph = Localization.instance.GetBoundKeyString("JoyPlace", true);
+            Check(!pad || mode == HintRow.Mode.Capture || (vanillaPlace.Contains(placeGlyph) && place.Contains(placeGlyph)),
+                $"{what}: the build button is the game's own Place icon: ours '{place}', the game's '{vanillaPlace}'");
+
+            // The game's look.
+            var style = new List<string>();
+            var gpRow = HintRow.GamepadRow.GetComponent<UnityEngine.UI.HorizontalLayoutGroup>();
+            var kbRow = HintRow.KeyboardRow.GetComponent<UnityEngine.UI.HorizontalLayoutGroup>();
+            if (gpRow == null || kbRow == null || gpRow.spacing != vanilla.GpSpacing || kbRow.spacing != vanilla.KbSpacing
+                || gpRow.childAlignment != TextAnchor.MiddleRight || kbRow.childAlignment != TextAnchor.MiddleRight)
+            {
+                style.Add("row layout");
+            }
+
+            foreach (var entry in entries)
+            {
+                var g = entry.GamepadEntry;
+                if (g.font != vanilla.GpText.font || g.fontSize != vanilla.GpSize || g.color != vanilla.GpText.color
+                    || g.fontSharedMaterial != vanilla.GpText.fontSharedMaterial || g.fontStyle != vanilla.GpText.fontStyle)
+                {
+                    style.Add($"pad '{entry.Label}' {g.font.name} {g.fontSize} {g.color} {g.fontSharedMaterial.name}");
+                }
+
+                var kb = entry.KeyboardEntry;
+                var entryLayout = kb.GetComponent<UnityEngine.UI.HorizontalLayoutGroup>();
+                if (entryLayout == null || entryLayout.spacing != vanilla.EntrySpacing)
+                {
+                    style.Add($"'{entry.Label}' entry spacing");
+                }
+
+                foreach (Transform child in kb)
+                {
+                    var image = child.GetComponent<UnityEngine.UI.Image>();
+                    var text = child.GetComponent<TMPro.TMP_Text>();
+                    if (image != null && image.sprite != null && image.sprite.name == "mousew_icon")
+                    {
+                        if (image.sprite != vanilla.KbWheel.sprite || ((RectTransform)child).rect.size != vanilla.KbWheel.rectTransform.rect.size)
+                        {
+                            style.Add($"'{entry.Label}' wheel {((RectTransform)child).rect.size}");
+                        }
+                    }
+                    else if (image != null)
+                    {
+                        var key = child.GetComponentInChildren<TMPro.TMP_Text>();
+                        if (image.sprite != vanilla.KbCap.sprite || image.color != vanilla.KbCap.color || image.type != vanilla.KbCap.type
+                            || key == null || key.font != vanilla.KbKey.font || key.fontSize != vanilla.KbKey.fontSize
+                            || key.fontStyle != vanilla.KbKey.fontStyle || key.color != vanilla.KbKey.color
+                            || key.fontSharedMaterial != vanilla.KbKey.fontSharedMaterial)
+                        {
+                            style.Add($"'{entry.Label}' cap '{(key != null ? key.text : "?")}'");
+                        }
+                    }
+                    else if (text != null)
+                    {
+                        var like = text.text == "+" ? vanilla.KbPlus : vanilla.KbLabel;
+                        var size = text.text == "+" ? vanilla.KbPlus.fontSizeMax : vanilla.KbLabelSize;
+                        if (text.font != like.font || text.fontSize != size || text.color != like.color
+                            || text.fontSharedMaterial != like.fontSharedMaterial || text.fontStyle != like.fontStyle)
+                        {
+                            style.Add($"'{entry.Label}' text '{text.text}' {text.font.name} {text.fontSize} {text.color} {text.fontSharedMaterial.name}");
+                        }
+                    }
+                }
+            }
+
+            Check(style.Count == 0, $"{what}: every entry is in the game's look (font, size, colour, material, caps, wheel, spacing)"
+                + (style.Count > 0 ? ": differs " + string.Join(", ", style) : ""));
+
+            // Where: the game's row, on screen, left to right, no overlap, the game's gaps, right-aligned.
+            var row = ScreenRect(HintRow.Root);
+            var build = ScreenRect((RectTransform)hints.m_buildHints.transform);
+            var rects = entries.Select(e => ScreenRect(pad ? e.GamepadEntry.rectTransform : e.KeyboardEntry)).ToList();
+            var centre = pad ? vanilla.GpCentreY : vanilla.KbCentreY;
+            var gap = (pad ? vanilla.GpSpacing : vanilla.KbSpacing) * HintRow.Root.lossyScale.x;
+            var where = new List<string>();
+            if (Mathf.Abs(row.xMin - build.xMin) > 0.5f || Mathf.Abs(row.xMax - build.xMax) > 0.5f
+                || Mathf.Abs(row.yMin - build.yMin) > 0.5f || Mathf.Abs(row.yMax - build.yMax) > 0.5f)
+            {
+                where.Add($"row {row} vs the game's {build}");
+            }
+
+            for (var i = 0; i < rects.Count; i++)
+            {
+                var r = rects[i];
+                if (r.xMin < 0f || r.yMin < 0f || r.xMax > Screen.width || r.yMax > Screen.height)
+                {
+                    where.Add($"'{entries[i].Label}' off screen {r}");
+                }
+
+                if (Mathf.Abs(r.center.y - centre) > 1.5f)
+                {
+                    where.Add($"'{entries[i].Label}' centre y {r.center.y:0.#}, the game's {centre:0.#}");
+                }
+
+                if (i > 0 && (r.xMin < rects[i - 1].xMax - 0.5f || Mathf.Abs(r.xMin - rects[i - 1].xMax - gap) > 1.5f))
+                {
+                    where.Add($"'{entries[i].Label}' starts {r.xMin - rects[i - 1].xMax:0.#} px after the one before, the game's gap is {gap:0.#}");
+                }
+            }
+
+            if (rects.Count > 0 && Mathf.Abs(rects[rects.Count - 1].xMax - row.xMax) > 1.5f)
+            {
+                where.Add($"the last entry ends at {rects[rects.Count - 1].xMax:0.#}, the row at {row.xMax:0.#}");
+            }
+
+            // Nothing drawn of an entry on the build card or the materials list, whichever shows.
+            var buildCard = Hud.instance != null && Hud.instance.m_buildHud != null ? Hud.instance.m_buildHud.transform.Find("SelectedInfo") as RectTransform : null;
+            var above = new List<RectTransform>();
+            if (buildCard != null && buildCard.gameObject.activeInHierarchy)
+            {
+                foreach (RectTransform child in buildCard)
+                {
+                    var image = child.GetComponent<UnityEngine.UI.Image>();
+                    if (image != null && image.enabled && child.gameObject.activeInHierarchy && child.anchorMin == Vector2.zero && child.anchorMax == Vector2.one)
+                    {
+                        above.Add(child);
+                    }
+                }
+            }
+
+            if (BlueprintInfoCard.Visible)
+            {
+                above.Add(BlueprintInfoCard.Panel);
+            }
+
+            var drawn = entries.SelectMany(e => Drawn(pad ? e.GamepadEntry.rectTransform : e.KeyboardEntry)).ToList();
+            foreach (var box in above)
+            {
+                var r = ScreenRect(box);
+                var hit = drawn.FirstOrDefault(d => d.Overlaps(r));
+                if (hit != default(Rect))
+                {
+                    where.Add($"something drawn at {hit} overlaps '{box.name}' {r}");
+                }
+            }
+
+            if (above.Count > 0)
+            {
+                Log($"{what}: over the row: " + string.Join(", ", above.Select(a => $"'{a.name}' from y {ScreenRect(a).yMin:0}"))
+                    + $"; the row's drawn parts reach y {(drawn.Count > 0 ? drawn.Max(d => d.yMax) : 0f):0}");
+            }
+
+            Check(where.Count == 0, $"{what}: the entries sit in the game's row, on screen, in order, with the game's gaps and no overlap, "
+                + $"x {(rects.Count > 0 ? rects[0].xMin : 0f):0} to {(rects.Count > 0 ? rects[rects.Count - 1].xMax : 0f):0} of {Screen.width}"
+                + (where.Count > 0 ? ": " + string.Join("; ", where) : ""));
+        }
+
+        private static readonly Dictionary<Sprite, Rect> VisibleParts = new Dictionary<Sprite, Rect>();
+
+        /// <summary>
+        /// What an entry draws, in screen pixels: each text, cap and icon. A picture that keeps its
+        /// shape (the wheel) draws only the middle of its box, and only its visible pixels count.
+        /// </summary>
+        private static List<Rect> Drawn(RectTransform entry)
+        {
+            var parts = new List<Rect>();
+            foreach (var graphic in entry.GetComponentsInChildren<UnityEngine.UI.Graphic>(false))
+            {
+                var r = ScreenRect(graphic.rectTransform);
+                if (graphic is UnityEngine.UI.Image image && image.preserveAspect && image.sprite != null && r.height > 0f)
+                {
+                    var aspect = image.sprite.rect.width / image.sprite.rect.height;
+                    var w = Mathf.Min(r.width, r.height * aspect);
+                    var h = w / aspect;
+                    r = new Rect(r.center.x - (w / 2f), r.center.y - (h / 2f), w, h);
+                    var part = VisiblePart(image.sprite);
+                    r = new Rect(r.x + (part.x * r.width), r.y + (part.y * r.height), part.width * r.width, part.height * r.height);
+                }
+
+                parts.Add(r);
+            }
+
+            return parts;
+        }
+
+        /// <summary>
+        /// The part of a sprite that is not see-through, as fractions of its rect (0 to 1, from the
+        /// bottom left). Read back through a temporary render texture, because the game's textures
+        /// cannot be read directly. Nothing is written to disk.
+        /// </summary>
+        private static Rect VisiblePart(Sprite sprite)
+        {
+            if (VisibleParts.TryGetValue(sprite, out var known))
+            {
+                return known;
+            }
+
+            var whole = new Rect(0f, 0f, 1f, 1f);
+            var texture = sprite.texture;
+            var area = sprite.textureRect;
+            if (texture == null || area.width < 1f || area.height < 1f)
+            {
+                VisibleParts[sprite] = whole;
+                return whole;
+            }
+
+            var target = RenderTexture.GetTemporary(texture.width, texture.height, 0, RenderTextureFormat.ARGB32);
+            var before = RenderTexture.active;
+            Graphics.Blit(texture, target);
+            RenderTexture.active = target;
+            var read = new Texture2D((int)area.width, (int)area.height, TextureFormat.ARGB32, false);
+            read.ReadPixels(new Rect(area.x, area.y, area.width, area.height), 0, 0);
+            read.Apply();
+            RenderTexture.active = before;
+            RenderTexture.ReleaseTemporary(target);
+
+            var pixels = read.GetPixels32();
+            int width = read.width, height = read.height;
+            int minX = width, minY = height, maxX = -1, maxY = -1;
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    if (pixels[(y * width) + x].a > 25)
+                    {
+                        minX = Mathf.Min(minX, x);
+                        maxX = Mathf.Max(maxX, x);
+                        minY = Mathf.Min(minY, y);
+                        maxY = Mathf.Max(maxY, y);
+                    }
+                }
+            }
+
+            UnityEngine.Object.Destroy(read);
+            var offset = sprite.textureRectOffset;
+            var full = sprite.rect;
+            var part = maxX < 0 ? whole : new Rect(
+                (offset.x + minX) / full.width,
+                (offset.y + minY) / full.height,
+                (maxX - minX + 1) / full.width,
+                (maxY - minY + 1) / full.height);
+            Log($"sprite '{sprite.name}' {full.width}x{full.height}: visible part {part}");
+            VisibleParts[sprite] = part;
+            return part;
+        }
+
+        /// <summary>A press on the world controller, the game's modifier alone: the game says the pad is in use.</summary>
+        private static IEnumerator HintsToPad()
+        {
+            WorldPadOn();
+            yield return PadPress(true);
+            yield return Frames(3);
+            Check(ZInput.IsGamepadActive(), "a press on the controller: the game says the pad is in use");
+        }
+
+        /// <summary>The mouse moves a little: the game says the keyboard and mouse are in use again.</summary>
+        private static IEnumerator HintsToKeyboard()
+        {
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            for (var i = 0; i < 4 && mouse != null && ZInput.IsGamepadActive(); i++)
+            {
+                var at = mouse.position.ReadValue();
+                UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, new UnityEngine.InputSystem.LowLevel.MouseState { position = at, delta = new Vector2(2f, 0f) });
+                yield return Frames(2);
+            }
+
+            yield return Frames(2);
+            Check(!ZInput.IsGamepadActive() && ZInput.IsMouseActive(), "the mouse moves: the game says the keyboard and mouse are in use");
         }
 
         // ---------- scenario: editor_open ----------
@@ -7203,9 +8490,9 @@ namespace ValheimTomrer.Dev
 
             // ---- the name, with the card watching ----
             var undoBefore = document.UndoDepth;
-            Check(BlueprintPanel.CardText.StartsWith("A blueprint with problems\n")
-                && BlueprintPanel.CardText.Contains($"{document.Pieces.Count} pieces. Wheel: rotate."),
-                $"the card text reads '{BlueprintPanel.CardText.Replace("\n", " / ")}'");
+            Check(BlueprintPanel.CardText == $"A blueprint with problems\n{document.Pieces.Count} pieces."
+                && NoControls(BlueprintPanel.CardText),
+                $"the card text is the description and the count, no controls: '{BlueprintPanel.CardText.Replace("\n", " / ")}'");
             CheckEditorMaterials(document, "the problem blueprint");
 
             // A short list: the region grows to show all of the card, nothing to scroll.
@@ -9711,6 +10998,7 @@ namespace ValheimTomrer.Dev
 
             var worst = wanted.Max(w => built.Min(p => Vector3.Distance(p.transform.position, w)));
             Check(worst < 0.01f, $"every piece stands where the blueprint says, worst {worst:0.####} m off");
+            yield return CheckBackToPiece(player, "the editor's blueprint built in full");
 
             yield return new WaitForSeconds(2f);
             player.m_lookPitch = 12f;
@@ -9723,10 +11011,20 @@ namespace ValheimTomrer.Dev
             yield return Screenshot("editor-build-2-after-15s");
         }
 
-        /// <summary>The way back: the editor key edits the blueprint the hammer is holding.</summary>
+        /// <summary>
+        /// The way back: a build in full left blueprint mode, so the blueprint key takes it again, and
+        /// the editor key edits the blueprint the hammer is holding.
+        /// </summary>
         private static IEnumerator EditItAgain(Player player, string path)
         {
-            Check(BlueprintMode.Active, "the blueprint is still in hand after building");
+            Check(!BlueprintMode.Active, "the build in full left blueprint mode");
+            for (var i = 0; i < 12 && (BlueprintMode.Current == null || BlueprintMode.Current.Blueprint.SourcePath != path); i++)
+            {
+                BlueprintMode.Cycle(player);
+            }
+
+            Check(BlueprintMode.Active && BlueprintMode.Current.Blueprint.SourcePath == path,
+                $"the blueprint key puts it back in the hammer: '{BlueprintMode.EntryName}'");
             yield return PressKey(UnityEngine.InputSystem.Key.F7);
             yield return new WaitForSeconds(0.5f);
             Check(ModUi.Open, "the key opened the editor again");
@@ -10088,8 +11386,10 @@ namespace ValheimTomrer.Dev
             Check(WorldCapture.Drawn, "the outline is on the ground");
             var text = CaptureHud.Text;
             Check(CaptureHud.Visible && text.Contains($"{width:0} x {depth:0} m") && text.Contains("turned 45°")
-                && text.Contains($"{built.Count} pieces") && text.Contains("2 left out") && text.Contains("Shift+Alt+wheel"),
-                "the status lines say it: " + text.Replace("\n", " | "));
+                && text.Contains($"{built.Count} pieces") && text.Contains("2 left out") && !text.Contains("\n") && NoControls(text),
+                "the status line says it, on one line, with no controls: " + text.Replace("\n", " | "));
+            Check(HintRow.Shown == HintRow.Mode.Capture && HintRow.ShownEntries.Any(e => e.Keys == "Shift + Alt + wheel"),
+                "the controls are in the game's hint row: " + string.Join(", ", HintRow.ShownEntries.Select(e => $"{e.Label} [{e.Keys}]")));
             Log($"outline points expected {boxPoints}");
 
             // The lines must not sit on the game's own top-left message ("Built Workshop" and the like).
@@ -10328,10 +11628,13 @@ namespace ValheimTomrer.Dev
 
             yield return new WaitForSeconds(0.4f);
             var text = CaptureHud.Text;
-            var mod = WorldPad.NameOf(WorldPad.Modifier, EditorInput.Glyphs);
-            Check(ZInput.IsGamepadActive() && text.Contains("D-pad left, right: turn") && text.Contains($"{mod} + △: capture")
-                && text.Contains("○: cancel") && !text.Contains("wheel"),
-                "the status lines name the pad's buttons: " + text.Replace("\n", " | "));
+            var take = Localization.instance.GetBoundKeyString(WorldPad.Modifier, true) + " + " + Localization.instance.GetBoundKeyString(WorldPad.Triangle, true);
+            Check(ZInput.IsGamepadActive() && !text.Contains("\n") && NoControls(text),
+                "with the pad the status line is still one line with no controls: " + text);
+            Check(HintRow.Shown == HintRow.Mode.Capture && HintRow.GamepadRow.gameObject.activeInHierarchy
+                && HintRow.ShownEntries.Count > 0 && HintRow.ShownEntries[0].GamepadEntry.text.Contains(take),
+                "the game's hint row shows the capture's pad set, the game's own icons: "
+                + string.Join(", ", HintRow.ShownEntries.Select(e => e.GamepadEntry.text)));
             yield return Screenshot("editor-capture-3-pad");
 
             // Take it: L2 + triangle again.

@@ -5,9 +5,10 @@ using ValheimTomrer.Editor.Ui;
 namespace ValheimTomrer.Editor.View
 {
     /// <summary>
-    /// The two status lines top left while a capture is up: the rectangle's size, turn and counts,
-    /// then the keys. One TMP label under the game's HUD root, so it hides with the rest of the HUD.
-    /// It is drawn over the world, so it gets the outlined text material.
+    /// The status line top left while a capture is up: the rectangle's size, turn and counts. The
+    /// controls are in the game's hint row along the bottom (HintRow). One TMP label under the game's
+    /// HUD root, so it hides with the rest of the HUD. It is drawn over the world, so it gets the
+    /// outlined text material.
     ///
     /// The HUD dies on every world load, and the label with it; the next <see cref="Show"/> builds
     /// it again under the new one.
@@ -26,23 +27,22 @@ namespace ValheimTomrer.Editor.View
         private static TextMeshProUGUI _label;
         private static int _generation = -1;
 
-        /// <summary>The lines show right now.</summary>
+        /// <summary>The line shows right now.</summary>
         public static bool Visible => _label != null && _label.gameObject.activeSelf;
 
-        /// <summary>What the lines say, for the autotest.</summary>
+        /// <summary>What the line says, for the autotest.</summary>
         public static string Text => _label != null ? _label.text : "";
 
         /// <summary>The label's box, sized to its text. The autotest checks it clears the game's own messages.</summary>
         public static RectTransform Rect => _label != null ? _label.rectTransform : null;
 
-        public static void Show(string first, string second)
+        public static void Show(string text)
         {
             if (!Ensure())
             {
                 return;
             }
 
-            var text = first + "\n" + second;
             if (_label.text != text)
             {
                 _label.text = text;
@@ -98,7 +98,7 @@ namespace ValheimTomrer.Editor.View
             rect.anchorMax = new Vector2(0f, 1f);
             rect.pivot = new Vector2(0f, 1f);
             rect.anchoredPosition = Corner;
-            rect.sizeDelta = new Vector2(1400f, 60f);
+            rect.sizeDelta = new Vector2(1400f, 30f);
             rect.SetAsLastSibling();
             _generation = UiTheme.Generation;
             return true;

@@ -128,16 +128,6 @@ namespace ValheimTomrer.Editor.Input
             return def != null && def.Held;
         }
 
-        /// <summary>
-        /// "L2", "LT" or "L1": what the pad in hand calls the button the game binds to a name, in the
-        /// <see cref="Glyphs"/> wording. The name itself when nothing is bound.
-        /// </summary>
-        public static string NameOf(string gameButton, Glyphs glyphs)
-        {
-            var button = ButtonOf(gameButton);
-            return button.HasValue ? glyphs.Of(button.Value) : gameButton;
-        }
-
         /// <summary>The pad button the game binds to a name, or null.</summary>
         public static PadButton? ButtonOf(string gameButton)
         {

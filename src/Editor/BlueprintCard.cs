@@ -46,11 +46,8 @@ namespace ValheimTomrer.Editor
             var iconPiece = known.FirstOrDefault(e => e.PrefabName == document.IconPrefab) ?? known.FirstOrDefault();
             card.Icon = iconPiece != null ? iconPiece.Icon : null;
 
-            // The same line BlueprintInfoCard writes into the real card. Keep the two together.
-            var edit = EditorConfig.Key != null ? $" {EditorConfig.Key.Value}: edit it." : "";
-            var help = $"{document.Pieces.Count} pieces. Wheel: rotate. "
-                + $"{ValheimTomrerPlugin.BlueprintKey.Value}: next blueprint.{edit}";
-            card.Description = string.IsNullOrEmpty(document.Description) ? help : document.Description + "\n" + help;
+            // The real card's own text: the description, then the count. No controls, those are in the game's hint row.
+            card.Description = BlueprintInfoCard.Description(document.Description, document.Pieces.Count);
             return card;
         }
 
