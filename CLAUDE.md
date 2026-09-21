@@ -115,6 +115,7 @@ ValheimTomrer.csproj              netstandard2.1, local refs, publicizer, embeds
                                   auto-deploys the DLL into BepInEx/plugins after every build
 Directory.Build.props             finds the install: ValheimInstall, ValheimManaged, BepInExDir
 README.md                         the player-facing readme: features, install, keys
+package.json                      npm run build (-c Debug) and build:release (-c Release)
 .gitignore                        ignores bin, obj, .devtest and .claude/ (open files there by
                                   exact path, the search tools skip them)
 scripts/dev.sh                    build, deploy, launch, tail our log lines (--debug adds the debugger)
@@ -370,7 +371,8 @@ versions can never drift. `VALHEIM_INSTALL` overrides the path.
 ## Build
 
 ```bash
-dotnet build
+dotnet build                 # or: npm run build
+dotnet build -c Release      # or: npm run build:release (no src/Dev, no autotest)
 ```
 
 ~1.6s. A successful build **auto-deploys** `ValheimTomrer.dll` + `.pdb` into

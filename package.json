@@ -1,0 +1,9 @@
+{
+  "name": "valheim-tomrer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "dotnet build -c Debug",
+    "build:release": "dotnet build -c Release"
+  }
+}
