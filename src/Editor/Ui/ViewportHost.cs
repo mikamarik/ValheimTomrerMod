@@ -667,7 +667,7 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             var set = FocusNav.Active ? "focus" : PadAim ? "pad" : Captured ? "held" : "mouse";
-            var key = set + (EditorInput.Pad != null && EditorInput.Pad.Ps ? "|ps" : "|xbox");
+            var key = set + (EditorInput.Pad != null && EditorInput.Pad.Ps ? "|ps" : "|xbox") + "|" + WorldPad.ModifierButton;
             if (_hints.Is(key))
             {
                 return;
@@ -681,6 +681,7 @@ namespace ValheimTomrer.Editor.Ui
                             HintIcon.Pad(PadGlyphs.Dpad, EditorInput.Glyphs.Dpad),
                             HintIcon.Pad(PadGlyphs.Stick(false), EditorInput.Glyphs.Ls)),
                         new Hint("change panel", Pad(PadButton.R1), Pad(PadButton.L1)),
+                        new Hint("scroll", HintIcon.Pad(PadGlyphs.Stick(true), EditorInput.Glyphs.Rs)),
                         new Hint("select", Pad(PadButton.Cross)),
                         new Hint("back to the view", Pad(PadButton.Circle)));
                     return;
@@ -694,6 +695,7 @@ namespace ValheimTomrer.Editor.Ui
                         new Hint("delete the piece", Pad(PadButton.R1)),
                         new Hint("the panels", Pad(PadButton.L3)),
                         new Hint("back", Pad(PadButton.Circle)),
+                        new Hint("close", Pad(WorldPad.ModifierButton), Pad(PadButton.Square)),
                         new Hint("help", Pad(PadButton.Options)));
                     return;
 

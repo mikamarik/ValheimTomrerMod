@@ -181,8 +181,9 @@ namespace ValheimTomrer.Editor.Input
 
             // 10. Circle: the Esc ladder, in EditorSession.
 
-            // 11. Square moves what the crosshair is on, triangle copies it, on their own.
-            if (pad.Pressed(PadButton.Square) && !placing)
+            // 11. Square moves what the crosshair is on, triangle copies it, on their own. With the
+            //     game's modifier held, square closes the window instead (EditorSession, ClosePressed).
+            if (pad.Pressed(PadButton.Square) && !placing && !pad.Held(WorldPad.ModifierButton))
             {
                 MoveAimed();
             }
@@ -233,6 +234,15 @@ namespace ValheimTomrer.Editor.Input
             Fly(pad, dt);
         }
 
+        /// <summary>
+        /// The game's modifier + square (L2 + square in its default layout): closes the window, like
+        /// F7. The same two buttons open it from the world (<see cref="WorldPad.OpenEditor"/>).
+        /// </summary>
+        public static bool ClosePressed()
+        {
+            return EditorInput.Pressed(PadButton.Square) && EditorInput.Held(WorldPad.ModifierButton);
+        }
+
         /// <summary>Forget the held repeats, so a button held while the window opened does nothing.</summary>
         public static void Reset()
         {
@@ -243,8 +253,8 @@ namespace ValheimTomrer.Editor.Input
 
         /// <summary>
         /// In the panel walk: the D-pad and the left stick step up, down, left and right by what
-        /// is on screen, L1 and R1 change panel, cross presses. Everything else does nothing, the
-        /// way the piece menu holds the pad.
+        /// is on screen, L1 and R1 change panel, cross presses, the right stick scrolls the panel.
+        /// Everything else does nothing, the way the piece menu holds the pad.
         /// </summary>
         private static void Focus(PadFrame pad, float dt)
         {
@@ -279,6 +289,9 @@ namespace ValheimTomrer.Editor.Input
             {
                 FocusNav.Press();
             }
+
+            // The right stick scrolls the panel, the way the wheel does under the mouse.
+            FocusNav.Scroll(pad.Rs.y, dt);
         }
 
         /// <summary>In the piece menu: the D-pad or the left stick moves, L1 and R1 change the tab.</summary>
@@ -442,7 +455,7 @@ namespace ValheimTomrer.Editor.Input
                     $"Leave the view and walk the panels. {circle} comes back to the view."),
                 new HelpRow($"{l3} (in the panels)",
                     $"{g.Dpad} or {g.Ls} moves up, down, left, right, {r1} goes left, top, right and {l1} back, "
-                    + $"{cross} presses, {circle} goes back to the view"),
+                    + $"{cross} presses, {g.Rs} scrolls the panel, {circle} goes back to the view"),
                 new HelpRow($"{l3}, {r3} (while placing)", "Pick the snap point, like Q and E"),
                 new HelpRow($"{r3} (in the view)", "Look at the selection, or at everything"),
                 new HelpRow(cross,
@@ -462,6 +475,8 @@ namespace ValheimTomrer.Editor.Input
                     + "on its own when the crosshair is on nothing"),
                 new HelpRow($"{l2} + {r2}", "Place another piece of the kind in the middle of the view, like the game's copy"),
                 new HelpRow(g.Dpad + " left, right", "Undo, redo"),
+                new HelpRow($"{g.Of(WorldPad.ModifierButton)} + {g.Of(PadButton.Square)}",
+                    "Close the editor, like F7. The same two buttons open it from the world."),
                 new HelpRow(g.Of(PadButton.Options), "This help"),
             };
 

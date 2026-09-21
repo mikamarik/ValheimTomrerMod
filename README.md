@@ -22,10 +22,12 @@ Make blueprints in the game, then build them with the hammer. **Valheim 1.0**, s
   wheel, the pieces inside glow, and everything in it becomes a blueprint.
 - **The game's rules still apply.** Real materials, a workbench in range, and only pieces this
   character has unlocked.
-- **Mouse and controller.** Placing, moving, turning and deleting all have a pad button, and
-  L3 walks the top bar, the side panels and every window, so Save, Open, the filters and the name
-  field work without a mouse. The controls along the bottom of the 3D view show the game's own
-  button icons.
+- **Mouse and controller.** Everything works on a pad: picking a blueprint, building, finishing a
+  build later, opening the editor (L2 + □), copying a building (L2 + △ and the D-pad) and all of the
+  editor. In the editor L3 walks the top bar, the side panels and every window, so Save, Open, the
+  filters and the name field work without a mouse. The controls along the bottom of the 3D view
+  show the game's own button icons, and the build card's hint line names the pad's buttons while
+  you use the pad.
 - **Plain text files.** A blueprint is a small text file you can read, edit or send to a friend.
 - **Nothing added to your world.** No custom pieces, no custom items, no files but the blueprints.
   A build you have not finished yet is a blueprint file too, not part of your world save.
@@ -48,7 +50,8 @@ Valheim/BepInEx/plugins/
 
 ## Make a blueprint
 
-1. **Press F7.** The editor opens on one of the blueprints that ship with the mod. No hammer needed.
+1. **Press F7** (pad: **L2 + □**). The editor opens on one of the blueprints that ship with the mod.
+   No hammer needed. The same key or buttons close it.
 2. **New** in the top bar starts an empty one.
 3. **Pick a piece** in the Pieces list on the left. It follows the mouse in the 3D view.
 4. **Click to place it.** It snaps to what is already there, the same way the hammer does.
@@ -86,6 +89,22 @@ The blueprints that ship with the mod are read only. Edit one and Save as makes 
 4. **Press F8 again.** The editor opens on what stood in the rectangle, with Save as open and a
    name to fill in. `Esc` stops it instead, and the glow goes away.
 
+**Controller for capture.** PlayStation names first, Xbox names in brackets. L2 means the game's
+own modifier button: L2 (LT) in the default controller layout, L1 (LB) in the alternative one.
+
+| Button | What it does |
+|---|---|
+| L2 (LT) + △ (Y) | Start a capture. Press again to capture, like F8. |
+| D-pad left, right | Turn it 22.5 degrees |
+| D-pad up, down | Both sides 2 m bigger, smaller |
+| L2 (LT) + D-pad left, right | Width 2 m smaller, bigger |
+| L2 (LT) + D-pad up, down | Depth 2 m bigger, smaller |
+| ○ (B) | Stop it, like `Esc` |
+
+While the rectangle is up, the D-pad and ○ only work the capture: no hotbar, no forsaken power,
+no zoom, no jump. L2 + △ never opens the inventory. The status lines at the top left name the pad's
+buttons while you use the pad.
+
 The rectangle takes everything from 8 m under the ground to 64 m over it, so a roof comes along.
 A house built at an angle comes back straight. Only pieces the hammer can build come along.
 Anything else (a planted turnip, a piece of another mod) is left out, and the message says how
@@ -99,6 +118,19 @@ many.
 3. Aim. The whole thing shows where it will land. The wheel turns it.
 4. Look at the materials list next to the build card (below).
 5. Click. Every piece it can pay for goes down at once, and costs what it would cost one by one.
+
+**Controller in build mode.** PlayStation names first, Xbox names in brackets. L2 is the game's own
+modifier (L1 in the alternative controller layout).
+
+| Button | What it does |
+|---|---|
+| □ (X) | Next blueprint, like B. Unfinished builds nearby come first. |
+| R2 (RT) | Build, like the click |
+| L2 (LT) + right stick left, right | Turn it 22.5 degrees, like the wheel |
+| R1 (RB) twice within 3 s | In Continue: forget the plan, like Remove twice |
+| L2 (LT) + □ (X) | Open the editor on the blueprint in hand, like F7 |
+
+The build card's hint line names these buttons while you use the pad.
 
 **Where the materials come from.** Your bag first, then every chest within 20 m, nearest first.
 Carts and ship holds count too. A chest counts only when you may open it (not someone else's
@@ -202,6 +234,7 @@ PlayStation names first, Xbox names in brackets.
 | While walking: D-pad, left stick | Step to the next thing |
 | While walking: L1 (LB), R1 (RB) | Change panel: top bar, left, right. In a window they do nothing, it has nowhere to walk to. |
 | While walking: × (A) | Press what the ring is on. A text box starts typing. |
+| While walking: right stick up, down | Scroll the panel, like the wheel (the materials list, the piece grid) |
 | While walking: ○ (B) | Back to the 3D view. In a name box it gives the keyboard back first. |
 | × (A) | Pieces menu: D-pad chooses, L1 R1 change the tab, × places, ○ closes |
 | ○ (B) | The same order as `Esc`: give a text box back, close the window, stop placing, leave the walk, clear the selection, close the editor |
@@ -211,12 +244,15 @@ PlayStation names first, Xbox names in brackets.
 | The three above | Take the whole selection when the aimed piece is part of it, and the selection on its own when the crosshair is on nothing |
 | L2 (LT) + R2 (RT) | Place another piece of the kind in the middle of the view |
 | D-pad left, right | Undo, redo |
+| L2 (LT) + □ (X) | Close the editor, like F7. The same buttons open it from the world. |
 | Options (Menu) | This help |
 
 **L3 reaches the top bar and both side panels.** An orange ring marks where you are, and every
 button, tab, chip and text box on the walk can be pressed with ×. That covers Build this, Save,
-Open, the name and description, the icon and the piece filters. Three lists are still mouse only:
-the piece grid, In blueprint and Checks. The pieces menu on × is the way to place without a mouse.
+Open, the name and description, the icon and the piece filters. The right stick scrolls the panel
+the ring is in, so a long materials list can be read to the end. The rows of three lists cannot be
+clicked with the pad: the piece grid, In blueprint and Checks. The pieces menu on × is the way to
+place without a mouse.
 
 **Windows take the walk on their own.** Open, Save as and every question put the ring on
 themselves the moment they show up: the D-pad steps through the blueprints or the buttons, × picks
@@ -234,9 +270,9 @@ Valheim/BepInEx/config/com.mikamarik.valheimtomrer.cfg
 | Section | Setting | Default | What it does |
 |---|---|---|---|
 | General | `Enabled` | `true` | Master switch. Turn off to neutralise the mod without uninstalling it. |
-| Blueprints | `Key` | `B` | With a hammer in hand: the next blueprint. After the last one, back to normal building. |
-| Editor | `Key` | `F7` | Opens and closes the editor window. |
-| Editor | `CaptureKey` | `F8` | Puts a rectangle on the ground where you aim. Press again and what stands in it becomes a blueprint. |
+| Blueprints | `Key` | `B` | With a hammer in hand: the next blueprint. After the last one, back to normal building. The pad's □ does the same. |
+| Editor | `Key` | `F7` | Opens and closes the editor window. The pad's L2 + □ does the same. |
+| Editor | `CaptureKey` | `F8` | Puts a rectangle on the ground where you aim. Press again and what stands in it becomes a blueprint. The pad's L2 + △ does the same. |
 | Editor | `ShowAllPieces` | `false` | Every piece in the editor, instead of only the ones this character has unlocked. |
 | Editor | `SnapDots` | `true` | Show the snap dots while placing. Snapping itself is always on. |
 | Editor | `Boxes` | `false` | Draw pieces as plain boxes instead of models. |

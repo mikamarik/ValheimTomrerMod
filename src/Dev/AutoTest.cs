@@ -17,6 +17,7 @@ using ValheimTomrer.Editor.View;
 using BepInEx;
 using HarmonyLib;
 using UnityEngine;
+using PadKey = UnityEngine.InputSystem.LowLevel.GamepadButton;
 
 namespace ValheimTomrer.Dev
 {
@@ -1394,7 +1395,59 @@ namespace ValheimTomrer.Dev
                 yield return TestKit(player, kits[i], i == 0);
             }
 
+            yield return SquareLikeB(player);
             BlueprintMode.Exit();
+        }
+
+        /// <summary>
+        /// Square on the pad, in build mode, is the blueprint key: the same entries in the same order,
+        /// then back to normal building. With L2 held it does not cycle: it opens the editor on the
+        /// blueprint in hand.
+        /// </summary>
+        private static IEnumerator SquareLikeB(Player player)
+        {
+            BlueprintMode.Exit();
+            yield return EquipHammer(player);
+            var key = (UnityEngine.InputSystem.Key)Enum.Parse(typeof(UnityEngine.InputSystem.Key), ValheimTomrerPlugin.BlueprintKey.Value.ToString());
+            var keys = new List<string>();
+            for (var i = 0; i < 12; i++)
+            {
+                yield return PressKey(key);
+                keys.Add(BlueprintMode.EntryName ?? "off");
+                if (!BlueprintMode.Active)
+                {
+                    break;
+                }
+            }
+
+            WorldPadOn();
+            var pads = new List<string>();
+            for (var i = 0; i < 12; i++)
+            {
+                yield return PadPress(false, PadKey.West);
+                pads.Add(BlueprintMode.EntryName ?? "off");
+                if (!BlueprintMode.Active)
+                {
+                    break;
+                }
+            }
+
+            Check(keys.Count >= 2 && keys.Last() == "off" && keys.SequenceEqual(pads),
+                $"square cycles like {ValheimTomrerPlugin.BlueprintKey.Value}: {string.Join(" > ", keys)} | square: {string.Join(" > ", pads)}");
+
+            yield return PadPress(false, PadKey.West);
+            var inHand = BlueprintMode.Current;
+            var entry = BlueprintMode.EntryName;
+            var shows = _inventoryShows;
+            yield return PadPress(true, PadKey.West);
+            yield return new WaitForSeconds(0.5f);
+            var document = EditorSession.Document;
+            Check(inHand != null && ModUi.Open && document != null && document.Name == inHand.Name && !BlueprintMode.Active,
+                $"L2 + square does not cycle: it opened the editor on '{(document != null ? document.Name : "nothing")}', the one in hand ('{entry}')");
+            Check(_inventoryShows == shows && !player.IsSitting(), "and nothing else happened: no inventory, no sitting");
+            EditorSession.Forget();
+            yield return WorldPadOff();
+            yield return new WaitForSeconds(0.3f);
         }
 
         private static IEnumerator TestKit(Player player, Blueprint kit, bool withRefusals)
@@ -4379,6 +4432,7 @@ namespace ValheimTomrer.Dev
             yield return ContinueToTheEnd(player, resolved);
             yield return ContinueInThirds(player, resolved);
             yield return ContinueForget(player, resolved);
+            yield return ContinuePadForget(player, resolved);
             yield return ContinueFarAway(player, resolved, spot);
             yield return ContinueStandingInside(player);
 
@@ -4473,6 +4527,14 @@ namespace ValheimTomrer.Dev
             var entry = BlueprintMode.EntryName ?? "";
             Check(BlueprintMode.CurrentSite == site && entry.StartsWith("Continue:") && entry == $"Continue: Workshop ({site.BuiltCount}/{site.Total})",
                 $"the key's first entry continues the site: '{entry}'");
+
+            // Square on the pad offers the same first entry.
+            BlueprintMode.Exit();
+            WorldPadOn();
+            yield return PadPress(false, PadKey.West);
+            yield return WorldPadOff();
+            Check(BlueprintMode.CurrentSite == site && BlueprintMode.EntryName == entry,
+                $"square offers the same first entry: '{BlueprintMode.EntryName}'");
             var root = BlueprintMode.PreviewRoot;
             Check(root != null && site.Ghost != null && root == site.Ghost.Root && GameObject.Find("ValheimTomrer_Blueprint_Workshop") == null,
                 "the preview is the site's ghost, no second copy is made");
@@ -4619,6 +4681,56 @@ namespace ValheimTomrer.Dev
             yield return new WaitForSeconds(1f);
         }
 
+        /// <summary>The pad forgets a plan the same way: square picks Continue, the game's Remove (R1) twice.</summary>
+        private static IEnumerator ContinuePadForget(Player player, ResolvedBlueprint kit)
+        {
+            yield return StartSite(player, kit, (item, need) => item == "$item_wood" ? need / 2 : need);
+            var site = BlueprintMode.LastSite;
+            if (site == null || !SiteStore.All.Contains(site))
+            {
+                yield break;
+            }
+
+            var built = Standing(player, site);
+            var remove = WorldPad.ButtonOf("JoyRemove") ?? PadButton.R1;
+            WorldPadOn();
+            yield return PadPress(false, PadKey.West);
+            Check(BlueprintMode.CurrentSite == site, "square continues it: " + BlueprintMode.EntryName);
+            yield return PadPress(false, PadKeyOf(remove));
+            Check(SiteStore.All.Contains(site) && BlueprintMode.LastMessage == "Press again to remove the plan.",
+                $"one {remove} press only asks: '{BlueprintMode.LastMessage}'");
+            yield return PadPress(false, PadKeyOf(remove));
+            yield return WorldPadOff();
+            Check(!SiteStore.All.Contains(site) && !BlueprintMode.Active && BlueprintMode.LastMessage == "Plan for Workshop removed. Built pieces stay.",
+                $"{remove} twice forgot the plan: '{BlueprintMode.LastMessage}'");
+            Check(built > 0 && Standing(player, site) == built, $"the built pieces are still there: {Standing(player, site)} of {built}");
+
+            RemoveOldTestBuildings(player);
+            ClearInventoryExceptHammer(player);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>The input system's button for one of the pad's buttons. The triggers are axes, not buttons.</summary>
+        private static PadKey PadKeyOf(PadButton button)
+        {
+            switch (button)
+            {
+                case PadButton.Cross: return PadKey.South;
+                case PadButton.Circle: return PadKey.East;
+                case PadButton.Square: return PadKey.West;
+                case PadButton.Triangle: return PadKey.North;
+                case PadButton.L1: return PadKey.LeftShoulder;
+                case PadButton.R1: return PadKey.RightShoulder;
+                case PadButton.Options: return PadKey.Start;
+                case PadButton.L3: return PadKey.LeftStick;
+                case PadButton.R3: return PadKey.RightStick;
+                case PadButton.Up: return PadKey.DpadUp;
+                case PadButton.Down: return PadKey.DpadDown;
+                case PadButton.Left: return PadKey.DpadLeft;
+                default: return PadKey.DpadRight;
+            }
+        }
+
         /// <summary>
         /// Presses and lets go of whatever the game binds to this button (the player may have changed
         /// it), through the input system, so the game's own ZInput reads it.
@@ -4656,6 +4768,138 @@ namespace ValheimTomrer.Dev
                 UnityEngine.InputSystem.InputControlExtensions.WriteValueIntoEvent(control, value, eventPtr);
                 UnityEngine.InputSystem.InputSystem.QueueEvent(eventPtr);
             }
+        }
+
+        // ---------- a controller in the world ----------
+
+        /// <summary>
+        /// A controller of its own on the input system, so the game's ZInput reads its buttons exactly
+        /// the way it reads a real one's: the world side of the pad (the hammer, the editor's open
+        /// combo, the capture) goes through the game's named buttons, which the editor's fake pad
+        /// (<see cref="PadReader.Fake"/>) never reaches. Named like a DualSense, so the pad reader
+        /// calls it a PlayStation pad.
+        /// </summary>
+        private static UnityEngine.InputSystem.Gamepad _worldPad;
+
+        private static ZInput.InputSource _worldPadSource;
+
+        /// <summary>Every time the game asked the inventory to open, whatever stopped it after.</summary>
+        private static int _inventoryShows;
+
+        [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.Show), new[] { typeof(Container), typeof(int) })]
+        private static class InventoryGuiShowCountPatch
+        {
+            [HarmonyPriority(Priority.First)]
+            private static void Prefix()
+            {
+                _inventoryShows++;
+            }
+        }
+
+        private static void WorldPadOn()
+        {
+            if (_worldPad != null)
+            {
+                return;
+            }
+
+            _worldPadSource = ZInput.m_inputSource;
+            _worldPad = UnityEngine.InputSystem.InputSystem.AddDevice<UnityEngine.InputSystem.Gamepad>("AutoTestPad DualSense");
+            Log($"world pad added: '{_worldPad.name}', the game's modifier is {WorldPad.ModifierButton}, layout {ZInput.InputLayout}");
+        }
+
+        /// <summary>Lets go of every button, takes the controller away and gives the game back the input it had.</summary>
+        private static IEnumerator WorldPadOff()
+        {
+            if (_worldPad == null)
+            {
+                yield break;
+            }
+
+            PadDown(false);
+            yield return null;
+            yield return null;
+            UnityEngine.InputSystem.InputSystem.RemoveDevice(_worldPad);
+            _worldPad = null;
+            ZInput.instance?.OnInput(_worldPadSource, true);
+            yield return null;
+        }
+
+        /// <summary>The world controller's buttons from now on: the game's modifier (L2) when asked, these, nothing else.</summary>
+        private static void PadDown(bool modifier, params PadKey[] buttons)
+        {
+            var state = new UnityEngine.InputSystem.LowLevel.GamepadState();
+            foreach (var button in buttons)
+            {
+                state = state.WithButton(button);
+            }
+
+            if (modifier)
+            {
+                if (WorldPad.ModifierButton == PadButton.L1)
+                {
+                    state = state.WithButton(PadKey.LeftShoulder);
+                }
+                else
+                {
+                    state.leftTrigger = 1f;
+                }
+            }
+
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(_worldPad, state);
+        }
+
+        /// <summary>
+        /// One press on the world controller: the modifier first when asked, then the buttons for three
+        /// frames (the D-pad's own repeat starts only after 0.3 s), then all of it let go.
+        /// </summary>
+        private static IEnumerator PadPress(bool modifier, params PadKey[] buttons)
+        {
+            if (modifier)
+            {
+                PadDown(true);
+                yield return Frames(2);
+            }
+
+            PadDown(modifier, buttons);
+            yield return Frames(3);
+            PadDown(modifier);
+            yield return Frames(2);
+            if (modifier)
+            {
+                PadDown(false);
+                yield return Frames(2);
+            }
+        }
+
+        private static IEnumerator Frames(int count)
+        {
+            for (var frame = 0; frame < count; frame++)
+            {
+                yield return null;
+            }
+        }
+
+        /// <summary>The game's own count of forsaken power uses: it goes up the moment the power starts.</summary>
+        private static float PowerUses()
+        {
+            var profile = Game.instance != null ? Game.instance.GetPlayerProfile() : null;
+            return profile != null && profile.m_playerStats[0].m_stats.TryGetValue(PlayerStatType.UseGuardianPower, out var uses) ? uses : -1f;
+        }
+
+        /// <summary>The highest the player's feet got over where they stand now, while the frames run.</summary>
+        private static IEnumerator Rise(Player player, float seconds, Action<float> result)
+        {
+            var from = player.transform.position.y;
+            var top = from;
+            var until = Time.time + seconds;
+            while (Time.time < until)
+            {
+                top = Mathf.Max(top, player.transform.position.y);
+                yield return null;
+            }
+
+            result(top - from);
         }
 
         /// <summary>
@@ -4983,6 +5227,7 @@ namespace ValheimTomrer.Dev
 
             var description = hud.m_pieceDescription.text;
             Check(description.Contains("Wheel: rotate."), $"the normal hint line stays: '{description}'");
+            yield return CardPadHint(kit, false);
 
             // Still: a refresh every 0.5 s, and the plan is not worked out again.
             var refreshes = BlueprintInfoCard.Refreshes;
@@ -5090,6 +5335,7 @@ namespace ValheimTomrer.Dev
             var description = Hud.instance.m_pieceDescription.text;
             Check(description.Contains("Click: build what you can.") && description.Contains("twice: forget the plan.")
                 && !description.Contains("Wheel"), $"the hint line says what Continue does: '{description}'");
+            yield return CardPadHint(kit, true);
             CheckFooterAtBottom(list, "the Continue list");
             CheckLabels(list);
             CheckOnScreen("the Continue list");
@@ -5098,6 +5344,41 @@ namespace ValheimTomrer.Dev
             yield return new WaitForSeconds(0.6f);
             yield return Screenshot("card-materials-2");
             BlueprintMode.Exit();
+        }
+
+        /// <summary>
+        /// With the pad in use (the game says so) the card's hint line names the pad's buttons, in the
+        /// PlayStation names of the pad in hand; with the keyboard again, the keys come back.
+        /// </summary>
+        private static IEnumerator CardPadHint(ResolvedBlueprint kit, bool continuing)
+        {
+            _pad = new PadState { Ps = true };
+            PadReader.Fake = _pad;
+            var source = ZInput.m_inputSource;
+            ZInput.instance.OnInput(ZInput.InputSource.Gamepad, true);
+            yield return Frames(3);
+
+            var g = EditorInput.Glyphs;
+            var mod = WorldPad.NameOf(WorldPad.Modifier, g);
+            var text = Hud.instance.m_pieceDescription.text;
+            var want = continuing
+                ? $"{WorldPad.NameOf("JoyPlace", g)}: build what you can. {WorldPad.NameOf("JoyRemove", g)} twice: forget the plan. □: next. {mod} + □: edit it."
+                : $"{kit.Parts.Count} pieces. {mod} + right stick: rotate. □: next blueprint. {mod} + □: edit it.";
+            Check(ZInput.IsGamepadActive() && text.EndsWith(want) && !text.Contains("Wheel") && !text.Contains("F7"),
+                $"with the pad in use the {(continuing ? "Continue" : "normal")} hint line names its buttons: '{text.Replace("\n", " | ")}'");
+            if (!continuing)
+            {
+                yield return new WaitForSeconds(0.6f);
+                yield return Screenshot("card-materials-pad");
+            }
+
+            ZInput.instance.OnInput(source, true);
+            yield return Frames(3);
+            text = Hud.instance.m_pieceDescription.text;
+            Check(!ZInput.IsGamepadActive() && text.Contains(continuing ? "Click: build what you can." : "Wheel: rotate.") && !text.Contains("□"),
+                $"back on the keyboard the keys come back: '{text.Replace("\n", " | ")}'");
+            PadReader.Fake = null;
+            _pad = null;
         }
 
         /// <summary>A made-up blueprint whose four pieces need 12 different items, all from the workbench.</summary>
@@ -5418,6 +5699,67 @@ namespace ValheimTomrer.Dev
             Check(player.TakeInput(), "the player takes input again");
             Check(!Menu.IsVisible(), "the closing Esc did not open the pause menu");
             yield return Screenshot("editor-2-closed");
+
+            yield return EditorOpenPad(player);
+        }
+
+        /// <summary>
+        /// The pad: L2 + square in the world opens the editor, on the blueprint in the hammer's hand,
+        /// and nothing else happens (no inventory, no sitting). Inside, the same two buttons close it.
+        /// The world side goes through the game's own buttons (a controller the game reads), the
+        /// editor side through the editor's fake pad, as every editor pad test does.
+        /// </summary>
+        private static IEnumerator EditorOpenPad(Player player)
+        {
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Pieces.Count > 2);
+            ResolvedBlueprint resolved = null;
+            if (kit == null || !ResolvedBlueprint.TryResolve(kit, out resolved, out _))
+            {
+                Check(false, "a kit to put in the hammer");
+                yield break;
+            }
+
+            EditorSession.Forget();
+            Unlock(player, resolved);
+            yield return EquipHammer(player);
+            BlueprintMode.Select(player, resolved);
+            yield return Frames(2);
+            Check(BlueprintMode.Current == resolved, $"'{kit.Name}' is in the hammer's hand");
+
+            WorldPadOn();
+            var shows = _inventoryShows;
+            yield return PadPress(true, PadKey.West);
+            yield return new WaitForSeconds(0.5f);
+            var document = EditorSession.Document;
+            Check(ModUi.Open && EditorWindow.Visible && !player.TakeInput(),
+                "L2 + square opened the editor, and the game stopped taking input");
+            Check(document != null && document.Name == kit.Name && document.Pieces.Count == kit.Pieces.Count && !BlueprintMode.Active,
+                $"on the blueprint in hand, which the hammer let go of: '{(document != null ? document.Name : "nothing")}'");
+            Check(_inventoryShows == shows && !player.IsSitting() && !player.InEmote(),
+                $"nothing else: no inventory ({_inventoryShows - shows} tries), not sitting");
+            yield return WorldPadOff();
+
+            // Inside: the editor reads the pad itself, the same two buttons close it.
+            _pad = new PadState();
+            PadReader.Fake = _pad;
+            yield return Frames(3);
+            // A piece selected: square alone would pick it up to move it.
+            var modifier = WorldPad.ModifierButton;
+            if (document != null && document.Pieces.Count > 0)
+            {
+                EditorState.Select(document.Pieces[0].Id);
+            }
+
+            yield return Tap(modifier, PadButton.Square);
+            yield return new WaitForSeconds(0.4f);
+            Check(!ModUi.Open && !ModUi.Blocking && player.TakeInput() && EditorSession.Kept,
+                $"{modifier} + square closed it again and kept the blueprint");
+            Check(EditorState.Mode == EditMode.Idle && EditorState.SelectionCount == 1 && !player.IsSitting(),
+                $"and did not pick the selected piece up to move it (mode {EditorState.Mode}), nor sit the player down");
+            PadReader.Fake = null;
+            _pad = null;
+            EditorSession.Forget();
+            BlueprintMode.Exit();
         }
 
         // ---------- scenario: editor_view ----------
@@ -7134,6 +7476,9 @@ namespace ValheimTomrer.Dev
             yield return new WaitForSeconds(0.3f);
             yield return Screenshot("editor-panels-card");
 
+            // The pad scrolls it too: the right stick, while the panel walk is in this panel.
+            yield return PanelsPadScroll(scroll);
+
             // The bag changes with the window open: the list follows within a second.
             var first = rows.First(r => !r.IsStation);
             var firstCost = twelve.TotalCost.First(c => c.m_resItem.m_itemData.m_shared.m_name == first.Key);
@@ -7176,6 +7521,65 @@ namespace ValheimTomrer.Dev
             }
 
             scroll.verticalNormalizedPosition = 1f;
+        }
+
+        /// <summary>
+        /// L3 walks into the panels, R1 on to the right one, and the right stick scrolls it: up to the
+        /// top, down to the bottom. The ring hides while its widget is scrolled out of sight.
+        /// </summary>
+        private static IEnumerator PanelsPadScroll(UnityEngine.UI.ScrollRect scroll)
+        {
+            _pad = new PadState();
+            PadReader.Fake = _pad;
+            yield return Frames(3);
+            EditorState.CancelMode();
+            yield return Tap(PadButton.L3);
+            yield return Tap(PadButton.R1);
+            Check(FocusNav.Active && FocusNav.Current == FocusRegion.Right && FocusNav.ScrollTarget() == scroll,
+                $"L3 and R1 put the walk in the right panel ({FocusNav.Current}), on '{WidgetName(FocusNav.Focused)}', "
+                + $"and its list to scroll is the blueprint region: {FocusNav.ScrollTarget() == scroll}");
+
+            // Stepping in scrolled the name box into sight; start from the bottom again.
+            scroll.verticalNormalizedPosition = 0f;
+            yield return Frames(2);
+            var start = scroll.verticalNormalizedPosition;
+            Check(RingMatchesSight(), $"at the bottom the ring shows only when its widget is in sight (shown: {FocusNav.Ring.gameObject.activeSelf})");
+            _pad.Rs = new Vector2(0f, 1f);
+            yield return Wait(1f);
+            _pad.Rs = Vector2.zero;
+            yield return Frames(2);
+            var top = scroll.verticalNormalizedPosition;
+            Check(start < 0.01f && top > 0.99f, $"right stick up scrolls the panel to the top: {start:0.00} -> {top:0.00}");
+            Check(RingMatchesSight(), "the ring shows exactly when its widget is in sight");
+
+            _pad.Rs = new Vector2(0f, -1f);
+            yield return Wait(1f);
+            _pad.Rs = Vector2.zero;
+            yield return Frames(2);
+            var bottom = scroll.verticalNormalizedPosition;
+            Check(bottom < 0.01f, $"right stick down scrolls it back down: {top:0.00} -> {bottom:0.00}");
+            Check(RingMatchesSight(), $"and the ring still shows exactly when its widget is in sight (shown: {FocusNav.Ring.gameObject.activeSelf})");
+
+            yield return Tap(PadButton.Circle);
+            PadReader.Fake = null;
+            _pad = null;
+            Check(!FocusNav.Active && ModUi.Open, "circle left the walk, the window stays");
+        }
+
+        /// <summary>The focus ring is up when its widget's middle is inside its list's view, and down when not.</summary>
+        private static bool RingMatchesSight()
+        {
+            var widget = FocusNav.Focused;
+            var ring = FocusNav.Ring;
+            if (widget == null || ring == null)
+            {
+                return false;
+            }
+
+            var list = widget.GetComponentInParent<UnityEngine.UI.ScrollRect>();
+            var inSight = list == null || list.viewport == null
+                || ScreenRect(list.viewport).Contains(ScreenRect((RectTransform)widget.transform).center);
+            return ring.gameObject.activeSelf == inSight;
         }
 
         private static string Named(PieceEntry entry)
@@ -7833,9 +8237,10 @@ namespace ValheimTomrer.Dev
                 + $"{ps.Of(PadButton.Square)} {ps.Of(PadButton.Triangle)}");
 
             var rows = Bindings.Pad;
-            Check(rows.Length == 21, $"the help table has the whole controller half: {rows.Length} rows");
-            Check(Array.Exists(rows, r => r.Keys == "×") && Array.Exists(rows, r => r.Keys == "L2 + R2"),
-                "and the rows are written in those names");
+            Check(rows.Length == 22, $"the help table has the whole controller half: {rows.Length} rows");
+            Check(Array.Exists(rows, r => r.Keys == "×") && Array.Exists(rows, r => r.Keys == "L2 + R2")
+                && Array.Exists(rows, r => r.Keys == $"{ps.Of(WorldPad.ModifierButton)} + □" && r.What.StartsWith("Close the editor")),
+                "and the rows are written in those names, the close row too");
 
             _pad.Ps = false;
             yield return null;
@@ -8849,6 +9254,7 @@ namespace ValheimTomrer.Dev
             }
 
             yield return KeepEverything(document, wall);
+            yield return KeepPad(document);
             yield return KeepDialog();
             yield return KeepAgainstHand(player, wall);
             yield return RebuildDeadPane();
@@ -8940,6 +9346,37 @@ namespace ValheimTomrer.Dev
             EditorState.CancelMode();
             Palette.SetSearch("");
             EditorWindow.SetLeftTab(0);
+        }
+
+        /// <summary>
+        /// The pad's L2 + square closes and opens it the way F7 does: the same blueprint, its unsaved
+        /// change and its undo, the same selection. Closed through the editor's fake pad, opened
+        /// through a controller the game reads.
+        /// </summary>
+        private static IEnumerator KeepPad(BlueprintDocument document)
+        {
+            var undo = document.UndoDepth;
+            var count = document.Pieces.Count;
+            var selected = EditorState.Selection.ToArray();
+            _pad = new PadState();
+            PadReader.Fake = _pad;
+            yield return Frames(3);
+            yield return Tap(WorldPad.ModifierButton, PadButton.Square);
+            yield return new WaitForSeconds(0.4f);
+            PadReader.Fake = null;
+            _pad = null;
+            Check(!ModUi.Open && EditorSession.Kept && EditorSession.Document == document,
+                "L2 + square closed the editor and kept the blueprint");
+
+            WorldPadOn();
+            yield return PadPress(true, PadKey.West);
+            yield return new WaitForSeconds(0.5f);
+            yield return WorldPadOff();
+            Check(ModUi.Open && EditorSession.Document == document && document.Dirty && document.UndoDepth == undo
+                    && document.Pieces.Count == count,
+                $"L2 + square opened it again on the same blueprint, change and undo kept: {document.UndoDepth} undo step(s)");
+            Check(EditorState.SelectionCount == selected.Length && selected.All(EditorState.IsSelected),
+                $"the same selection ({EditorState.SelectionCount})");
         }
 
         /// <summary>A dialog up, with the walk inside it, is still up after closing and opening.</summary>
@@ -9484,6 +9921,9 @@ namespace ValheimTomrer.Dev
             // 8. Esc takes everything off again.
             yield return CaptureEscape(player, centre, built, extraWall);
 
+            // 9. The same on the pad alone, and the game sees none of the presses.
+            yield return CapturePad(player, centre, kit);
+
             RemoveOldTestBuildings(player);
             yield return new WaitForSeconds(0.5f);
 
@@ -9783,6 +10223,225 @@ namespace ValheimTomrer.Dev
             var coloured = pieces.Count(p => p != hovered && HasAnyColor(p.gameObject));
             Check(ours == 0 && coloured == 0,
                 $"no piece keeps a changed colour: {ours} with ours, {coloured} with any (hovered one skipped)");
+        }
+
+        /// <summary>
+        /// 9. The whole capture on the pad alone, through a controller the game reads like a real one:
+        /// L2 + triangle starts it, every D-pad step turns or sizes it (each one checked), and the game
+        /// sees none of those presses: the hotbar, the forsaken power, the camera and minimap zoom and
+        /// the inventory stay as they were. L2 + triangle takes it into the editor with Save as up. A
+        /// second one stops on circle, with no jump. Last, the same presses with no capture up do reach
+        /// the game, so every "unchanged" above could have failed.
+        /// </summary>
+        private static IEnumerator CapturePad(Player player, Vector3 centre, Blueprint kit)
+        {
+            // The last capture is kept with unsaved changes: forget it, so this one opens straight on Save as.
+            EditorSession.Forget();
+
+            // No hammer: in build mode the game itself would not zoom on L2 + D-pad, and the test must
+            // see that it could. Two things in the hotbar, so D-pad left and right have somewhere to go.
+            var inventory = player.GetInventory();
+            var tool = player.GetRightItem();
+            if (tool != null)
+            {
+                player.UnequipItem(tool);
+            }
+
+            AddTo(inventory, "Torch", 1);
+            AddTo(inventory, "Club", 1);
+            player.SetGuardianPower("GP_Eikthyr");
+            player.m_guardianPowerCooldown = 0f;
+            var map = Minimap.instance;
+            if (map != null && map.m_mode != Minimap.MapMode.Small)
+            {
+                map.SetMapMode(Minimap.MapMode.Small);
+            }
+
+            var bar = UnityEngine.Object.FindObjectOfType<HotkeyBar>();
+            var camera = GameCamera.instance;
+            yield return new WaitForSeconds(0.5f);
+
+            WorldPadOn();
+            _pad = new PadState { Ps = true };
+            PadReader.Fake = _pad;
+            var selected = bar != null ? bar.m_selected : -99;
+            var right = player.GetRightItem();
+            var uses = PowerUses();
+            var distance = camera != null ? camera.m_distance : float.NaN;
+            var zoom = map != null ? map.SmallZoom : float.NaN;
+            var shows = _inventoryShows;
+            Log($"pad capture: hotbar {selected} of {(bar != null ? bar.m_elements.Count : 0)}, right hand "
+                + $"{(right != null ? right.m_shared.m_name : "empty")}, power uses {uses}, camera {distance:0.###}, map zoom {zoom:0.####}");
+
+            // Start: L2 + triangle.
+            yield return PadPress(true, PadKey.North);
+            yield return Frames(2);
+            Check(WorldCapture.Active && WorldCapture.Drawn && CaptureHud.Visible && !ModUi.Blocking,
+                $"L2 + triangle starts a capture, the game keeps its input: active {WorldCapture.Active}");
+            Check(_inventoryShows == shows && !InventoryGui.IsVisible(),
+                $"and the inventory did not open: {_inventoryShows - shows} tries");
+            if (!WorldCapture.Active)
+            {
+                yield return CapturePadDone(player, map, zoom, camera, distance);
+                yield break;
+            }
+
+            WorldCapture.Pin(centre);
+            yield return null;
+            var wantYaw = WorldCapture.Yaw;
+            var wantWidth = WorldCapture.Width;
+            var wantDepth = WorldCapture.Depth;
+            yield return PadStep(false, PadKey.DpadRight, 22.5f, 0f, 0f, "D-pad right turns it 22.5 degrees");
+            yield return PadStep(false, PadKey.DpadLeft, -22.5f, 0f, 0f, "D-pad left turns it back");
+            yield return PadStep(false, PadKey.DpadUp, 0f, 2f, 2f, "D-pad up grows both sides 2 m");
+            yield return PadStep(false, PadKey.DpadDown, 0f, -2f, -2f, "D-pad down shrinks both sides 2 m");
+            yield return PadStep(true, PadKey.DpadRight, 0f, 2f, 0f, "L2 + D-pad right widens it 2 m");
+            yield return PadStep(true, PadKey.DpadLeft, 0f, -2f, 0f, "L2 + D-pad left narrows it 2 m");
+            yield return PadStep(true, PadKey.DpadUp, 0f, 0f, 2f, "L2 + D-pad up deepens it 2 m");
+            yield return PadStep(true, PadKey.DpadDown, 0f, 0f, -2f, "L2 + D-pad down makes it shallower 2 m");
+            Check(Mathf.Abs(Mathf.DeltaAngle(WorldCapture.Yaw, wantYaw)) < 0.01f
+                && Mathf.Approximately(WorldCapture.Width, wantWidth) && Mathf.Approximately(WorldCapture.Depth, wantDepth),
+                $"and it is back on the kit: {WorldCapture.Yaw:0.#}, {WorldCapture.Width} x {WorldCapture.Depth}");
+
+            // The game saw none of it.
+            var nowSelected = bar != null ? bar.m_selected : -99;
+            var nowRight = player.GetRightItem();
+            var nowDistance = camera != null ? camera.m_distance : float.NaN;
+            var nowZoom = map != null ? map.SmallZoom : float.NaN;
+            Check(nowSelected == selected && nowRight == right,
+                $"the hotbar did not move and nothing was used from it: slot {selected} -> {nowSelected}, "
+                + $"right hand {(nowRight != null ? nowRight.m_shared.m_name : "empty")}");
+            Check(PowerUses() == uses && player.m_guardianPowerCooldown == 0f,
+                $"the forsaken power did not start: uses {uses} -> {PowerUses()}, cooldown {player.m_guardianPowerCooldown:0.#}");
+            Check(Mathf.Abs(nowDistance - distance) < 1e-4f, $"the camera did not zoom: {distance:0.####} -> {nowDistance:0.####}");
+            Check(Mathf.Abs(nowZoom - zoom) < 1e-6f, $"the minimap did not zoom: {zoom:0.####} -> {nowZoom:0.####}");
+            Check(_inventoryShows == shows && !InventoryGui.IsVisible() && !player.IsSitting(),
+                $"no inventory ({_inventoryShows - shows} tries), not sitting");
+
+            // The status lines speak the pad. The torch and the club made the game queue "New item"
+            // popups over the top left; a test artefact, cleared for the picture.
+            if (MessageHud.instance != null)
+            {
+                MessageHud.instance.ClearUnlockQueue();
+                MessageHud.instance.HideAll();
+            }
+
+            yield return new WaitForSeconds(0.4f);
+            var text = CaptureHud.Text;
+            var mod = WorldPad.NameOf(WorldPad.Modifier, EditorInput.Glyphs);
+            Check(ZInput.IsGamepadActive() && text.Contains("D-pad left, right: turn") && text.Contains($"{mod} + △: capture")
+                && text.Contains("○: cancel") && !text.Contains("wheel"),
+                "the status lines name the pad's buttons: " + text.Replace("\n", " | "));
+            yield return Screenshot("editor-capture-3-pad");
+
+            // Take it: L2 + triangle again.
+            yield return PadPress(true, PadKey.North);
+            yield return new WaitForSeconds(0.5f);
+            var document = EditorSession.Document;
+            Check(!WorldCapture.Active && ModUi.Open && document != null && document.Pieces.Count == kit.Pieces.Count,
+                $"L2 + triangle again takes it into the editor: {(document != null ? document.Pieces.Count : 0)} of {kit.Pieces.Count} pieces");
+            Check(Dialogs.Kind == "saveAs" && Dialogs.NameField != null && Dialogs.NameField.text == WorldCapture.Name,
+                $"with Save as up, the way F8 does it: dialog '{Dialogs.Kind}'");
+            Check(_inventoryShows == shows, $"the inventory never tried to open: {_inventoryShows - shows} tries");
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.4f);
+
+            // A second one, stopped with circle: no glow left, and circle did not jump.
+            yield return PadPress(true, PadKey.North);
+            WorldCapture.Pin(centre);
+            yield return new WaitForSeconds(0.5f);
+            Check(WorldCapture.Active && CaptureTint.Count > 0, $"a second capture glows: {CaptureTint.Count} pieces");
+            var rise = 0f;
+            yield return PadPress(false, PadKey.East);
+            yield return Rise(player, 1.2f, r => rise = r);
+            Check(!WorldCapture.Active && !WorldCapture.Drawn && !CaptureHud.Visible && CaptureTint.Count == 0,
+                $"circle stopped it and took the glow off: active {WorldCapture.Active}, glowing {CaptureTint.Count}");
+            Check(rise < 0.15f && !Menu.IsVisible(), $"and the player did not jump: rose {rise:0.00} m");
+
+            // The same presses with no capture up reach the game, as always.
+            yield return PadPress(false, PadKey.DpadRight);
+            var moved = bar != null ? bar.m_selected : -99;
+            yield return PadPress(false, PadKey.DpadDown);
+            yield return Frames(2);
+            var used = PowerUses();
+
+            // Held zoom, out then in: one of the two moves it, whichever end it sat at.
+            var camera0 = camera != null ? camera.m_distance : float.NaN;
+            PadDown(true);
+            yield return Frames(2);
+            PadDown(true, PadKey.DpadDown);
+            yield return Frames(8);
+            var camera1 = camera != null ? camera.m_distance : float.NaN;
+            PadDown(true, PadKey.DpadUp);
+            yield return Frames(8);
+            PadDown(false);
+            yield return Frames(2);
+            var camera2 = camera != null ? camera.m_distance : float.NaN;
+            var cameraMoved = Mathf.Abs(camera1 - camera0) > 1e-3f || Mathf.Abs(camera2 - camera1) > 1e-3f;
+
+            var map0 = map != null ? map.SmallZoom : float.NaN;
+            yield return PadPress(true, PadKey.DpadLeft);
+            var map1 = map != null ? map.SmallZoom : float.NaN;
+            yield return PadPress(true, PadKey.DpadRight);
+            var map2 = map != null ? map.SmallZoom : float.NaN;
+            var mapMoved = Mathf.Abs(map1 - map0) > 1e-6f || Mathf.Abs(map2 - map1) > 1e-6f;
+
+            // The power's animation holds the player a moment; the jump waits for it.
+            yield return new WaitForSeconds(3f);
+            var jump = 0f;
+            yield return PadPress(false, PadKey.East);
+            yield return Rise(player, 1.2f, r => jump = r);
+            Log($"with no capture: hotbar {selected} -> {moved}, power uses {uses} -> {used}, camera {camera0:0.###} -> "
+                + $"{camera1:0.###} -> {camera2:0.###}, map {map0:0.####} -> {map1:0.####} -> {map2:0.####}, jump {jump:0.00} m");
+            Check(moved != selected, $"with no capture up the D-pad moves the hotbar again: slot {selected} -> {moved}");
+            Check(used > uses, $"and D-pad down starts the forsaken power: uses {uses} -> {used}");
+            Check(cameraMoved, $"and L2 + D-pad up, down zooms the camera: {camera0:0.###} -> {camera1:0.###} -> {camera2:0.###}");
+            Check(mapMoved, $"and L2 + D-pad left, right zooms the minimap: {map0:0.####} -> {map1:0.####} -> {map2:0.####}");
+            Check(jump > 0.3f, $"and circle jumps: {jump:0.00} m");
+
+            yield return CapturePadDone(player, map, zoom, camera, distance);
+        }
+
+        /// <summary>One D-pad press during a capture, checked against what it should do to the rectangle.</summary>
+        private static IEnumerator PadStep(bool modifier, PadKey button, float turn, float width, float depth, string what)
+        {
+            var yaw = WorldCapture.Yaw;
+            var w = WorldCapture.Width;
+            var d = WorldCapture.Depth;
+            yield return PadPress(modifier, button);
+            var turned = Mathf.DeltaAngle(yaw, WorldCapture.Yaw);
+            var ok = Mathf.Abs(turned - turn) < 0.01f
+                && Mathf.Abs(WorldCapture.Width - w - width) < 0.01f
+                && Mathf.Abs(WorldCapture.Depth - d - depth) < 0.01f;
+            Check(ok, $"{what}: turn {yaw:0.#} -> {WorldCapture.Yaw:0.#}, {w} x {d} -> {WorldCapture.Width} x {WorldCapture.Depth}");
+        }
+
+        /// <summary>Everything the pad capture changed goes back: the controller, the power, the zoom, the hammer.</summary>
+        private static IEnumerator CapturePadDone(Player player, Minimap map, float zoom, GameCamera camera, float distance)
+        {
+            WorldCapture.Cancel();
+            if (ModUi.Open)
+            {
+                EditorSession.Close();
+            }
+
+            yield return WorldPadOff();
+            PadReader.Fake = null;
+            _pad = null;
+            player.SetGuardianPower("");
+            player.m_guardianPowerCooldown = 0f;
+            if (map != null && !float.IsNaN(zoom))
+            {
+                map.SmallZoom = zoom;
+            }
+
+            if (camera != null && !float.IsNaN(distance))
+            {
+                camera.m_distance = distance;
+            }
+
+            ClearInventoryExceptHammer(player);
+            yield return EquipHammer(player);
         }
 
         /// <summary>

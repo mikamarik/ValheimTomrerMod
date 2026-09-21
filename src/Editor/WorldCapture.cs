@@ -3,6 +3,7 @@ using System.Linq;
 using UnityEngine;
 using ValheimTomrer.Editor.Catalog;
 using ValheimTomrer.Editor.Doc;
+using ValheimTomrer.Editor.Input;
 using ValheimTomrer.Editor.Ui;
 using ValheimTomrer.Editor.View;
 
@@ -14,10 +15,16 @@ namespace ValheimTomrer.Editor
     /// with the wheel resize it, and the pieces it will take glow yellow. The key again captures
     /// what is inside and opens it in the editor with Save as up. Esc stops it.
     ///
+    /// The pad does all of it too (<see cref="WorldPad"/>): the game's modifier (L2) + triangle
+    /// starts and takes it, the D-pad turns it (left, right) and grows both sides (up, down), the
+    /// modifier + D-pad sets the width (left, right) and the depth (up, down), circle stops it.
+    ///
     /// It runs with the editor window closed, because the player has to aim in the world. So
-    /// ModUi.Blocking stays false and the game keeps its input, with two small exceptions while
-    /// the rectangle is up: the wheel does not zoom the camera (EditorInputBlockPatches), and
-    /// the Esc that stops the capture does not also open the pause menu.
+    /// ModUi.Blocking stays false and the game keeps its input, with a few small exceptions while
+    /// the rectangle is up: the wheel does not zoom the camera (EditorInputBlockPatches), the Esc
+    /// that stops the capture does not also open the pause menu, and the game does not see the
+    /// D-pad or circle (ZInputTryGetButtonStatePatch), so the hotbar, the forsaken power, the zoom
+    /// and the jump stay quiet.
     ///
     /// Reading the pieces is a local query. Nothing is moved, removed or sent anywhere. The glow is
     /// a colour on the piece's renderers, through the game's own MaterialMan, and comes off again.
@@ -76,6 +83,7 @@ namespace ValheimTomrer.Editor
         private static Vector3 _shownShape;
         private static int _shownInside;
         private static int _shownLeft;
+        private static string _shownPad;
 
         /// <summary>The rectangle is on the ground right now.</summary>
         public static bool Active { get; private set; }
@@ -131,15 +139,20 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
-            if (Active && ZInput.GetKeyDown(KeyCode.Escape))
+            var escape = Active && ZInput.GetKeyDown(KeyCode.Escape);
+            if (escape || (Active && WorldPad.CancelCapture))
             {
-                _escapeFrame = Time.frameCount;
+                if (escape)
+                {
+                    _escapeFrame = Time.frameCount;
+                }
+
                 Cancel();
                 Say(player, "Capture off.");
                 return;
             }
 
-            if (ZInput.GetKeyDown(key.Value))
+            if (ZInput.GetKeyDown(key.Value) || WorldPad.Capture)
             {
                 if (Active)
                 {
@@ -168,6 +181,7 @@ namespace ValheimTomrer.Editor
             }
 
             var changed = Wheel();
+            changed |= PadShape();
             var hover = player.GetHoveringPiece();
             if (hover != null)
             {
@@ -202,7 +216,9 @@ namespace ValheimTomrer.Editor
             Centre = OnGround(centre);
             Refresh();
             ShowStatus();
-            Say(Player.m_localPlayer, $"Press {KeyName()} again to capture, Esc to stop.");
+            Say(Player.m_localPlayer, ZInput.IsGamepadActive()
+                ? $"Press {PadCaptureName()} again to capture, {EditorInput.Glyphs.Of(PadButton.Circle)} to stop."
+                : $"Press {KeyName()} again to capture, Esc to stop.");
         }
 
         /// <summary>
@@ -526,6 +542,54 @@ namespace ValheimTomrer.Editor
             return true;
         }
 
+        /// <summary>
+        /// The D-pad: alone, left and right turn it and up and down grow or shrink both sides; with
+        /// the game's modifier (L2), left and right set the width and up and down the depth. The
+        /// game's own repeat applies, so a held direction keeps going. True when the rectangle changed.
+        /// </summary>
+        private static bool PadShape()
+        {
+            if (!WorldPad.Live)
+            {
+                return false;
+            }
+
+            var alt = WorldPad.ModifierHeld;
+            var changed = false;
+            if (WorldPad.Pressed(WorldPad.DpadLeft))
+            {
+                Step(alt ? 0f : -TurnStep, alt ? -SideStep : 0f, 0f);
+                changed = true;
+            }
+
+            if (WorldPad.Pressed(WorldPad.DpadRight))
+            {
+                Step(alt ? 0f : TurnStep, alt ? SideStep : 0f, 0f);
+                changed = true;
+            }
+
+            if (WorldPad.Pressed(WorldPad.DpadUp))
+            {
+                Step(0f, alt ? 0f : SideStep, SideStep);
+                changed = true;
+            }
+
+            if (WorldPad.Pressed(WorldPad.DpadDown))
+            {
+                Step(0f, alt ? 0f : -SideStep, -SideStep);
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        private static void Step(float turn, float width, float depth)
+        {
+            Yaw = Mathf.Repeat(Yaw + turn, 360f);
+            Width = Side(Width + width);
+            Depth = Side(Depth + depth);
+        }
+
         private static float Side(float side)
         {
             return Mathf.Clamp(side, MinSide, MaxSide);
@@ -579,7 +643,8 @@ namespace ValheimTomrer.Editor
 
             var left = EdgeNow + SkippedNow;
             var shape = new Vector3(Width, Depth, Yaw);
-            if (CaptureHud.Visible && shape == _shownShape && InsideNow == _shownInside && left == _shownLeft)
+            var pad = ZInput.IsGamepadActive() ? PadCaptureName() + "|" + EditorInput.Glyphs.Of(PadButton.Circle) : null;
+            if (CaptureHud.Visible && shape == _shownShape && InsideNow == _shownInside && left == _shownLeft && pad == _shownPad)
             {
                 return;
             }
@@ -587,9 +652,32 @@ namespace ValheimTomrer.Editor
             _shownShape = shape;
             _shownInside = InsideNow;
             _shownLeft = left;
+            _shownPad = pad;
             CaptureHud.Show(
                 $"Capture  {Width:0} x {Depth:0} m, turned {Yaw:0.#}°, {Pieces(InsideNow)}, {left} left out",
-                $"Wheel: turn   Shift+wheel: width   Alt+wheel: depth   Shift+Alt+wheel: both   {KeyName()}: capture   Esc: cancel");
+                pad != null ? PadKeys() : KeyKeys());
+        }
+
+        /// <summary>The second status line with the keyboard and the mouse.</summary>
+        private static string KeyKeys()
+        {
+            return $"Wheel: turn   Shift+wheel: width   Alt+wheel: depth   Shift+Alt+wheel: both   {KeyName()}: capture   Esc: cancel";
+        }
+
+        /// <summary>The second status line with the pad, in its own button names.</summary>
+        private static string PadKeys()
+        {
+            var g = EditorInput.Glyphs;
+            var mod = WorldPad.NameOf(WorldPad.Modifier, g);
+            return $"{g.Dpad} left, right: turn   {g.Dpad} up, down: both   {mod} + {g.Dpad} left, right: width   "
+                + $"{mod} + {g.Dpad} up, down: depth   {PadCaptureName()}: capture   {g.Of(PadButton.Circle)}: cancel";
+        }
+
+        /// <summary>"L2 + △": the pad's capture combo, in the names of the pad in hand.</summary>
+        private static string PadCaptureName()
+        {
+            var g = EditorInput.Glyphs;
+            return $"{WorldPad.NameOf(WorldPad.Modifier, g)} + {g.Of(PadButton.Triangle)}";
         }
 
         private static string Pieces(int count)

@@ -20,7 +20,8 @@ namespace ValheimTomrer.Editor.Ui
     /// a run of keystrokes in one field into a single undo step, so typing a name is one Ctrl+Z.
     ///
     /// A long list makes the region taller: the window gives it room down to a short problem list
-    /// (<see cref="EditorWindow.FitBlueprint"/>), and past that the region scrolls (mouse wheel).
+    /// (<see cref="EditorWindow.FitBlueprint"/>), and past that the region scrolls: the mouse wheel,
+    /// or the right stick while the panel walk is in this panel (<see cref="FocusNav.Scroll"/>).
     /// The list's rows are plain images, so the panel walk never steps into them.
     /// </summary>
     internal static class BlueprintPanel
@@ -386,7 +387,7 @@ namespace ValheimTomrer.Editor.Ui
         private static void Build(RectTransform host)
         {
             // One scroll view round everything: when even the grown band is too short for a long
-            // materials list, the wheel scrolls it.
+            // materials list, the wheel (or the right stick in the panel walk) scrolls it.
             _scroll = UiBuild.Scroll("Blueprint", host, 4f);
             UiBuild.Stretch((RectTransform)_scroll.transform, 4f, 4f, 4f, 4f);
             _root = _scroll.content;

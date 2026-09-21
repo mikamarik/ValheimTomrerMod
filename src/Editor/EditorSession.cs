@@ -32,6 +32,9 @@ namespace ValheimTomrer.Editor
 
         public static void Tick()
         {
+            // The pad's world combos read the game's buttons; which of them the game must not see
+            // this frame is worked out first.
+            WorldPad.Tick();
             if (!ValheimTomrerPlugin.ModEnabled.Value)
             {
                 WorldCapture.Cancel();
@@ -55,7 +58,8 @@ namespace ValheimTomrer.Editor
                     return;
                 }
 
-                if (ZInput.GetKeyDown(EditorConfig.Key.Value))
+                // The key, or the pad's modifier + square (L2 + square in the game's default layout).
+                if (ZInput.GetKeyDown(EditorConfig.Key.Value) || WorldPad.OpenEditor)
                 {
                     // With a blueprint in hand the key edits that one, not the one left open. The
                     // build tool lets go of it: the Build this button puts it back.
@@ -122,7 +126,8 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
-            if (ZInput.GetKeyDown(EditorConfig.Key.Value) || cancel)
+            // The key, or the same pad combo that opened it.
+            if (ZInput.GetKeyDown(EditorConfig.Key.Value) || cancel || PadBindings.ClosePressed())
             {
                 Close();
             }
@@ -414,7 +419,8 @@ namespace ValheimTomrer.Editor
                 Path.GetFullPath(document.SourcePath), Path.GetFullPath(blueprint.SourcePath), System.StringComparison.Ordinal);
         }
 
-        private static bool CanOpen()
+        /// <summary>The player can act and no game window has the keys: the editor may open, the capture may run.</summary>
+        internal static bool CanOpen()
         {
             var player = Player.m_localPlayer;
             if (player == null || player.IsDead() || player.InCutscene() || player.IsTeleporting())

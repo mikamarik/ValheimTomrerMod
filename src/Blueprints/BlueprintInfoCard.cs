@@ -4,6 +4,7 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
 using ValheimTomrer.Blueprints.Sites;
+using ValheimTomrer.Editor.Input;
 using ValheimTomrer.Editor.Ui;
 
 namespace ValheimTomrer.Blueprints
@@ -435,32 +436,58 @@ namespace ValheimTomrer.Blueprints
             }
         }
 
+        /// <summary>
+        /// The card's text: the blueprint's own line, then the hint line. The hint names pad buttons
+        /// while the game says the pad is in use, the keys otherwise.
+        /// </summary>
         private static string Description(ResolvedBlueprint blueprint, bool continuing)
         {
-            var next = ValheimTomrerPlugin.BlueprintKey.Value;
-            var edit = Editor.EditorConfig.Key != null
-                ? $" {Editor.EditorConfig.Key.Value}: edit it."
-                : "";
-            string text;
-            if (continuing)
-            {
-                // Locked onto the build: the wheel does nothing, Remove twice forgets the plan.
-                text = $"Click: build what you can. {RemoveName()} twice: forget the plan. {next}: next.{edit}";
-            }
-            else
-            {
-                text = $"{blueprint.Parts.Count} pieces. Wheel: rotate. {next}: next blueprint.{edit}";
-            }
-
+            var text = ZInput.IsGamepadActive() ? PadHint(blueprint, continuing) : KeyHint(blueprint, continuing);
             return string.IsNullOrEmpty(blueprint.Blueprint.Description)
                 ? text
                 : blueprint.Blueprint.Description + "\n" + text;
         }
 
-        /// <summary>"Remove (Left System)": the game's own name for the key, as its hint bar shows it. The pad gets the word alone.</summary>
+        /// <summary>
+        /// "16 pieces. L2 + right stick: rotate. □: next blueprint. L2 + □: edit it.", in the names of
+        /// the pad in hand and the game's layout (the modifier is L1 in the alternative one).
+        /// </summary>
+        private static string PadHint(ResolvedBlueprint blueprint, bool continuing)
+        {
+            var g = EditorInput.Glyphs;
+            var next = g.Of(PadButton.Square);
+            var edit = $"{WorldPad.NameOf(WorldPad.Modifier, g)} + {next}: edit it.";
+            if (continuing)
+            {
+                return $"{WorldPad.NameOf("JoyPlace", g)}: build what you can. {WorldPad.NameOf("JoyRemove", g)} twice: "
+                    + $"forget the plan. {next}: next. {edit}";
+            }
+
+            var rotate = ZInput.InputLayout == InputLayout.Default
+                ? $"{WorldPad.NameOf(WorldPad.Modifier, g)} + {g.Rs.ToLowerInvariant()}"
+                : $"{WorldPad.NameOf("JoyRotate", g)}, {WorldPad.NameOf("JoyRotateRight", g)}";
+            return $"{blueprint.Parts.Count} pieces. {rotate}: rotate. {next}: next blueprint. {edit}";
+        }
+
+        private static string KeyHint(ResolvedBlueprint blueprint, bool continuing)
+        {
+            var next = ValheimTomrerPlugin.BlueprintKey.Value;
+            var edit = Editor.EditorConfig.Key != null
+                ? $" {Editor.EditorConfig.Key.Value}: edit it."
+                : "";
+            if (continuing)
+            {
+                // Locked onto the build: the wheel does nothing, Remove twice forgets the plan.
+                return $"Click: build what you can. {RemoveName()} twice: forget the plan. {next}: next.{edit}";
+            }
+
+            return $"{blueprint.Parts.Count} pieces. Wheel: rotate. {next}: next blueprint.{edit}";
+        }
+
+        /// <summary>"Remove (Left System)": the game's own name for the key, as its hint bar shows it.</summary>
         private static string RemoveName()
         {
-            if (ZInput.IsGamepadActive() || Localization.instance == null)
+            if (Localization.instance == null)
             {
                 return "Remove";
             }

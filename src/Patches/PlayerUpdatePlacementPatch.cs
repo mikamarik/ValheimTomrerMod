@@ -1,11 +1,13 @@
 using ValheimTomrer.Blueprints;
+using ValheimTomrer.Editor.Input;
 using HarmonyLib;
 
 namespace ValheimTomrer.Patches
 {
     /// <summary>
-    /// Build-mode input. Listens for the blueprint key, and while a blueprint is active it
-    /// takes over the click and the mouse wheel. The build menu keeps working.
+    /// Build-mode input. Listens for the blueprint key (or square on the pad), and while a
+    /// blueprint is active it takes over the click and the mouse wheel. The build menu keeps
+    /// working. In build mode the game does nothing with square, so it is free.
     /// </summary>
     [HarmonyPatch(typeof(Player), nameof(Player.UpdatePlacement))]
     internal static class PlayerUpdatePlacementPatch
@@ -24,7 +26,7 @@ namespace ValheimTomrer.Patches
             }
 
             if (takeInput && !Hud.IsPieceSelectionVisible()
-                && ZInput.GetKeyDown(ValheimTomrerPlugin.BlueprintKey.Value, false))
+                && (ZInput.GetKeyDown(ValheimTomrerPlugin.BlueprintKey.Value, false) || WorldPad.NextBlueprint))
             {
                 BlueprintMode.Cycle(__instance);
             }

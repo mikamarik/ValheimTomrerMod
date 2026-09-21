@@ -52,6 +52,9 @@ namespace ValheimTomrer.Editor.Ui
 
         private const int Regions = 3;
 
+        /// <summary>The right stick pushed all the way scrolls this far a second, in the list's own units.</summary>
+        public const float ScrollSpeed = 700f;
+
         // Where the walk starts. The top bar, whatever the left-to-right order above is.
         private static readonly FocusRegion[] EnterOrder =
         {
@@ -339,6 +342,95 @@ namespace ValheimTomrer.Editor.Ui
             Collect(Current);
             Focus(Walk.IndexOf(bestThere));
             Remember(was, by);
+        }
+
+        /// <summary>
+        /// The right stick scrolls the panel the walk is in: up on the stick goes up the list. The
+        /// list is the one round the focused widget when that one has more than it shows, else the
+        /// tallest one in the region that does (the palette grid on the left, the blueprint card on
+        /// the right). The ring hides while its widget is scrolled out of sight, and the next step
+        /// scrolls it back. False when there is nothing to scroll.
+        /// </summary>
+        public static bool Scroll(float stick, float dt)
+        {
+            if (!Active || Mathf.Abs(stick) < 0.01f || dt <= 0f)
+            {
+                return false;
+            }
+
+            var scroll = ScrollTarget();
+            if (scroll == null)
+            {
+                return false;
+            }
+
+            var room = Room(scroll);
+            var at = scroll.content.anchoredPosition;
+            var to = Mathf.Clamp(at.y - (stick * ScrollSpeed * dt), 0f, room);
+            if (Mathf.Abs(to - at.y) < 0.001f)
+            {
+                return false;
+            }
+
+            at.y = to;
+            scroll.content.anchoredPosition = at;
+            scroll.velocity = Vector2.zero;
+            Place();
+            return true;
+        }
+
+        /// <summary>The list the right stick scrolls now, or null. For the tests too.</summary>
+        public static ScrollRect ScrollTarget()
+        {
+            var region = RegionRect(Current);
+            if (!Active || region == null)
+            {
+                return null;
+            }
+
+            for (var t = Focused != null ? Focused.transform : null; t != null && t != region; t = t.parent)
+            {
+                var own = t.GetComponent<ScrollRect>();
+                if (own != null && own.content != null && Focused.transform.IsChildOf(own.content) && Room(own) > 0.5f)
+                {
+                    return own;
+                }
+            }
+
+            ScrollRect best = null;
+            var tallest = 0f;
+            foreach (var scroll in region.GetComponentsInChildren<ScrollRect>(false))
+            {
+                if (scroll == null || !scroll.isActiveAndEnabled || Room(scroll) <= 0.5f)
+                {
+                    continue;
+                }
+
+                var height = View(scroll).rect.height;
+                if (height > tallest)
+                {
+                    tallest = height;
+                    best = scroll;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>How far a vertical list can scroll, 0 when it shows all it holds.</summary>
+        private static float Room(ScrollRect scroll)
+        {
+            if (scroll == null || !scroll.vertical || scroll.content == null)
+            {
+                return 0f;
+            }
+
+            return Mathf.Max(0f, scroll.content.rect.height - View(scroll).rect.height);
+        }
+
+        private static RectTransform View(ScrollRect scroll)
+        {
+            return scroll.viewport != null ? scroll.viewport : (RectTransform)scroll.transform;
         }
 
         /// <summary>One step on in the region's order, wrapping at both ends. Tab and Shift+Tab.</summary>
@@ -866,6 +958,15 @@ namespace ValheimTomrer.Editor.Ui
             var parent = _ring.parent as RectTransform;
             var target = Active && Focused != null ? (RectTransform)Focused.transform : null;
             if (target == null || parent == null)
+            {
+                _ring.gameObject.SetActive(false);
+                return;
+            }
+
+            // Scrolled out of its list (the right stick moved the list, not the walk): no ring
+            // hanging outside the panel. The next step scrolls the widget back into sight.
+            var list = ListOf(Focused);
+            if (list != null && !InSight(list, Box(target)))
             {
                 _ring.gameObject.SetActive(false);
                 return;
