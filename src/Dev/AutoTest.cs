@@ -41,7 +41,7 @@ namespace ValheimTomrer.Dev
     /// "editor_focus" walks the top bar and the two panels with the pad, and presses what it finds;
     /// "editor_keep" closes the editor on a changed blueprint and checks the key comes back to all of it;
     /// "editor_build" builds a blueprint made in the editor, in the world, and edits it again;
-    /// "editor_capture" builds a kit in the world, captures it back, and compares it to the file;
+    /// "editor_capture" builds a kit turned 45 degrees, captures it with the turned rectangle, and compares it to the file;
     /// "editor_support" holds the editor's support rule against the game's, then checks the ghost's colours;
     /// "editor_all" runs every scenario above in one game, then checks the mod wrote no art.
     /// </summary>
@@ -365,6 +365,8 @@ namespace ValheimTomrer.Dev
             EditorSession.Forget();
             FocusNav.Leave();
             BlueprintMode.Exit();
+            WorldCapture.Cancel();
+            WorldCapture.ResetShape();
             PadReader.Fake = null;
             BlueprintLibrary.UserFolder = null;
             BlueprintLibrary.Reload();
@@ -6719,20 +6721,23 @@ namespace ValheimTomrer.Dev
         // ---------- scenario: editor_capture ----------
 
         /// <summary>
-        /// Capture: the workshop kit is built in the world, a box is picked round it, and what
-        /// comes back has to be that same blueprint. The kit file is the wanted answer, turned the
-        /// way the hammer turned it, so the check is name for name and spot for spot. A piece of
-        /// another build tool stands in the box too: it has to be left out and counted.
+        /// Capture: the workshop kit is built in the world turned 45 degrees, a rectangle is put
+        /// over it, turned and sized with real wheel events, and what comes back has to be the kit
+        /// file as it is, not turned. A piece of another build tool stands inside (left out and
+        /// counted), and one wall stands across the edge with its pivot outside (glows orange).
+        /// Then the kept-document question, Esc, and the glow's cost on a few hundred pieces.
         /// </summary>
         private static IEnumerator TestEditorCapture(Player player)
         {
             yield return MoveToBuildSpot(player);
             yield return EquipHammer(player);
             RemoveOldTestBuildings(player);
+            WorldCapture.ResetShape();
             PieceCatalog.Ensure();
             Check(PieceCatalog.Ready, "the piece catalog is built");
 
-            yield return CaptureEmptyBox(player);
+            // 1. On bare ground.
+            yield return CaptureBareGround(player);
 
             var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Pieces.Count > 2);
             if (kit == null)
@@ -6761,7 +6766,25 @@ namespace ValheimTomrer.Dev
                 player.GetInventory().AddItem(cost.m_resItem.gameObject.name, cost.m_amount, 1, 0, 0L, "", false);
             }
 
+            // 2. The kit, turned 45 degrees. Facing 180 the hammer starts the kit at 0, and two
+            // notches of the real wheel turn it on to 45. The body turns slowly on its own, so it
+            // is set straight away.
+            var facing = Quaternion.Euler(0f, 180f, 0f);
+            player.m_lookYaw = facing;
+            player.m_lookPitch = 20f;
+            player.transform.rotation = facing;
+            player.m_body.rotation = facing;
+            yield return new WaitForSeconds(0.5f);
             BlueprintMode.Select(player, resolved);
+            yield return null;
+            var start = BlueprintMode.RotationSteps;
+            Log($"facing {player.transform.eulerAngles.y:0.#}, the kit starts at {start * BlueprintMode.RotationStep:0.#}");
+            yield return WheelNotch(1f);
+            yield return WheelNotch(1f);
+            var kitYaw = Mathf.Repeat(BlueprintMode.RotationSteps * BlueprintMode.RotationStep, 360f);
+            Check(BlueprintMode.RotationSteps == start + 2 && Mathf.Abs(Mathf.DeltaAngle(kitYaw, 45f)) < 0.01f,
+                $"two wheel notches turn the kit to 45 degrees: steps {start} -> {BlueprintMode.RotationSteps}, yaw {kitYaw:0.#}");
+
             yield return AimAtGround(player);
             var root = BlueprintMode.PreviewRoot;
             Check(root != null && BlueprintMode.HasTarget && BlueprintMode.Blocked == null,
@@ -6771,38 +6794,104 @@ namespace ValheimTomrer.Dev
                 yield break;
             }
 
-            // How the hammer turned it. The capture reads the world as it stands, so this is the
-            // turn the captured pieces have to carry.
-            var turn = root.rotation;
-            var centre = root.position;
+            var rootPos = root.position;
+            var rootTurn = root.rotation;
             player.m_lastToolUseTime = 0f;
-            var existing = new HashSet<Piece>(PiecesAround(player, centre));
+            var existing = new HashSet<Piece>(PiecesAround(player, rootPos));
             Check(BlueprintMode.TryBuild(player), "the kit is built in the world");
             BlueprintMode.Exit();
-            var built = PiecesAround(player, centre).Where(p => !existing.Contains(p)).ToList();
+            var built = PiecesAround(player, rootPos).Where(p => !existing.Contains(p)).ToList();
             Check(built.Count == resolved.Parts.Count,
                 $"every piece of it stands: {built.Count} of {resolved.Parts.Count}");
+            Check(Mathf.Abs(Mathf.DeltaAngle(rootTurn.eulerAngles.y, 45f)) < 0.01f,
+                $"and it stands turned 45 degrees: {rootTurn.eulerAngles.y:0.##}");
             if (built.Count != resolved.Parts.Count)
             {
                 yield break;
             }
 
-            yield return new WaitForSeconds(2f);
-            yield return CaptureTheKit(player, kit, built, turn);
+            // The rectangle that covers it: the pivots' footprint in the kit's own frame, half a
+            // metre spare on each side, rounded up to the 2 m grid of the sides.
+            var turn45 = Quaternion.Euler(0f, 45f, 0f);
+            var back45 = Quaternion.Inverse(turn45);
+            var lo = new Vector3(float.MaxValue, 0f, float.MaxValue);
+            var hi = new Vector3(float.MinValue, 0f, float.MinValue);
+            foreach (var piece in built)
+            {
+                var local = back45 * (piece.transform.position - rootPos);
+                lo = Vector3.Min(lo, new Vector3(local.x, 0f, local.z));
+                hi = Vector3.Max(hi, new Vector3(local.x, 0f, local.z));
+            }
+
+            var middle = (lo + hi) * 0.5f;
+            var centre = rootPos + (turn45 * middle);
+            centre.y = ZoneSystem.instance.GetGroundHeight(centre);
+            var wantWidth = Mathf.Ceil((hi.x - lo.x + 0.999f) / WorldCapture.SideStep) * WorldCapture.SideStep;
+            var wantDepth = Mathf.Ceil((hi.z - lo.z + 0.999f) / WorldCapture.SideStep) * WorldCapture.SideStep;
+            Log($"capture rectangle: centre {V4(centre)}, {wantWidth} x {wantDepth} m, pivots {V4(lo)} to {V4(hi)}");
+
+            // A piece the hammer cannot build, in the middle.
+            var stray = OtherToolPrefab();
+            Check(stray != null && PieceCatalog.OtherTool(stray.gameObject.name) != null,
+                $"a piece of another tool to leave out: {(stray != null ? stray.gameObject.name : "none")}");
+            if (stray != null)
+            {
+                player.PlacePiece(stray, new Vector3(centre.x, rootPos.y, centre.z), Quaternion.identity, false, true);
+            }
+
+            // A wall lying across the +x edge: pivot 0.5 m outside, its 2 m body from 0.5 m inside
+            // to 1.5 m outside. Same height as the kit's own walls.
+            var wallPrefab = PiecePrefab("woodwall");
+            Check(wallPrefab != null, "the woodwall prefab exists");
+            var wallAt = centre + (turn45 * new Vector3((wantWidth * 0.5f) + 0.5f, 0f, 0f));
+            wallAt.y = rootPos.y + 1.0477f;
+            if (wallPrefab != null)
+            {
+                player.PlacePiece(wallPrefab, wallAt, turn45, false, true);
+            }
+
+            yield return new WaitForSeconds(1f);
+            var extraWall = PiecesAround(player, wallAt)
+                .FirstOrDefault(p => Utils.GetPrefabName(p.gameObject) == "woodwall"
+                    && Vector3.Distance(p.transform.position, wallAt) < 0.01f);
+            Check(extraWall != null, $"the extra wall stands across the edge at {V4(wallAt)}");
+
+            // 3. The rectangle, over the kit, turned and sized with the real wheel.
+            yield return CaptureShape(player, centre, wantWidth, wantDepth);
+
+            // 4. The glow.
+            yield return CaptureGlow(player, built, extraWall, wantWidth, wantDepth);
+
+            // 5 and 6. The key again: the editor opens on it with Save as up, and it is the kit.
+            yield return CaptureIntoEditor(player, kit);
+
+            // 7. A kept blueprint with unsaved changes is asked about first.
+            yield return CaptureOverKept(player, centre, kit);
+
+            // 8. Esc takes everything off again.
+            yield return CaptureEscape(player, centre, built, extraWall);
+
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(0.5f);
+
+            // What a glow refresh costs on a few hundred pieces.
+            yield return CaptureGlowCost(player);
 
             RemoveOldTestBuildings(player);
             yield return new WaitForSeconds(0.5f);
         }
 
-        /// <summary>The key itself, on ground with nothing on it: it starts a box, and it is empty.</summary>
-        private static IEnumerator CaptureEmptyBox(Player player)
+        /// <summary>1. The key twice on ground with nothing on it: a rectangle, then no window and a message.</summary>
+        private static IEnumerator CaptureBareGround(Player player)
         {
             player.m_lookPitch = 35f;
             yield return new WaitForSeconds(0.5f);
             yield return PressKey(UnityEngine.InputSystem.Key.F8);
             yield return new WaitForSeconds(0.3f);
-            Check(WorldCapture.Active, "the capture key started a box selection");
-            Check(WorldCapture.Drawn, "and the box stands in the world");
+            Check(WorldCapture.Active && WorldCapture.Drawn && CaptureHud.Visible,
+                $"the capture key puts a rectangle on the ground, with its status lines: active {WorldCapture.Active}, "
+                + $"drawn {WorldCapture.Drawn}, lines {CaptureHud.Visible}");
+            Check(!ModUi.Blocking, "and the game keeps its input");
             if (!WorldCapture.Active)
             {
                 yield break;
@@ -6810,63 +6899,185 @@ namespace ValheimTomrer.Dev
 
             yield return PressKey(UnityEngine.InputSystem.Key.F8);
             yield return new WaitForSeconds(0.3f);
-            Check(!WorldCapture.Active && !WorldCapture.Drawn, "the second press ended the box");
-            Check(WorldCapture.LastCount == 0 && !ModUi.Open,
-                "an empty box captures nothing and opens no window");
+            Check(!WorldCapture.Active && !WorldCapture.Drawn && !CaptureHud.Visible && CaptureTint.Count == 0,
+                "the second press ends it: no rectangle, no lines, nothing glows");
+            Check(WorldCapture.LastCount == 0 && !ModUi.Open && WorldCapture.LastMessage.StartsWith("Nothing"),
+                $"on bare ground it opens no window and says so: '{WorldCapture.LastMessage}'");
         }
 
-        /// <summary>Picks a box round what was built, captures it, and holds it against the kit file.</summary>
-        private static IEnumerator CaptureTheKit(Player player, Blueprint kit, List<Piece> built, Quaternion turn)
+        /// <summary>
+        /// 3. The key starts it over the kit, the test pins it on the footprint's centre, and the
+        /// wheel does the rest: two notches alone, then Shift, Alt and Shift + Alt, each checked.
+        /// </summary>
+        private static IEnumerator CaptureShape(Player player, Vector3 centre, float wantWidth, float wantDepth)
         {
-            var min = built[0].transform.position;
-            var max = min;
-            foreach (var piece in built)
+            var zoom = GameCamera.instance != null ? GameCamera.instance.m_distance : float.NaN;
+            var placeTurn = player.m_placeRotation;
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            yield return new WaitForSeconds(0.2f);
+            Check(WorldCapture.Active, "the key starts a capture over the kit");
+            if (!WorldCapture.Active)
             {
-                min = Vector3.Min(min, piece.transform.position);
-                max = Vector3.Max(max, piece.transform.position);
+                yield break;
             }
 
-            var first = new Vector3(min.x - 2f, min.y, min.z - 2f);
-            var second = new Vector3(max.x + 2f, max.y, max.z + 2f);
+            WorldCapture.Pin(centre);
+            Check(Vector3.Distance(WorldCapture.Centre, centre) < 0.01f,
+                $"pinned on the kit's footprint centre: {V4(WorldCapture.Centre)}");
 
-            // A piece the hammer cannot build, standing in the middle of the box.
-            var stray = OtherToolPrefab();
-            Check(stray != null && PieceCatalog.OtherTool(stray.gameObject.name) != null,
-                $"a piece of another tool to leave out: {(stray != null ? stray.gameObject.name : "none")}");
-            if (stray != null)
+            var shift = UnityEngine.InputSystem.Key.LeftShift;
+            var alt = UnityEngine.InputSystem.Key.LeftAlt;
+            yield return Notch(1f, 22.5f, 0f, 0f, "the wheel alone turns it");
+            yield return Notch(1f, 22.5f, 0f, 0f, "and again");
+            yield return Notch(1f, 0f, 2f, 0f, "Shift + wheel widens it", shift);
+            yield return Notch(1f, 0f, 0f, 2f, "Alt + wheel deepens it", alt);
+            yield return Notch(1f, 0f, 2f, 2f, "Shift + Alt + wheel grows both sides", shift, alt);
+            while (WorldCapture.Width > wantWidth && WorldCapture.Depth > wantDepth)
             {
-                player.PlacePiece(
-                    stray,
-                    new Vector3((min.x + max.x) * 0.5f, min.y, (min.z + max.z) * 0.5f),
-                    Quaternion.identity,
-                    false,
-                    true);
+                yield return Notch(-1f, 0f, -2f, -2f, "Shift + Alt + wheel down shrinks both", shift, alt);
+            }
+
+            while (WorldCapture.Width > wantWidth)
+            {
+                yield return Notch(-1f, 0f, -2f, 0f, "Shift + wheel down narrows it", shift);
+            }
+
+            while (WorldCapture.Depth > wantDepth)
+            {
+                yield return Notch(-1f, 0f, 0f, -2f, "Alt + wheel down makes it shallower", alt);
+            }
+
+            Check(Mathf.Abs(Mathf.DeltaAngle(WorldCapture.Yaw, 45f)) < 0.01f
+                && Mathf.Approximately(WorldCapture.Width, wantWidth) && Mathf.Approximately(WorldCapture.Depth, wantDepth),
+                $"it ends turned 45 and {wantWidth} x {wantDepth} m: {WorldCapture.Yaw:0.#}, "
+                + $"{WorldCapture.Width} x {WorldCapture.Depth}");
+
+            var zoomAfter = GameCamera.instance != null ? GameCamera.instance.m_distance : float.NaN;
+            Check(Mathf.Abs(zoomAfter - zoom) < 1e-4f && player.m_placeRotation == placeTurn,
+                $"the wheel did not zoom the camera or turn the hammer's piece: distance {zoom:0.###} -> {zoomAfter:0.###}, "
+                + $"piece turn {placeTurn} -> {player.m_placeRotation}");
+        }
+
+        /// <summary>One notch of the real wheel, checked against what it should do to the rectangle.</summary>
+        private static IEnumerator Notch(
+            float direction, float turn, float width, float depth, string what, params UnityEngine.InputSystem.Key[] held)
+        {
+            var yaw = WorldCapture.Yaw;
+            var w = WorldCapture.Width;
+            var d = WorldCapture.Depth;
+            yield return WheelNotch(direction, held);
+            var turned = Mathf.DeltaAngle(yaw, WorldCapture.Yaw);
+            var ok = Mathf.Abs(turned - turn) < 0.01f
+                && Mathf.Abs(WorldCapture.Width - w - width) < 0.01f
+                && Mathf.Abs(WorldCapture.Depth - d - depth) < 0.01f;
+            Check(ok, $"{what}: turn {yaw:0.#} -> {WorldCapture.Yaw:0.#}, {w} x {d} -> {WorldCapture.Width} x {WorldCapture.Depth}");
+        }
+
+        /// <summary>A notch of the real wheel through the input system, with these keys held while it turns.</summary>
+        private static IEnumerator WheelNotch(float direction, params UnityEngine.InputSystem.Key[] held)
+        {
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            var keyboard = UnityEngine.InputSystem.Keyboard.current;
+            if (mouse == null || keyboard == null)
+            {
+                Check(false, "no mouse or keyboard device for the wheel");
+                yield break;
+            }
+
+            if (held.Length > 0)
+            {
+                UnityEngine.InputSystem.InputSystem.QueueStateEvent(
+                    keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState(held));
+                yield return null;
                 yield return null;
             }
 
-            WorldCapture.Begin(first);
-            yield return new WaitForSeconds(0.3f);
-            Check(WorldCapture.Active && WorldCapture.Drawn, "the first corner is in and the box is drawn");
-            yield return Screenshot("editor-capture-1-box");
+            UnityEngine.InputSystem.InputSystem.QueueDeltaStateEvent(mouse.scroll, new Vector2(0f, direction));
+            for (var frame = 0; frame < 4; frame++)
+            {
+                yield return null;
+            }
 
-            var captured = WorldCapture.Corner(second);
+            if (held.Length > 0)
+            {
+                UnityEngine.InputSystem.InputSystem.QueueStateEvent(
+                    keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState());
+                yield return null;
+                yield return null;
+            }
+        }
+
+        /// <summary>4. Yellow on the kit, orange on the wall across the edge, nothing on the stray piece.</summary>
+        private static IEnumerator CaptureGlow(Player player, List<Piece> built, Piece extraWall, float width, float depth)
+        {
             yield return new WaitForSeconds(0.5f);
-            Check(captured && !WorldCapture.Active && !WorldCapture.Drawn, "the second corner captured the box");
+            Check(WorldCapture.InsideNow == built.Count && WorldCapture.EdgeNow == 1 && WorldCapture.SkippedNow == 1,
+                $"inside {WorldCapture.InsideNow} (want {built.Count}), across the edge {WorldCapture.EdgeNow} (want 1), "
+                + $"not buildable {WorldCapture.SkippedNow} (want 1)");
+            Check(CaptureTint.InsideCount == built.Count && CaptureTint.LeftOutCount == 1,
+                $"the glow set: {CaptureTint.InsideCount} yellow (want {built.Count}), {CaptureTint.LeftOutCount} orange (want 1)");
+            Check(built.All(p => CaptureTint.Glows(p.gameObject, out var inside) && inside),
+                "every kit piece is in the yellow set");
+            Check(extraWall != null && CaptureTint.Glows(extraWall.gameObject, out var yellow) && !yellow,
+                "the wall across the edge is the orange one");
+
+            // What the renderers carry. The piece under the crosshair wears the game's own
+            // highlight, so one may differ.
+            var hovered = player.GetHoveringPiece();
+            var lit = built.Count(p => HasColor(p.gameObject, CaptureTint.Inside));
+            var orange = extraWall != null && HasColor(extraWall.gameObject, CaptureTint.LeftOut);
+            Log($"glow on the renderers: {lit} of {built.Count} yellow, wall orange {orange}, "
+                + $"hovered {(hovered != null ? hovered.name : "none")}");
+            Check(lit >= built.Count - 1 && (orange || hovered == extraWall),
+                $"and the renderers carry it: {lit} of {built.Count} yellow, the wall orange {orange}");
+
+            var boxPoints = 2 * (CaptureBox.Segments(width) + CaptureBox.Segments(depth));
+            Check(WorldCapture.Drawn, "the outline is on the ground");
+            var text = CaptureHud.Text;
+            Check(CaptureHud.Visible && text.Contains($"{width:0} x {depth:0} m") && text.Contains("turned 45°")
+                && text.Contains($"{built.Count} pieces") && text.Contains("2 left out") && text.Contains("Shift+Alt+wheel"),
+                "the status lines say it: " + text.Replace("\n", " | "));
+            Log($"outline points expected {boxPoints}");
+
+            // The lines must not sit on the game's own top-left message ("Built Workshop" and the like).
+            var hudRoot = Hud.instance != null ? Hud.instance.m_rootObject.transform : null;
+            var message = MessageHud.instance != null ? MessageHud.instance.m_messageText : null;
+            if (hudRoot != null && message != null && CaptureHud.Rect != null)
+            {
+                var theirs = RectIn(hudRoot, message.rectTransform);
+                var ours = RectIn(hudRoot, CaptureHud.Rect);
+                Log($"top-left message box {theirs}, capture lines {ours}");
+                Check(!theirs.Overlaps(ours), $"the status lines clear the game's top-left message: {ours} vs {theirs}");
+            }
+
+            yield return Screenshot("editor-capture-1-rect");
+        }
+
+        /// <summary>5 and 6. The key captures: the editor opens on it, Save as up, and it is the kit, not turned.</summary>
+        private static IEnumerator CaptureIntoEditor(Player player, Blueprint kit)
+        {
+            var zoom = GameCamera.instance != null ? GameCamera.instance.m_distance : float.NaN;
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            yield return new WaitForSeconds(0.5f);
+            Check(!WorldCapture.Active && !WorldCapture.Drawn && !CaptureHud.Visible && CaptureTint.Count == 0,
+                "the capture ended: no rectangle, no lines, nothing glows");
             Check(ModUi.Open, "the editor opened on what came back");
             var document = EditorSession.Document;
             Check(document != null && document.Pieces.Count == kit.Pieces.Count,
                 $"it holds the kit's pieces: {(document != null ? document.Pieces.Count : 0)} of {kit.Pieces.Count}");
             Check(WorldCapture.LastSkipped == 1,
                 $"and left the other tool's piece out, counted: {WorldCapture.LastSkipped}");
+            Check(document != null && string.IsNullOrEmpty(document.SourcePath) && document.Dirty && !document.ReadOnly,
+                "it opened as a blueprint with no file of its own, not saved");
+            Check(Dialogs.Kind == "saveAs" && Dialogs.NameField != null && Dialogs.NameField.text == WorldCapture.Name,
+                $"with Save as up and '{WorldCapture.Name}' in the name box: dialog '{Dialogs.Kind}', "
+                + $"name '{(Dialogs.NameField != null ? Dialogs.NameField.text : "none")}'");
             if (document == null || document.Pieces.Count == 0)
             {
                 yield break;
             }
 
-            Check(string.IsNullOrEmpty(document.SourcePath) && document.Dirty && !document.ReadOnly,
-                "it opened as a blueprint with no file of its own");
-            CompareToKit(kit, document, turn);
-
+            CompareToKit(kit, document, Quaternion.identity);
             var bottom = EditorState.BottomCentre(new List<DocPiece>(document.Pieces));
             Check(bottom.magnitude < 1e-3f, $"its origin is the bottom centre, {V4(bottom)} off");
 
@@ -6879,9 +7090,159 @@ namespace ValheimTomrer.Dev
 
             yield return new WaitForSeconds(1f);
             yield return Screenshot("editor-capture-2-in-editor");
+
+            // Closing keeps it, Save as and all, for the next scenario step.
             EditorSession.Close();
             yield return new WaitForSeconds(0.3f);
             Check(!ModUi.Open, "the editor closed");
+            var zoomAfter = GameCamera.instance != null ? GameCamera.instance.m_distance : float.NaN;
+            Log($"camera distance {zoom:0.###} -> {zoomAfter:0.###}");
+        }
+
+        /// <summary>
+        /// 7. A capture over a kept blueprint with unsaved changes: the question comes first, and
+        /// Save as only after Discard, on the new blueprint.
+        /// </summary>
+        private static IEnumerator CaptureOverKept(Player player, Vector3 centre, Blueprint kit)
+        {
+            var kept = EditorState.Document;
+            Check(kept != null && kept.Dirty, "the last capture is kept, with unsaved changes");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            yield return new WaitForSeconds(0.2f);
+            WorldCapture.Pin(centre);
+            yield return new WaitForSeconds(0.3f);
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            yield return new WaitForSeconds(0.5f);
+
+            Check(ModUi.Open && Dialogs.Kind == "confirm" && EditorState.Document == kept,
+                $"it asks first: window {ModUi.Open}, dialog '{Dialogs.Kind}' '{Dialogs.TitleText}', "
+                + $"still on the kept one {EditorState.Document == kept}");
+            if (Dialogs.Kind != "confirm")
+            {
+                yield break;
+            }
+
+            Dialogs.Submit();
+            yield return new WaitForSeconds(0.3f);
+            var now = EditorState.Document;
+            Check(now != null && now != kept && now.Name == WorldCapture.Name && now.Pieces.Count == kit.Pieces.Count,
+                $"after Discard the captured one is open: {(now != null ? now.Pieces.Count : 0)} pieces, new {now != kept}");
+            Check(Dialogs.Kind == "saveAs" && Dialogs.NameField != null && Dialogs.NameField.text == WorldCapture.Name,
+                $"and Save as is up on it: dialog '{Dialogs.Kind}'");
+
+            EditorSession.Close();
+            yield return new WaitForSeconds(0.3f);
+        }
+
+        /// <summary>8. Esc during a capture: the glow comes off every piece, and the pause menu stays shut.</summary>
+        private static IEnumerator CaptureEscape(Player player, Vector3 centre, List<Piece> built, Piece extraWall)
+        {
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            yield return new WaitForSeconds(0.2f);
+            WorldCapture.Pin(centre);
+            yield return new WaitForSeconds(0.5f);
+            Check(WorldCapture.Active && CaptureTint.Count == built.Count + 1,
+                $"another capture glows again: {CaptureTint.Count} pieces");
+
+            yield return PressKey(UnityEngine.InputSystem.Key.Escape);
+            yield return new WaitForSeconds(0.3f);
+            var menu = Menu.IsVisible();
+            if (menu)
+            {
+                Menu.instance.Hide();
+            }
+
+            Check(!menu, "Esc stopped the capture without opening the pause menu");
+            Check(!WorldCapture.Active && !WorldCapture.Drawn && !CaptureHud.Visible && CaptureTint.Count == 0,
+                $"and took everything away: active {WorldCapture.Active}, drawn {WorldCapture.Drawn}, "
+                + $"lines {CaptureHud.Visible}, glowing {CaptureTint.Count}");
+
+            // Nothing keeps our colour. Only the piece under the crosshair may wear the game's own.
+            var hovered = player.GetHoveringPiece();
+            var pieces = new List<Piece>(built);
+            if (extraWall != null)
+            {
+                pieces.Add(extraWall);
+            }
+
+            var ours = pieces.Count(p => HasColor(p.gameObject, CaptureTint.Inside) || HasColor(p.gameObject, CaptureTint.LeftOut));
+            var coloured = pieces.Count(p => p != hovered && HasAnyColor(p.gameObject));
+            Check(ours == 0 && coloured == 0,
+                $"no piece keeps a changed colour: {ours} with ours, {coloured} with any (hovered one skipped)");
+        }
+
+        /// <summary>
+        /// Times the glow on a few hundred floors: every piece set again (what the plan first asked
+        /// for) against only what changed (what ships). The numbers go into the handoff.
+        /// </summary>
+        private static IEnumerator CaptureGlowCost(Player player)
+        {
+            var floor = PiecePrefab("wood_floor");
+            if (floor == null)
+            {
+                Check(false, "the wood_floor prefab exists");
+                yield break;
+            }
+
+            var middle = player.transform.position;
+            var before = new HashSet<Piece>(PiecesAround(player, middle));
+            for (var x = 0; x < 20; x++)
+            {
+                for (var z = 0; z < 20; z++)
+                {
+                    var spot = middle + new Vector3((x * 1.5f) - 14.25f, 0f, (z * 1.5f) - 14.25f);
+                    spot.y = ZoneSystem.instance.GetGroundHeight(spot);
+                    player.PlacePiece(floor, spot, Quaternion.identity, false);
+                }
+            }
+
+            yield return new WaitForSeconds(1f);
+            var floors = PiecesAround(player, middle).Where(p => !before.Contains(p)).ToList();
+            Check(floors.Count == 400, $"placed 400 floors to time the glow: {floors.Count}");
+            var first100 = floors.Take(100).ToList();
+            var fewer = floors.Take(floors.Count - 40).ToList();
+            var man = MaterialMan.instance;
+
+            double Timed(System.Action action)
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                action();
+                man.Update();
+                return watch.Elapsed.TotalMilliseconds;
+            }
+
+            var firstTime = Timed(() => CaptureTint.Show(floors, null, true));
+            var lit = floors.Count(p => HasColor(p.gameObject, CaptureTint.Inside));
+            CaptureTint.Clear();
+            man.Update();
+            var full100 = Timed(() => CaptureTint.Show(first100, null, true));
+            var full100Again = Timed(() => CaptureTint.Show(first100, null, true));
+            var full400 = Timed(() => CaptureTint.Show(floors, null, true));
+            var full400Again = Timed(() => CaptureTint.Show(floors, null, true));
+            var still = Timed(() => CaptureTint.Show(floors, null));
+            var stillChanged = CaptureTint.LastChanged;
+            var moved = Timed(() => CaptureTint.Show(fewer, null));
+            var movedChanged = CaptureTint.LastChanged;
+            var clear = Timed(CaptureTint.Clear);
+            var clean = floors.Count(p => !HasAnyColor(p.gameObject));
+
+            // Sorting the loaded pieces round a rectangle, the other half of a refresh.
+            var taken = new List<Piece>();
+            var edge = new List<Piece>();
+            var sortWatch = System.Diagnostics.Stopwatch.StartNew();
+            WorldCapture.Collect(taken, edge, out _);
+            var sort = sortWatch.Elapsed.TotalMilliseconds;
+            Log($"sorting {Piece.s_allPieces.Count} loaded pieces round a {WorldCapture.Width} x {WorldCapture.Depth} m "
+                + $"rectangle: {sort:0.00} ms ({taken.Count} inside, {edge.Count} across the edge)");
+
+            Log($"glow cost: first 400 {firstTime:0.00} ms (lit {lit}); set every piece again: 100 {full100Again:0.00} ms, "
+                + $"400 {full400Again:0.00} ms; only what changed: nothing moved {still:0.00} ms ({stillChanged} touched), "
+                + $"40 left {moved:0.00} ms ({movedChanged} touched); clear 360 {clear:0.00} ms (clean {clean})");
+            Check(lit == floors.Count && clean == floors.Count,
+                $"all {floors.Count} floors lit and all clean after: lit {lit}, clean {clean}");
+            Check(stillChanged == 0 && movedChanged == 40,
+                $"a refresh touches only what changed: {stillChanged} when nothing moved, {movedChanged} when 40 left");
         }
 
         /// <summary>
@@ -6934,8 +7295,46 @@ namespace ValheimTomrer.Dev
             Check(missing.Count == 0, missing.Count == 0
                 ? $"every one of the {kit.Pieces.Count} pieces came back by name"
                 : "pieces that did not come back: " + string.Join(", ", missing));
-            Check(worst < 1e-3f, $"and in the same spot, worst {worst:0.######} m off");
-            Check(worstTurn < 0.5f, $"and turned the same way, worst {worstTurn:0.###} degrees off");
+            Check(worst < 0.01f, $"and in the same spot, worst {worst:0.######} m off");
+            Check(worstTurn < 0.5f, $"and turned the same way as the file, worst {worstTurn:0.###} degrees off");
+        }
+
+        /// <summary>A UI rect in another transform's local space, from its four corners.</summary>
+        private static Rect RectIn(Transform space, RectTransform rect)
+        {
+            var corners = new Vector3[4];
+            rect.GetWorldCorners(corners);
+            var min = new Vector2(float.MaxValue, float.MaxValue);
+            var max = new Vector2(float.MinValue, float.MinValue);
+            foreach (var corner in corners)
+            {
+                var local = (Vector2)space.InverseTransformPoint(corner);
+                min = Vector2.Min(min, local);
+                max = Vector2.Max(max, local);
+            }
+
+            return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
+        }
+
+        /// <summary>True when any renderer of a piece carries a colour in its property block.</summary>
+        private static bool HasAnyColor(GameObject go)
+        {
+            if (go == null)
+            {
+                return false;
+            }
+
+            var block = new MaterialPropertyBlock();
+            foreach (var renderer in go.GetComponentsInChildren<Renderer>())
+            {
+                renderer.GetPropertyBlock(block);
+                if (!block.isEmpty && (block.HasColor(ShaderProps._Color) || block.HasColor(ShaderProps._EmissionColor)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static Vector3 Middle(List<Vector3> points)

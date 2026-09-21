@@ -18,7 +18,7 @@
 #   ./scripts/autotest.sh editor_focus walk the top bar and both panels with the pad, and press what it finds
 #   ./scripts/autotest.sh editor_keep  close the editor on a changed blueprint, open it again, find it all kept
 #   ./scripts/autotest.sh editor_build build a blueprint made in the editor, in the world, then edit it again
-#   ./scripts/autotest.sh editor_capture build a kit in the world, capture it back, compare it to the file
+#   ./scripts/autotest.sh editor_capture build a kit turned 45 degrees, capture it with the turned rectangle, compare it to the file
 #   ./scripts/autotest.sh editor_support build test structures, hold the editor's support rule against the game's
 #   ./scripts/autotest.sh editor_all   every scenario above in one game, then the "no game art" guard
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.

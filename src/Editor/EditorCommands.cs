@@ -95,8 +95,10 @@ namespace ValheimTomrer.Editor
         /// <summary>
         /// A blueprint from outside the window takes the open one's place: the one in the build
         /// tool's hand, or a world capture. Asks first when the open one has changes.
+        /// <paramref name="taken"/> runs once it is the open one, so a dialog that follows it
+        /// (the capture's Save as) cannot close the question and act on the old blueprint.
         /// </summary>
-        public static void Take(BlueprintDocument document, ResolvedBlueprint blueprint)
+        public static void Take(BlueprintDocument document, ResolvedBlueprint blueprint, System.Action taken = null)
         {
             if (document == null)
             {
@@ -104,12 +106,13 @@ namespace ValheimTomrer.Editor
             }
 
             var name = string.IsNullOrEmpty(document.Name) ? "this blueprint" : document.Name;
-            if (AskFirst($"Open {name}?", () => Take(document, blueprint)))
+            if (AskFirst($"Open {name}?", () => Take(document, blueprint, taken)))
             {
                 return;
             }
 
             EditorSession.Replace(document, blueprint);
+            taken?.Invoke();
         }
 
         /// <summary>

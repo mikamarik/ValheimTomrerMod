@@ -1,5 +1,6 @@
 using HarmonyLib;
 using UnityEngine;
+using ValheimTomrer.Editor;
 using ValheimTomrer.Editor.Ui;
 
 namespace ValheimTomrer.Patches
@@ -10,7 +11,8 @@ namespace ValheimTomrer.Patches
     /// as "the game still reacts while the editor is open".
     ///
     /// Every patch is gated on ModUi.Blocking, which stays true for one extra frame after the
-    /// window closes so the closing Esc does not also open the pause menu.
+    /// window closes so the closing Esc does not also open the pause menu. Two also look at the
+    /// world capture, which runs with the window closed: the wheel and the pause menu's Esc.
     /// Measured against Valheim 1.0.15.
     /// </summary>
     internal static class EditorInputBlockPatches
@@ -71,11 +73,14 @@ namespace ValheimTomrer.Patches
             private static bool Prefix() => !ModUi.Blocking;
         }
 
-        /// <summary>Esc and the pad's menu button open the pause menu.</summary>
+        /// <summary>
+        /// Esc and the pad's menu button open the pause menu. Also held back on the one frame
+        /// the world capture uses Esc to stop, or the same press would pause the game too.
+        /// </summary>
         [HarmonyPatch(typeof(Menu), "Update")]
         private static class MenuUpdate
         {
-            private static bool Prefix() => !ModUi.Blocking;
+            private static bool Prefix() => !ModUi.Blocking && !WorldCapture.TakesEscape;
         }
 
         /// <summary>The map key.</summary>
@@ -115,14 +120,15 @@ namespace ValheimTomrer.Patches
         /// <summary>
         /// Camera zoom. The private method, because the public static wrapper is small enough
         /// to be inlined. Our own scroll views read the wheel through the EventSystem, so they
-        /// keep scrolling.
+        /// keep scrolling. Also 0 while the world capture is up: its wheel turns and resizes the
+        /// rectangle, and the capture reads the mouse itself.
         /// </summary>
         [HarmonyPatch(typeof(ZInput), "Internal_GetMouseScrollWheel")]
         private static class ZInputMouseScrollWheel
         {
             private static void Postfix(ref float __result)
             {
-                if (ModUi.Blocking)
+                if (ModUi.Blocking || WorldCapture.Active)
                 {
                     __result = 0f;
                 }

@@ -166,8 +166,11 @@ namespace ValheimTomrer.Editor
         /// Opens the window on a document that is already read, whatever is in it. The pane builds
         /// the pieces itself, so a blueprint holding a piece this game does not have still opens.
         /// A blueprint left open with unsaved changes is asked about first.
+        ///
+        /// <paramref name="opened"/> runs once the document is the open one: straight away, or
+        /// after the question is answered with Discard. Never when the question is turned down.
         /// </summary>
-        public static void OpenDocument(BlueprintDocument document)
+        public static void OpenDocument(BlueprintDocument document, System.Action opened = null)
         {
             if (ModUi.Open || document == null)
             {
@@ -177,13 +180,18 @@ namespace ValheimTomrer.Editor
             if (EditorState.Document == null)
             {
                 Begin(document, null);
+                if (ModUi.Open)
+                {
+                    opened?.Invoke();
+                }
+
                 return;
             }
 
             Begin(null, null);
             if (ModUi.Open)
             {
-                EditorCommands.Take(document, null);
+                EditorCommands.Take(document, null, opened);
             }
         }
 
@@ -214,7 +222,7 @@ namespace ValheimTomrer.Editor
         /// <summary>Shows the window. A null document comes back to everything that was kept.</summary>
         private static void Begin(BlueprintDocument document, ResolvedBlueprint blueprint)
         {
-            // The window is about to cover the world, so a half-picked capture box goes.
+            // The window is about to cover the world, so a capture in progress goes, glow and all.
             WorldCapture.Cancel();
             if (!EditorWindow.Ensure())
             {
