@@ -39,6 +39,7 @@ namespace ValheimTomrer.Dev
     /// "editor_focus" walks the top bar and the two panels with the pad, and presses what it finds;
     /// "editor_build" builds a blueprint made in the editor, in the world, and edits it again;
     /// "editor_capture" builds a kit in the world, captures it back, and compares it to the file;
+    /// "editor_support" holds the editor's support rule against the game's, then checks the ghost's colours;
     /// "editor_all" runs every scenario above in one game, then checks the mod wrote no art.
     /// </summary>
     internal static class AutoTest
@@ -221,6 +222,9 @@ namespace ValheimTomrer.Dev
                 case "editor_capture":
                     scenario = TestEditorCapture(player);
                     break;
+                case "editor_support":
+                    scenario = TestEditorSupport(player);
+                    break;
                 case "editor_all":
                     scenario = TestEverything(player);
                     break;
@@ -295,7 +299,7 @@ namespace ValheimTomrer.Dev
             var names = (Environment.GetEnvironmentVariable("VT_CHAIN")
                 ?? "dump,probe,editor_open,editor_view,editor_files,editor_palette,editor_snap,"
                 + "editor_edit,editor_panels,editor_keys,editor_pad,editor_focus,editor_build,"
-                + "editor_capture,blueprints")
+                + "editor_capture,editor_support,blueprints")
                 .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
 
             foreach (var name in names)
@@ -338,6 +342,7 @@ namespace ValheimTomrer.Dev
                 case "editor_focus": return TestEditorFocus(player);
                 case "editor_build": return TestEditorBuild(player);
                 case "editor_capture": return TestEditorCapture(player);
+                case "editor_support": return TestEditorSupport(player);
                 default: return null;
             }
         }
@@ -572,6 +577,665 @@ namespace ValheimTomrer.Dev
             }
 
             return bounds;
+        }
+
+        // ---------- scenario: editor_support ----------
+
+        /// <summary>
+        /// The support rule. First the numbers: test structures are built in the real world, the
+        /// game is left to settle their support, and every piece is held against the editor's port
+        /// of the rule. Then the editor: the ghost's colour, a drop that would fall is refused, the
+        /// problem list, and the tint on the piece under the aim.
+        /// </summary>
+        private static IEnumerator TestEditorSupport(Player player)
+        {
+            yield return EquipHammer(player);
+            WriteSupportStats(player);
+            PieceCatalog.Ensure();
+            if (Environment.GetEnvironmentVariable("VT_SUPPORT_EDITOR_ONLY") == null)
+            {
+                yield return SupportAgainstTheGame(player);
+            }
+
+            yield return SupportWithoutUi();
+            yield return SupportInTheWindow();
+        }
+
+        private struct Planned
+        {
+            public string Structure;
+            public string Prefab;
+            public Vector3 Pos;
+            public Quaternion Rot;
+        }
+
+        /// <summary>
+        /// The test structures, in blueprint space: y = 0 is the ground, +z is ahead of the player.
+        /// Each one leans on a different part of the rule, and they stand far enough apart that no
+        /// two touch.
+        /// </summary>
+        private static List<Planned> SupportPlan()
+        {
+            var plan = new List<Planned>();
+            void Add(string structure, string prefab, Vector3 pos, float yaw = 0f)
+            {
+                plan.Add(new Planned { Structure = structure, Prefab = prefab, Pos = pos, Rot = Quaternion.Euler(0f, yaw, 0f) });
+            }
+
+            // Straight up: the vertical loss, until a pole breaks.
+            for (var k = 0; k <= 10; k++)
+            {
+                Add("wood pole stack", "wood_pole2", new Vector3(-10f, 1f + (2f * k), 4f));
+            }
+
+            // Straight out: the horizontal loss.
+            Add("wood beams out from a pole", "wood_pole2", new Vector3(-6f, 1f, 4f));
+            for (var k = 0; k < 6; k++)
+            {
+                Add("wood beams out from a pole", "wood_beam", new Vector3(-5f + (2f * k), 2f, 4f));
+            }
+
+            // Held from both ends: the pair rule.
+            Add("wood bridge", "wood_pole2", new Vector3(-6f, 1f, 8f));
+            Add("wood bridge", "wood_pole2", new Vector3(2f, 1f, 8f));
+            for (var k = 0; k < 4; k++)
+            {
+                Add("wood bridge", "wood_beam", new Vector3(-5f + (2f * k), 2f, 8f));
+            }
+
+            // Floors: flat pieces side by side.
+            foreach (var corner in new[] { new Vector3(4f, 1f, 7f), new Vector3(6f, 1f, 7f), new Vector3(4f, 1f, 9f), new Vector3(6f, 1f, 9f) })
+            {
+                Add("wood floors out from four poles", "wood_pole2", corner);
+            }
+
+            for (var k = 0; k < 4; k++)
+            {
+                Add("wood floors out from four poles", "wood_floor", new Vector3(5f + (2f * k), 2f, 8f));
+            }
+
+            // Stone holds a lot straight up and nothing sideways. Wood on stone is capped at wood's own most.
+            for (var k = 0; k < 3; k++)
+            {
+                Add("stone stack", "stone_wall_2x1", new Vector3(-10f, 0.5f + k, 12f));
+            }
+
+            Add("stone stack", "stone_wall_2x1", new Vector3(-8f, 2.5f, 12f));
+            Add("stone stack", "wood_pole2", new Vector3(-10f, 4f, 12f));
+
+            // Iron: a small loss both ways.
+            Add("iron beams out from an iron pole", "woodiron_pole", new Vector3(6f, 1f, 12f));
+            for (var k = 0; k < 3; k++)
+            {
+                Add("iron beams out from an iron pole", "woodiron_beam", new Vector3(7f + (2f * k), 2f, 12f));
+            }
+
+            // Turned boxes against each other.
+            var turn = Quaternion.Euler(0f, 45f, 0f);
+            Add("wood beams turned 45 degrees", "wood_pole2", new Vector3(-8f, 1f, -8f));
+            for (var k = 0; k < 4; k++)
+            {
+                Add("wood beams turned 45 degrees", "wood_beam", new Vector3(-8f, 2f, -8f) + (turn * new Vector3(1f + (2f * k), 0f, 0f)), 45f);
+            }
+
+            // Nothing at all under it.
+            Add("a floor in the air", "wood_floor", new Vector3(10f, 5f, -8f));
+
+            // A real building.
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Name == "Workshop");
+            if (kit != null)
+            {
+                foreach (var piece in kit.Pieces)
+                {
+                    plan.Add(new Planned
+                    {
+                        Structure = "workshop kit",
+                        Prefab = piece.PrefabName,
+                        Pos = new Vector3(0f, 0f, -8f) + piece.Position,
+                        Rot = piece.Rotation,
+                    });
+                }
+            }
+
+            return plan;
+        }
+
+        /// <summary>
+        /// Builds the plan in the world all at once, the way a blueprint is built, and waits until
+        /// the game's support stops changing. Then every piece is compared: standing or fallen, and
+        /// its support value.
+        /// </summary>
+        private static IEnumerator SupportAgainstTheGame(Player player)
+        {
+            yield return MoveToBuildSpot(player);
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(0.5f);
+
+            var origin = player.transform.position;
+            if (Physics.Raycast(origin + (Vector3.up * 20f), Vector3.down, out var ground, 60f, LayerMask.GetMask("terrain")))
+            {
+                origin.y = ground.point.y;
+            }
+
+            var plan = SupportPlan();
+            var scene = new List<ScenePiece>();
+            var built = new WearNTear[plan.Count];
+            for (var i = 0; i < plan.Count; i++)
+            {
+                var entry = PieceCatalog.Find(plan[i].Prefab);
+                if (entry == null)
+                {
+                    Check(false, $"the catalog has {plan[i].Prefab}");
+                    continue;
+                }
+
+                scene.Add(new ScenePiece { Id = i, Prefab = plan[i].Prefab, Pos = plan[i].Pos, Rot = plan[i].Rot, Entry = entry });
+                var copy = UnityEngine.Object.Instantiate(entry.Prefab, origin + plan[i].Pos, plan[i].Rot);
+                var piece = copy.GetComponent<Piece>();
+                piece.m_creator = player.GetPlayerID();
+                piece.m_nview.GetZDO().Set(ZDOVars.s_creator, player.GetPlayerID());
+                built[i] = copy.GetComponent<WearNTear>();
+                if (built[i] != null)
+                {
+                    built[i].OnPlaced();
+                }
+            }
+
+            // The game passes support on once a second per piece, so a tall stack takes a while.
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var predicted = Support.Solve(scene);
+            Log($"support of {scene.Count} pieces worked out in {watch.Elapsed.TotalMilliseconds:0.0} ms");
+
+            var last = Snapshot(built);
+            var still = 0;
+            var waited = 0f;
+            while (waited < 90f && (still < 4 || waited < 12f))
+            {
+                yield return new WaitForSeconds(1f);
+                waited += 1f;
+                var now = Snapshot(built);
+                still = SameSnapshot(last, now) ? still + 1 : 0;
+                last = now;
+            }
+
+            Log($"the game's support settled after {waited:0} s");
+            yield return Screenshot("support-1-world");
+
+            // Built all at once, the game can keep a piece stronger than where it settles when built
+            // one by one: WearNTear.UpdateSupport keeps its old value while the pieces under it do
+            // not change. So the game may hold more than the editor says, never less, and a piece
+            // the editor lets stand must stand.
+            var text = new StringBuilder("\n\nall at once\nstructure | piece | position | game | editor\n");
+            foreach (var group in plan.Select((p, i) => i).GroupBy(i => plan[i].Structure))
+            {
+                var wrong = new List<string>();
+                var standing = 0;
+                var fallen = 0;
+                var exact = 0;
+                var careful = 0;
+                foreach (var i in group)
+                {
+                    var alive = built[i] != null;
+                    var game = alive ? built[i].m_support : 0f;
+                    var falls = predicted.Falls(i);
+                    predicted.TryGet(i, out var mine, out var info);
+                    var allowed = info != null ? Mathf.Max(0.5f, info.Max * 0.01f) : 0.5f;
+                    text.AppendLine($"{plan[i].Structure} | {plan[i].Prefab} | {V(plan[i].Pos)} | "
+                        + $"{(alive ? game.ToString("0.00") : "fell")} | {(falls ? "falls" : mine.ToString("0.00"))}");
+
+                    if (!alive && !falls)
+                    {
+                        wrong.Add($"{plan[i].Prefab} at {V(plan[i].Pos)} fell in the game, the editor says it stands at {mine:0.00}");
+                    }
+                    else if (alive && !falls && game < mine - allowed)
+                    {
+                        wrong.Add($"{plan[i].Prefab} at {V(plan[i].Pos)}: game {game:0.00} is under the editor's {mine:0.00}");
+                    }
+                    else if (alive == !falls && (!alive || Mathf.Abs(game - mine) <= allowed))
+                    {
+                        exact++;
+                    }
+                    else
+                    {
+                        careful++;
+                    }
+
+                    standing += alive ? 1 : 0;
+                    fallen += alive ? 0 : 1;
+                }
+
+                Check(wrong.Count == 0,
+                    $"{group.Key}: {standing} stand and {fallen} fall in the game; the editor has {exact} of "
+                    + $"{standing + fallen} exactly, {careful} weaker than the game, none stronger"
+                    + (wrong.Count > 0 ? " | " + string.Join(" | ", wrong) : ""));
+            }
+
+            yield return OneByOne(player, origin, text);
+            File.AppendAllText(Path.Combine(OutDir, "support.txt"), text.ToString());
+
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>
+        /// A stack of poles built the way a player builds it: one pole, wait until the game has
+        /// settled it, the next. This is the history the editor's numbers are, so they must match
+        /// to the hundredth, and the pole that breaks is the one the editor refuses.
+        /// </summary>
+        private static IEnumerator OneByOne(Player player, Vector3 origin, StringBuilder text)
+        {
+            var entry = PieceCatalog.Find("wood_pole2");
+            var built = new List<WearNTear>();
+            var scene = new List<ScenePiece>();
+            var broke = -1;
+            text.AppendLine("\none by one\npole | game | editor");
+            for (var k = 0; k < 10 && broke < 0; k++)
+            {
+                var pos = new Vector3(10f, 1f + (2f * k), 2f);
+                var copy = UnityEngine.Object.Instantiate(entry.Prefab, origin + pos, Quaternion.identity);
+                var piece = copy.GetComponent<Piece>();
+                piece.m_creator = player.GetPlayerID();
+                piece.m_nview.GetZDO().Set(ZDOVars.s_creator, player.GetPlayerID());
+                var wear = copy.GetComponent<WearNTear>();
+                wear.OnPlaced();
+                built.Add(wear);
+                scene.Add(new ScenePiece { Id = k, Prefab = entry.PrefabName, Pos = pos, Rot = Quaternion.identity, Entry = entry });
+
+                var last = -2f;
+                for (var waited = 0; waited < 8; waited++)
+                {
+                    yield return new WaitForSeconds(1f);
+                    var now = wear != null ? wear.m_support : -1f;
+                    if (waited >= 2 && Mathf.Abs(now - last) < 0.001f)
+                    {
+                        break;
+                    }
+
+                    last = now;
+                }
+
+                if (wear == null)
+                {
+                    broke = k;
+                }
+            }
+
+            var predicted = Support.Solve(scene);
+            var wrong = new List<string>();
+            for (var k = 0; k < built.Count; k++)
+            {
+                var alive = built[k] != null;
+                predicted.TryGet(k, out var mine, out _);
+                var falls = predicted.Falls(k);
+                text.AppendLine($"{k + 1} | {(alive ? built[k].m_support.ToString("0.00") : "fell")} | {(falls ? "falls" : mine.ToString("0.00"))}");
+                if (alive == falls || (alive && Mathf.Abs(built[k].m_support - mine) > 0.01f))
+                {
+                    wrong.Add($"pole {k + 1}: game {(alive ? built[k].m_support.ToString("0.00") : "fell")}, editor {(falls ? "falls" : mine.ToString("0.00"))}");
+                }
+            }
+
+            Check(broke == 8 && wrong.Count == 0,
+                $"built one pole at a time, the game breaks pole {broke + 1} and the editor has every pole's support to 0.01"
+                + (wrong.Count > 0 ? " | " + string.Join(" | ", wrong) : ""));
+        }
+
+        private static float[] Snapshot(WearNTear[] built)
+        {
+            var values = new float[built.Length];
+            for (var i = 0; i < built.Length; i++)
+            {
+                values[i] = built[i] != null ? built[i].m_support : -1f;
+            }
+
+            return values;
+        }
+
+        private static bool SameSnapshot(float[] a, float[] b)
+        {
+            for (var i = 0; i < a.Length; i++)
+            {
+                if (Mathf.Abs(a[i] - b[i]) > 0.001f)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// The state API with no window: poles stacked one on the other with the placing rule until
+        /// the editor refuses one, the problem list, and a group that holds itself up.
+        /// </summary>
+        private static IEnumerator SupportWithoutUi()
+        {
+            var pole = PieceCatalog.Find("wood_pole2");
+            var floor = PieceCatalog.Find("wood_floor");
+            Check(pole != null && floor != null && pole.Support != null,
+                "the catalog has wood_pole2 and wood_floor, with their support numbers");
+            if (pole == null || floor == null || pole.Support == null)
+            {
+                yield break;
+            }
+
+            Check(pole.Support.Max == 100f && pole.Support.Min == 10f && pole.Support.VerticalLoss == 0.125f
+                && pole.Support.HorizontalLoss == 0.2f && pole.Support.Holds && pole.Support.CanFall,
+                $"wood is read off the game: most {pole.Support.Max}, least {pole.Support.Min}, "
+                + $"losses {pole.Support.HorizontalLoss} / {pole.Support.VerticalLoss}");
+
+            var doc = BlueprintDocument.New("Support test");
+            EditorState.Open(doc);
+            EditorState.StartAdd(pole);
+
+            // On open ground: full support, the game's light blue.
+            var open = EditAim(new Vector3(6f, 0f, 0f));
+            Check(open != null && open.Support != null && open.Support[0] >= 100f && !open.WouldFall,
+                $"a pole on the ground has full support: {(open != null && open.Support != null ? open.Support[0] : -1f)}");
+            Check(open != null && Support.ColorOf(open.Support[0], pole.Support) == Support.GroundColor,
+                "and wears the game's light blue");
+
+            // Stacked from above, each pole loses an eighth of its support per metre and a bit.
+            var expected = 100f;
+            var refusedAt = -1;
+            for (var k = 1; k <= 10 && refusedAt < 0; k++)
+            {
+                var aimed = EditAim(Vector3.zero);
+                if (aimed == null || aimed.Support == null)
+                {
+                    Check(false, $"pole {k}: the aim found no spot");
+                    break;
+                }
+
+                var wantY = 1f + (2f * (k - 1));
+                var landed = Mathf.Abs(aimed.Pos.y - wantY) < 0.01f;
+                if (aimed.WouldFall)
+                {
+                    var count = doc.Pieces.Count;
+                    Check(!EditorState.CommitPlacement(aimed) && doc.Pieces.Count == count,
+                        $"pole {k} would have {expected:0.00} support, under 10: the click does nothing");
+                    Check(EditorState.Message != null && EditorState.Message.Contains("fall down"),
+                        $"and the editor says why: '{EditorState.Message}'");
+                    refusedAt = k;
+                    break;
+                }
+
+                var ok = landed && Mathf.Abs(aimed.Support[0] - expected) < 0.05f && EditorState.CommitPlacement(aimed);
+                Check(ok, $"pole {k} lands at y {aimed.Pos.y:0.00} with support {aimed.Support[0]:0.00}, "
+                    + $"wanted y {wantY:0.00} and {expected:0.00}");
+                expected *= 1f - (0.125f * 2.1f);
+            }
+
+            Check(refusedAt == 9, $"the editor refuses the ninth pole, like the game: refused pole {refusedAt}");
+            Check(!Checks.Run(doc).Any(c => c.Message.Contains("fall down")), "the eight that stand are not on the problem list");
+
+            // A floor in the air: the problem list names it.
+            EditorState.CancelMode();
+            var air = doc.AddPiece("wood_floor", new Vector3(20f, 6f, 0f), Quaternion.identity);
+            var rows = Checks.Run(doc);
+            var row = rows.FirstOrDefault(c => c.Message.Contains("fall down"));
+            Check(row != null && row.Level == CheckLevel.Warning && row.Pieces != null
+                && row.Pieces.Length == 1 && row.Pieces[0] == air,
+                $"a floor in the air is on the problem list: {(row != null ? row.Message : "(no row)")}");
+            Check(EditorState.Stability.Falls(air) && EditorState.Stability.ColorOf(air) == Support.ColorOf(0f, floor.Support),
+                "and the editor's own map has it falling, red");
+
+            // A group that holds itself up can be moved into the air as long as it stands on the ground.
+            EditorState.Select(doc.Pieces.Where(p => p.PrefabName == "wood_pole2").Take(3).Select(p => p.Id));
+            EditorState.StartDuplicate();
+            var copies = EditAim(new Vector3(-8f, 0f, 0f));
+            Check(copies != null && !copies.WouldFall && copies.Support.Length == 3
+                && copies.Support.All(v => v > 10f),
+                $"three stacked poles in hand hold each other up: {(copies != null && copies.Support != null ? string.Join(", ", copies.Support.Select(v => v.ToString("0.0"))) : "-")}");
+            EditorState.Close();
+
+            // The standing pieces are solved again after every edit, so a big blueprint must not
+            // stall the frame: a 20 x 20 floor on 441 poles, 841 pieces, each touching up to 8.
+            var big = new List<ScenePiece>();
+            for (var x = 0; x <= 20; x++)
+            {
+                for (var z = 0; z <= 20; z++)
+                {
+                    big.Add(new ScenePiece { Id = big.Count, Prefab = "wood_pole2", Pos = new Vector3(2f * x, 1f, 2f * z), Rot = Quaternion.identity, Entry = pole });
+                    if (x < 20 && z < 20)
+                    {
+                        big.Add(new ScenePiece { Id = big.Count, Prefab = "wood_floor", Pos = new Vector3((2f * x) + 1f, 2f, (2f * z) + 1f), Rot = Quaternion.identity, Entry = floor });
+                    }
+                }
+            }
+
+            Support.Solve(big);
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var solved = Support.Solve(big);
+            var ms = watch.Elapsed.TotalMilliseconds;
+            Check(ms < 250.0 && solved.Fallen.Count == 0,
+                $"{big.Count} pieces are worked out in {ms:0} ms, none falls");
+            yield return null;
+        }
+
+        /// <summary>
+        /// The window: the ghost wears the support colour on the picture, blinks red where it would
+        /// fall, and the piece under the aim takes the game's tint.
+        /// </summary>
+        private static IEnumerator SupportInTheWindow()
+        {
+            var pole = PieceCatalog.Find("wood_pole2");
+            if (pole == null)
+            {
+                yield break;
+            }
+
+            var doc = BlueprintDocument.New("Support window");
+            var stack = new List<NewPiece>();
+            for (var k = 0; k < 8; k++)
+            {
+                stack.Add(new NewPiece { PrefabName = "wood_pole2", Position = new Vector3(0f, 1f + (2f * k), 0f), Rotation = Quaternion.identity });
+            }
+
+            doc.AddPieces(stack);
+            var deepBefore = DeepObjects(out _);
+            EditorSession.OpenDocument(doc);
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(ModUi.Open && ViewportHost.Ready, "the editor opened on a stack of eight poles");
+            ViewportHost.Capture();
+            EditorState.StartAdd(pole);
+
+            // Open ground: blue.
+            ViewportHost.Camera.LookFrom(new Vector3(8f, 4f, -5f), new Vector3(8f, 0f, 0f));
+            yield return WaitForAim(r => r.Pos.y < 1.5f && !r.WouldFall);
+            var blue = EditorState.Aimed;
+            Check(blue != null && !ViewportHost.Ghost.ShowingBad
+                && ViewportHost.Ghost.ColorOf(0) == WithAlpha(Support.GroundColor, 0.6f),
+                $"on open ground the ghost is the game's light blue: {ViewportHost.Ghost.ColorOf(0)}");
+            yield return Screenshot("support-2-ghost-blue");
+            var blueTint = GhostTint();
+            Check(blueTint.b > blueTint.r, $"and the picture turns bluer where it stands: change {blueTint}");
+
+            // The top of the stack: the ninth pole would fall.
+            ViewportHost.Camera.LookFrom(new Vector3(0.5f, 22f, -4f), new Vector3(0f, 16f, 0f));
+            yield return WaitForAim(r => r.WouldFall);
+            var red = EditorState.Aimed;
+            Check(red != null && red.WouldFall && ViewportHost.Ghost.ShowingBad,
+                $"on top of the stack the ghost blinks red: would fall = {(red != null && red.WouldFall)}");
+            yield return Screenshot("support-3-ghost-falls");
+            var redTint = GhostTint();
+            Check(redTint.r > redTint.b, $"and the picture turns redder where it stands: change {redTint}");
+            var count = doc.Pieces.Count;
+            if (red != null && ViewportHost.Raycast.Project(ViewportHost.Scene.Root.TransformPoint(red.Pos), out var at))
+            {
+                ViewportHost.ClickAt(at, false);
+            }
+
+            yield return null;
+            Check(doc.Pieces.Count == count, $"a click there adds nothing: {doc.Pieces.Count} pieces");
+
+            // Empty hands, the aim on the fourth pole: it takes the game's tint.
+            EditorState.CancelMode();
+            ViewportHost.Camera.LookFrom(new Vector3(0f, 7f, -6f), new Vector3(0f, 7f, 0f));
+            var fourth = doc.Pieces[3].Id;
+            waited = 0f;
+            while (ViewportHost.AimPiece != fourth && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(ViewportHost.AimPiece == fourth && ViewportHost.Pieces.TintedId == fourth,
+                $"the pole under the aim wears its support colour: aimed {ViewportHost.AimPiece}, tinted {ViewportHost.Pieces.TintedId}");
+            yield return Screenshot("support-4-hover");
+
+            ViewportHost.Release();
+            EditorSession.Close();
+            yield return null;
+            yield return null;
+
+            // The ghost is built hidden. Its copies once woke up after the guard was off and each
+            // became a real piece, saved in the world 8000 m down: one per piece put in hand.
+            var deepAfter = DeepObjects(out var sample);
+            Check(deepAfter == deepBefore,
+                $"the editor left nothing in the world under the player: {deepBefore} deep objects before, {deepAfter} after"
+                + (deepAfter != deepBefore ? " | " + sample : ""));
+        }
+
+        /// <summary>World objects deep under the ground: where the editor's scene is. There must be none.</summary>
+        private static int DeepObjects(out string sample)
+        {
+            var deep = ZDOMan.instance.m_objectsByID.Values.Where(z => z.GetPosition().y < -1000f).ToList();
+            sample = string.Join(", ", deep.Take(5).Select(z =>
+            {
+                var prefab = ZNetScene.instance.GetPrefab(z.GetPrefab());
+                return (prefab != null ? prefab.name : z.GetPrefab().ToString()) + " " + V(z.GetPosition());
+            }));
+            return deep.Count;
+        }
+
+        private static IEnumerator WaitForAim(Func<PlaceResult, bool> wanted)
+        {
+            var waited = 0f;
+            while ((EditorState.Aimed == null || !wanted(EditorState.Aimed) || !ViewportHost.Ghost.Visible) && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            yield return null;
+        }
+
+        /// <summary>
+        /// How the ghost changes the picture: the pane with it, minus the pane without it, averaged
+        /// over the pixels it covers. A light blue ghost pulls blue up, a red one red.
+        /// </summary>
+        private static Color GhostTint()
+        {
+            ViewportHost.Preview.Render();
+            var with = SampleView("with the ghost");
+            ViewportHost.Ghost.Hide();
+            ViewportHost.Preview.Render();
+            var without = SampleView("without the ghost");
+            var sum = Vector3.zero;
+            var covered = 0;
+            for (var i = 0; i < with.Length && i < without.Length; i++)
+            {
+                var d = new Vector3(with[i].r - without[i].r, with[i].g - without[i].g, with[i].b - without[i].b);
+                if (Mathf.Abs(d.x) + Mathf.Abs(d.y) + Mathf.Abs(d.z) > 0.03f)
+                {
+                    sum += d;
+                    covered++;
+                }
+            }
+
+            sum /= Mathf.Max(1, covered);
+            Log($"the ghost covers {covered} of {with.Length} sampled pixels");
+            return new Color(sum.x, sum.y, sum.z);
+        }
+
+        private static Color WithAlpha(Color color, float alpha)
+        {
+            return new Color(color.r, color.g, color.b, alpha);
+        }
+
+        private static void WriteSupportStats(Player player)
+        {
+            var tool = player.GetBuildTool();
+            var text = new StringBuilder();
+            var byMaterial = new Dictionary<string, int>();
+            int noWear = 0, noSupports = 0, noCheck = 0, comOffset = 0, forceCom = 0;
+            int meshConcave = 0, meshConvex = 0, meshReadable = 0, inactive = 0, disabled = 0, childWear = 0;
+            var concaveNames = new List<string>();
+            foreach (var prefab in tool.m_pieces)
+            {
+                var wear = prefab.GetComponent<WearNTear>();
+                var inChild = prefab.GetComponentInChildren<WearNTear>(true);
+                if (wear == null && inChild != null)
+                {
+                    childWear++;
+                }
+
+                var line = new StringBuilder(prefab.name);
+                if (wear == null)
+                {
+                    noWear++;
+                    line.Append(" | no WearNTear");
+                }
+                else
+                {
+                    var m = wear.m_materialType.ToString();
+                    byMaterial[m] = byMaterial.TryGetValue(m, out var n) ? n + 1 : 1;
+                    if (!wear.m_supports) noSupports++;
+                    if (!wear.m_noSupportWear) noCheck++;
+                    if (wear.m_comOffset != Vector3.zero) comOffset++;
+                    if (wear.m_forceCorrectCOMCalculation) forceCom++;
+                    line.Append($" | {m} supports={wear.m_supports} check={wear.m_noSupportWear} com={V(wear.m_comOffset)} force={wear.m_forceCorrectCOMCalculation}");
+                }
+
+                foreach (var c in prefab.GetComponentsInChildren<Collider>(true))
+                {
+                    var active = true;
+                    for (var t = c.transform; t != null; t = t.parent)
+                    {
+                        active &= t.gameObject.activeSelf;
+                    }
+
+                    if (!active) inactive++;
+                    if (!c.enabled) disabled++;
+                    var kind = c.GetType().Name.Replace("Collider", "");
+                    if (c is MeshCollider mc)
+                    {
+                        if (mc.convex) meshConvex++;
+                        else
+                        {
+                            meshConcave++;
+                            if (!c.isTrigger && active && c.enabled) concaveNames.Add(prefab.name);
+                        }
+
+                        if (mc.sharedMesh != null && mc.sharedMesh.isReadable) meshReadable++;
+                        kind += mc.convex ? "(convex)" : "(concave)";
+                        kind += mc.sharedMesh != null ? $"[{mc.sharedMesh.name} r={mc.sharedMesh.isReadable} v={(mc.sharedMesh.isReadable ? mc.sharedMesh.vertexCount : -1)}]" : "[no mesh]";
+                    }
+
+                    line.Append($" | {kind} {LayerMask.LayerToName(c.gameObject.layer)}"
+                        + $"{(c.isTrigger ? " trigger" : "")}{(!c.enabled ? " off" : "")}{(!active ? " inactive" : "")}"
+                        + $"{(c.attachedRigidbody != null || c.GetComponentInParent<Rigidbody>(true) != null ? " rigidbody" : "")}");
+                }
+
+                text.AppendLine(line.ToString());
+            }
+
+            var summary = $"pieces={tool.m_pieces.Count} noWearNTear={noWear} wearInChildOnly={childWear} "
+                + $"materials={string.Join(",", byMaterial.Select(p => p.Key + "=" + p.Value))} "
+                + $"supportsFalse={noSupports} noSupportCheck={noCheck} comOffset={comOffset} forceCom={forceCom} "
+                + $"meshConvex={meshConvex} meshConcave={meshConcave} meshReadable={meshReadable} "
+                + $"collidersInactive={inactive} collidersDisabled={disabled}";
+            text.Insert(0, summary + "\nconcave (solid, live): " + string.Join(" ", concaveNames.Distinct()) + "\n\n");
+            var path = Path.Combine(OutDir, "support.txt");
+            File.WriteAllText(path, text.ToString());
+            Log(summary);
+            Check(tool.m_pieces.Count > 0, $"support data of {tool.m_pieces.Count} pieces written to {path}");
         }
 
         // ---------- scenario: blueprints ----------

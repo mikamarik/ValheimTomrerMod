@@ -8,6 +8,9 @@ Make blueprints in the game, then build them with the hammer. **Valheim 1.0**, s
   the game's own snapping. No second program, no alt-tab.
 - **Build a whole blueprint with the hammer.** B cycles your blueprints, the preview follows your
   aim, one click puts every piece down.
+- **See what holds before you place it.** The piece in hand wears the colour the hammer shows on
+  a built piece: blue on the ground, then green, yellow, orange and red as it gets weaker. A piece
+  that would fall down blinks red and cannot be placed. Pointing at a placed piece shows its colour.
 - **Copy what you already built.** F8 picks a box in the world and everything in it becomes a
   blueprint.
 - **The game's rules still apply.** Real materials, a workbench in range, and only pieces this
@@ -43,10 +46,14 @@ Valheim/BepInEx/plugins/
 4. **Click to place it.** It snaps to what is already there, the same way the hammer does.
    Hold Shift for no snapping. Q and E pick which corner of the piece goes on the spot you aim at.
    The piece stays in hand, so click again for the next one. Esc stops placing.
+   Its colour says how well it would hold, the same colours the hammer shows in the game. Red and
+   blinking means it would fall down: the click does nothing, so hold it up first (a pole or a
+   wall under it).
 5. **Fix mistakes:** click a piece to select it, G moves it, R turns it, Del removes it,
    Ctrl+Z undoes. Drag a box over several pieces to take them all.
 6. **Name it** on the right, write a line of description, and pick the icon the build card shows.
-   The Checks list under it says what is still wrong.
+   The Checks list under it says what is still wrong, including pieces that would fall down after
+   you removed what held them.
 7. **Ctrl+S saves it** to `BepInEx/config/ValheimTomrer/blueprints/`.
 8. **Build this** in the top bar wants the hammer already in hand. It hands the blueprint over and
    closes the window. Aim at the ground and click, like any other piece.

@@ -64,6 +64,13 @@ namespace ValheimTomrer.Editor
         private static int _indexRevision = -1;
         private static int _indexMoving = -1;
 
+        private static SupportMap _stability;
+        private static SceneIndex _stabilityIndex;
+
+        private static PlaceResult _weighed;
+        private static SupportMap _weighedMap;
+        private static MovingSet _weighedSet;
+
         /// <summary>The blueprint being edited, or null while the editor is closed.</summary>
         public static BlueprintDocument Document { get; private set; }
 
@@ -129,6 +136,25 @@ namespace ValheimTomrer.Editor
             }
         }
 
+        /// <summary>
+        /// How well every piece that stays put is held up, by the game's own rule. Worked out again
+        /// whenever the index is.
+        /// </summary>
+        public static SupportMap Stability
+        {
+            get
+            {
+                var index = Index;
+                if (_stability == null || !ReferenceEquals(_stabilityIndex, index))
+                {
+                    _stability = Support.Solve(index);
+                    _stabilityIndex = index;
+                }
+
+                return _stability;
+            }
+        }
+
         public static void Open(BlueprintDocument document)
         {
             if (document != null)
@@ -151,6 +177,9 @@ namespace ValheimTomrer.Editor
             Message = null;
             _index = null;
             _indexRevision = -1;
+            _stability = null;
+            _stabilityIndex = null;
+            _weighed = null;
             Version++;
         }
 
@@ -392,8 +421,55 @@ namespace ValheimTomrer.Editor
             };
 
             var hit = Placer.Place(Index, Moving, origin, dir.normalized, options, out result);
+            if (hit)
+            {
+                Weigh(result);
+            }
+
             Aimed = hit ? result : null;
             return hit;
+        }
+
+        /// <summary>
+        /// The support each piece in hand would have where it lands, and whether any would fall.
+        /// Worked out again only when the spot, what is in hand or the scene changed.
+        /// </summary>
+        private static void Weigh(PlaceResult result)
+        {
+            var stability = Stability;
+            if (_weighed != null && ReferenceEquals(_weighedMap, stability) && ReferenceEquals(_weighedSet, Moving)
+                && _weighed.Pos == result.Pos && _weighed.Rot == result.Rot)
+            {
+                result.Support = _weighed.Support;
+                result.Falls = _weighed.Falls;
+                result.WouldFall = _weighed.WouldFall;
+                return;
+            }
+
+            var count = result.World.Length;
+            result.Support = new float[count];
+            result.Falls = new bool[count];
+            result.WouldFall = Support.Evaluate(stability, result.World, result.Support, result.Falls);
+            _weighed = result;
+            _weighedMap = stability;
+            _weighedSet = Moving;
+        }
+
+        /// <summary>What the status line and the refused click say when something would fall.</summary>
+        public static string FallText(PlaceResult result)
+        {
+            var falling = 0;
+            if (result != null && result.Falls != null)
+            {
+                foreach (var falls in result.Falls)
+                {
+                    falling += falls ? 1 : 0;
+                }
+            }
+
+            return falling <= 1 && (result == null || result.World.Length <= 1)
+                ? "it would fall down, nothing holds it up there"
+                : $"{Count(falling)} would fall down, nothing holds {(falling == 1 ? "it" : "them")} up there";
         }
 
         /// <summary>Nothing is in hand, so there is nowhere for it to land.</summary>
@@ -407,6 +483,14 @@ namespace ValheimTomrer.Editor
         {
             if (Document == null || Mode != EditMode.Place || Moving == null || result == null || result.Duplicate)
             {
+                return false;
+            }
+
+            // The game would break it at once and the materials would be gone.
+            if (result.WouldFall)
+            {
+                var text = FallText(result);
+                Say(char.ToUpperInvariant(text[0]) + text.Substring(1) + ".");
                 return false;
             }
 

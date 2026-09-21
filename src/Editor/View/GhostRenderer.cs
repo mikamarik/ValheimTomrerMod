@@ -7,8 +7,10 @@ using ValheimTomrer.Editor.Placement;
 namespace ValheimTomrer.Editor.View
 {
     /// <summary>
-    /// The see-through copy of whatever is in hand, standing where a click would drop it. Green
-    /// while it can be placed, red while it would land on a piece of the same kind.
+    /// The see-through copy of whatever is in hand, standing where a click would drop it. Each
+    /// piece wears the colour the game's hammer would show on it once built: light blue on the
+    /// ground, then green, yellow, orange and red as its support runs out. A piece that would fall
+    /// down, or land on a piece of the same kind, blinks red: a click does nothing then.
     ///
     /// The copies are the real prefabs with their visuals kept and everything else stripped, the
     /// same way the vanilla placement ghost is built, with every material swapped for one flat
@@ -19,16 +21,28 @@ namespace ValheimTomrer.Editor.View
     {
         private const float Alpha = 0.6f;
 
+        /// <summary>How see-through the refused colour gets on the off beat of its blink.</summary>
+        private const float BlinkAlpha = 0.15f;
+
+        /// <summary>One blink, on and off, in seconds.</summary>
+        private const float BlinkPeriod = 0.8f;
+
         private static readonly Color Valid = Hex(0x7DFF8A);
         private static readonly Color Bad = Hex(0xFF5A4F);
+        private static readonly int ColorId = Shader.PropertyToID("_Color");
 
         private readonly Transform _parent;
         private readonly int _layer;
         private readonly List<Renderer> _renderers = new List<Renderer>();
 
+        /// <summary>The renderers of each piece of the set, in the set's order.</summary>
+        private readonly List<Renderer[]> _parts = new List<Renderer[]>();
+
+        private readonly List<Color> _shown = new List<Color>();
+        private MaterialPropertyBlock _block;
+
         private GameObject _root;
         private Material _valid;
-        private Material _bad;
         private bool _showingBad;
         private int _pieces;
 
@@ -47,8 +61,14 @@ namespace ValheimTomrer.Editor.View
         /// <summary>Renderers the copies brought with them.</summary>
         public int RendererCount => _renderers.Count;
 
-        /// <summary>It is showing the "same piece is already there" colour.</summary>
+        /// <summary>It is blinking red: a click here does nothing.</summary>
         public bool ShowingBad => _showingBad;
+
+        /// <summary>The colour piece i of the set wears right now, for the test.</summary>
+        public Color ColorOf(int i)
+        {
+            return i >= 0 && i < _shown.Count ? _shown[i] : Color.clear;
+        }
 
         /// <summary>
         /// A new copy of the see-through green the ghost is painted with. The world capture draws
@@ -84,39 +104,63 @@ namespace ValheimTomrer.Editor.View
                 var prefab = scene.GetPrefab(piece.Prefab);
                 if (prefab == null)
                 {
+                    _parts.Add(new Renderer[0]);
+                    _shown.Add(Color.clear);
                     continue;
                 }
 
                 var copy = BlueprintPreview.Build(prefab, _root.transform, style, null);
                 copy.transform.localPosition = piece.Pos;
                 copy.transform.localRotation = piece.Rot;
+                _parts.Add(copy.GetComponentsInChildren<Renderer>(true));
+                _shown.Add(Color.clear);
                 _pieces++;
             }
 
             _valid = NewMaterial();
-            _bad = Shading.Overlay(WithAlpha(Bad), false);
+            _block = new MaterialPropertyBlock();
             Paint(_valid);
         }
 
-        /// <summary>Puts the ghost where the placing rule says it would land.</summary>
-        public void Place(Vector3 position, Quaternion rotation, bool duplicate)
+        /// <summary>
+        /// Puts the ghost where the placing rule says it would land, and colours each piece by the
+        /// support it would have there.
+        /// </summary>
+        public void Place(PlaceResult result)
         {
-            if (_root == null)
+            if (_root == null || result == null)
             {
                 return;
             }
 
-            _root.transform.localPosition = position;
-            _root.transform.localRotation = rotation;
+            _root.transform.localPosition = result.Pos;
+            _root.transform.localRotation = result.Rot;
             if (!_root.activeSelf)
             {
                 _root.SetActive(true);
             }
 
-            if (duplicate != _showingBad)
+            _showingBad = result.Blocked;
+            var on = Time.unscaledTime % BlinkPeriod < BlinkPeriod * 0.5f;
+            var refused = new Color(Bad.r, Bad.g, Bad.b, on ? Alpha : BlinkAlpha);
+            for (var i = 0; i < _parts.Count; i++)
             {
-                _showingBad = duplicate;
-                Paint(duplicate ? _bad : _valid);
+                Color color;
+                if (result.Duplicate || (result.Falls != null && i < result.Falls.Length && result.Falls[i]))
+                {
+                    color = refused;
+                }
+                else if (result.Support != null && i < result.Support.Length && i < result.World.Length)
+                {
+                    var entry = result.World[i].Entry;
+                    color = WithAlpha(Support.ColorOf(result.Support[i], entry != null ? entry.Support : null));
+                }
+                else
+                {
+                    color = WithAlpha(Valid);
+                }
+
+                Tint(i, color);
             }
         }
 
@@ -146,17 +190,33 @@ namespace ValheimTomrer.Editor.View
                 Object.Destroy(_valid);
             }
 
-            if (_bad != null)
-            {
-                Object.Destroy(_bad);
-            }
-
             _root = null;
             _valid = null;
-            _bad = null;
             _renderers.Clear();
+            _parts.Clear();
+            _shown.Clear();
             _showingBad = false;
             _pieces = 0;
+        }
+
+        /// <summary>One piece's colour, through a property block so every piece can share the one material.</summary>
+        private void Tint(int i, Color color)
+        {
+            if (_shown[i] == color)
+            {
+                return;
+            }
+
+            _shown[i] = color;
+            _block.Clear();
+            _block.SetColor(ColorId, color);
+            foreach (var renderer in _parts[i])
+            {
+                if (renderer != null && !(renderer is ParticleSystemRenderer))
+                {
+                    renderer.SetPropertyBlock(_block);
+                }
+            }
         }
 
         /// <summary>One flat colour over every part, so the ghost reads as one shape.</summary>

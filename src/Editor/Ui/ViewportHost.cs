@@ -434,6 +434,13 @@ namespace ValheimTomrer.Editor.Ui
                 _aimPiece = _pieces.IdOf(hit.collider != null ? hit.collider.transform : null);
             }
 
+            // The game's hammer tints the piece it points at with how well it is held up
+            // (Player.UpdateWearNTearHover), with a piece in hand or not.
+            if (_pieces != null)
+            {
+                _pieces.Tint(_aimPiece, _aimPiece >= 0 ? EditorState.Stability.ColorOf(_aimPiece) : Color.clear);
+            }
+
             if (EditorState.Mode != EditMode.Place || EditorState.Moving == null)
             {
                 if (_ghostSet != null)
@@ -457,7 +464,7 @@ namespace ValheimTomrer.Editor.Ui
             var direction = _scene.Root.InverseTransformDirection(ray.direction);
             if (EditorState.Aim(origin, direction, out var result))
             {
-                _ghost.Place(result.Pos, result.Rot, result.Duplicate);
+                _ghost.Place(result);
             }
             else
             {
@@ -559,6 +566,12 @@ namespace ValheimTomrer.Editor.Ui
                 var piece = _aimPiece >= 0 && document != null ? document.Find(_aimPiece) : null;
                 var entry = piece != null ? Catalog.PieceCatalog.Find(piece.PrefabName) : null;
                 _aimName.text = piece == null ? "" : entry != null ? entry.DisplayName : piece.PrefabName;
+                if (piece != null && EditorState.Stability.TryGet(piece.Id, out var held, out _))
+                {
+                    _aimName.text += EditorState.Stability.Falls(piece.Id)
+                        ? "   (falls down)"
+                        : "   (support: " + SupportWords(held, entry) + ")";
+                }
                 _aimName.rectTransform.anchoredPosition =
                     new Vector2(0f, Captured || PadAim ? -18f : -80f);
             }
@@ -680,12 +693,54 @@ namespace ValheimTomrer.Editor.Ui
                 return "a piece of this kind is already there";
             }
 
-            if (result.Snapped)
+            if (result.WouldFall)
             {
-                return result.Assisted ? "snapped (helped)" : "snapped";
+                return EditorState.FallText(result);
             }
 
-            return result.SnapSkipped ? "snap refused: the same piece is there" : "free";
+            var line = result.Snapped
+                ? result.Assisted ? "snapped (helped)" : "snapped"
+                : result.SnapSkipped ? "snap refused: the same piece is there" : "free";
+            return line + "   |   support: " + Weakest(result);
+        }
+
+        /// <summary>The support of the weakest piece in hand, in words and as a share of its most.</summary>
+        private static string Weakest(PlaceResult result)
+        {
+            var worst = -1;
+            var worstLevel = float.PositiveInfinity;
+            for (var i = 0; result.Support != null && i < result.Support.Length; i++)
+            {
+                var entry = result.World[i].Entry;
+                var info = entry != null ? entry.Support : null;
+                var level = info == null || !info.CanFall ? 2f : result.Support[i] >= info.Max ? 1.5f : Support.Level(result.Support[i], info);
+                if (level < worstLevel)
+                {
+                    worstLevel = level;
+                    worst = i;
+                }
+            }
+
+            return worst < 0 ? "never falls" : SupportWords(result.Support[worst], result.World[worst].Entry);
+        }
+
+        /// <summary>"on the ground", or a word and a share of the most it could have: "good (62 %)".</summary>
+        public static string SupportWords(float value, Catalog.PieceEntry entry)
+        {
+            var info = entry != null ? entry.Support : null;
+            if (info == null || !info.CanFall)
+            {
+                return "never falls";
+            }
+
+            if (value >= info.Max)
+            {
+                return "on the ground";
+            }
+
+            var level = Support.Level(value, info);
+            var word = level >= 0.75f ? "strong" : level >= 0.4f ? "good" : level > 0f ? "weak" : "about to break";
+            return $"{word} ({Mathf.RoundToInt(value / info.Max * 100f)} %)";
         }
 
         private static string DocumentLine()

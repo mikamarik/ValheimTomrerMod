@@ -69,6 +69,21 @@ namespace ValheimTomrer.Editor.Placement
         public int Manual = -1;
 
         public string ManualName;
+
+        /// <summary>
+        /// The game's support value of each piece where it lands, in the order of World. Filled in
+        /// by the editor after the placing rule, see <see cref="Support.Evaluate"/>.
+        /// </summary>
+        public float[] Support;
+
+        /// <summary>Which pieces would break the moment the game checks them.</summary>
+        public bool[] Falls;
+
+        /// <summary>At least one piece would fall down: draw it red, a click does nothing.</summary>
+        public bool WouldFall;
+
+        /// <summary>A click here does nothing: the same piece is there, or something would fall.</summary>
+        public bool Blocked => Duplicate || WouldFall;
     }
 
     /// <summary>

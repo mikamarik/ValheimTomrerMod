@@ -16,9 +16,11 @@
 #   ./scripts/autotest.sh editor_focus walk the top bar and both panels with the pad, and press what it finds
 #   ./scripts/autotest.sh editor_build build a blueprint made in the editor, in the world, then edit it again
 #   ./scripts/autotest.sh editor_capture build a kit in the world, capture it back, compare it to the file
+#   ./scripts/autotest.sh editor_support build test structures, hold the editor's support rule against the game's
 #   ./scripts/autotest.sh editor_all   every scenario above in one game, then the "no game art" guard
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
 # VT_CHAIN="editor_build,blueprints" ./scripts/autotest.sh editor_all  runs only those, in that order.
+# VT_SUPPORT_EDITOR_ONLY=1 ./scripts/autotest.sh editor_support  skips building in the world (3 min less).
 set -euo pipefail
 
 SCENARIO="${1:-blueprints}"

@@ -16,12 +16,18 @@ namespace ValheimTomrer.Editor.View
     /// </summary>
     internal sealed class SceneModel
     {
+        private static readonly int ColorId = Shader.PropertyToID("_Color");
+        private static readonly int EmissionId = Shader.PropertyToID("_EmissionColor");
+
         private readonly Dictionary<int, Standing> _live = new Dictionary<int, Standing>();
         private readonly HashSet<int> _hidden = new HashSet<int>();
+        private readonly MaterialPropertyBlock _tint = new MaterialPropertyBlock();
         private readonly Transform _root;
         private readonly int _layer;
         private int _revision = -1;
         private bool _boxes;
+        private GameObject _tinted;
+        private Color _tintColor;
 
         public SceneModel(Transform root, int layer)
         {
@@ -159,6 +165,51 @@ namespace ValheimTomrer.Editor.View
             }
         }
 
+        /// <summary>The piece that wears a tint right now, or -1.</summary>
+        public int TintedId => _tinted != null ? IdOf(_tinted.transform) : -1;
+
+        /// <summary>
+        /// Tints one piece the way the game's hammer does with the piece it points at
+        /// (WearNTear.Highlight): the colour on the surface, and 40 % of it as glow. -1 clears it.
+        /// </summary>
+        public void Tint(int id, Color color)
+        {
+            var copy = id >= 0 && _live.TryGetValue(id, out var standing) ? standing.Object : null;
+            if (copy == _tinted && (copy == null || color == _tintColor))
+            {
+                return;
+            }
+
+            Paint(_tinted, null);
+            _tinted = copy;
+            _tintColor = color;
+            if (copy == null)
+            {
+                return;
+            }
+
+            _tint.Clear();
+            _tint.SetColor(ColorId, color);
+            _tint.SetColor(EmissionId, color * 0.4f);
+            Paint(copy, _tint);
+        }
+
+        private static void Paint(GameObject copy, MaterialPropertyBlock block)
+        {
+            if (copy == null)
+            {
+                return;
+            }
+
+            foreach (var renderer in copy.GetComponentsInChildren<Renderer>(true))
+            {
+                if (!(renderer is ParticleSystemRenderer))
+                {
+                    renderer.SetPropertyBlock(block);
+                }
+            }
+        }
+
         /// <summary>Pieces being carried are hidden here, because the ghost draws them instead.</summary>
         public void Hide(IEnumerable<int> ids)
         {
@@ -220,6 +271,7 @@ namespace ValheimTomrer.Editor.View
 
         public void Clear()
         {
+            _tinted = null;
             _live.Clear();
             _hidden.Clear();
             _revision = -1;

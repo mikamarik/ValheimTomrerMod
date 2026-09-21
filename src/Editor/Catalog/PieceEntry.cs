@@ -41,7 +41,38 @@ namespace ValheimTomrer.Editor.Catalog
         public bool Trigger;
         public bool OnRigidbody;        // hangs under a Rigidbody (carts, ships)
         public bool Placed;             // there on the built piece
+        public bool Active;             // its object and every parent are switched on
         public bool Ghost;              // there on the see-through copy while placing
+    }
+
+    /// <summary>
+    /// What a piece brings to the game's support rule, straight off its WearNTear. A piece with no
+    /// WearNTear has none: it never falls, and a piece touching it stands as if on rock.
+    /// </summary>
+    internal sealed class PieceSupport
+    {
+        public WearNTear.MaterialType Material;
+
+        /// <summary>Support on the ground, the most it can have.</summary>
+        public float Max;
+
+        /// <summary>Under this the piece breaks.</summary>
+        public float Min;
+
+        public float HorizontalLoss;
+        public float VerticalLoss;
+
+        /// <summary>Other pieces can rest on it (m_supports). A workbench or a torch holds nothing.</summary>
+        public bool Holds;
+
+        /// <summary>It checks its own support and breaks without it (m_noSupportWear). Carts and ships never do.</summary>
+        public bool CanFall;
+
+        /// <summary>Its centre of mass, from its pivot, in piece space.</summary>
+        public Vector3 ComOffset;
+
+        /// <summary>m_forceCorrectCOMCalculation: distances always go centre to centre.</summary>
+        public bool ExactCom;
     }
 
     /// <summary>
@@ -58,6 +89,9 @@ namespace ValheimTomrer.Editor.Catalog
 
         /// <summary>Layers the snap search looks at (Piece.s_pieceRayMask).</summary>
         public static readonly string[] PieceLayers = { "piece", "piece_nonsolid" };
+
+        /// <summary>Layers the support check looks at (WearNTear.s_rayMask).</summary>
+        public static readonly string[] SupportLayers = { "piece", "Default", "static_solid", "Default_small", "terrain" };
 
         public GameObject Prefab;
         public Piece Piece;
@@ -120,6 +154,18 @@ namespace ValheimTomrer.Editor.Catalog
         /// <summary>Colliders that make a built piece count as near enough to snap to.</summary>
         public PieceCollider[] SnapSearchColliders;
 
+        /// <summary>Its part in the support rule. Null when it has no WearNTear.</summary>
+        public PieceSupport Support;
+
+        /// <summary>
+        /// Colliders the support rule measures this piece by (WearNTear.SetupColliders): every solid
+        /// box, switched on or not, and the other kinds while they are live.
+        /// </summary>
+        public PieceCollider[] BodyColliders;
+
+        /// <summary>Colliders another piece's support check finds on this one: solid, live, on its layers.</summary>
+        public PieceCollider[] SupportColliders;
+
         /// <summary>Lower case name and prefab, joined, so the search filter needs no allocation.</summary>
         public string SearchText;
 
@@ -177,6 +223,7 @@ namespace ValheimTomrer.Editor.Catalog
 
             ReadSnapPoints(piece, entry);
             ReadColliders(prefab, entry);
+            entry.Support = ReadSupport(prefab);
             entry.SearchText = (entry.DisplayName + "\n" + entry.PrefabName).ToLowerInvariant();
             return entry;
         }
@@ -260,17 +307,21 @@ namespace ValheimTomrer.Editor.Catalog
         {
             var rayMask = LayerMask.GetMask(PlaceRayLayers);
             var pieceMask = LayerMask.GetMask(PieceLayers);
+            var supportMask = LayerMask.GetMask(SupportLayers);
             var toRoot = prefab.transform.worldToLocalMatrix;
 
             var all = new List<PieceCollider>();
             var ray = new List<PieceCollider>();
             var touch = new List<PieceCollider>();
             var snap = new List<PieceCollider>();
+            var body = new List<PieceCollider>();
+            var support = new List<PieceCollider>();
 
             foreach (var collider in prefab.GetComponentsInChildren<Collider>(true))
             {
                 var read = Measure(collider, toRoot);
                 var bit = 1 << read.Layer;
+                read.Active = IsActive(collider.transform);
 
                 // The ghost keeps only the colliders the placement ray cares about (SetupPlacementGhost)
                 // and loses every Rigidbody with them.
@@ -292,12 +343,67 @@ namespace ValheimTomrer.Editor.Catalog
                 {
                     snap.Add(read);
                 }
+
+                // The game takes a box from its transform, live or not, and any other kind from
+                // its world bounds, which are empty while it is off. An empty one is left out here.
+                var live = read.Placed && read.Active;
+                if (!read.Trigger && !read.OnRigidbody && (read.Kind == ColliderKind.Box || live))
+                {
+                    body.Add(read);
+                }
+
+                if (live && !read.Trigger && !read.OnRigidbody && (bit & supportMask) != 0)
+                {
+                    support.Add(read);
+                }
             }
 
             entry.Colliders = all.ToArray();
             entry.RayColliders = ray.ToArray();
             entry.TouchColliders = touch.ToArray();
             entry.SnapSearchColliders = snap.ToArray();
+            entry.BodyColliders = body.ToArray();
+            entry.SupportColliders = support.ToArray();
+        }
+
+        private static bool IsActive(Transform at)
+        {
+            for (var t = at; t != null; t = t.parent)
+            {
+                if (!t.gameObject.activeSelf)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// The piece's support numbers. The four material numbers come from the game's own method,
+        /// so a game update that changes them changes them here as well.
+        /// </summary>
+        private static PieceSupport ReadSupport(GameObject prefab)
+        {
+            var wear = prefab.GetComponent<WearNTear>();
+            if (wear == null)
+            {
+                return null;
+            }
+
+            wear.GetMaterialProperties(out var max, out var min, out var horizontal, out var vertical);
+            return new PieceSupport
+            {
+                Material = wear.m_materialType,
+                Max = max,
+                Min = min,
+                HorizontalLoss = horizontal,
+                VerticalLoss = vertical,
+                Holds = wear.m_supports,
+                CanFall = wear.m_noSupportWear,
+                ComOffset = wear.m_comOffset,
+                ExactCom = wear.m_forceCorrectCOMCalculation,
+            };
         }
 
         private static PieceCollider Measure(Collider collider, Matrix4x4 toRoot)

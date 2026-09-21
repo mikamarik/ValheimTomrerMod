@@ -6,6 +6,7 @@ using UnityEngine;
 using ValheimTomrer.Blueprints;
 using ValheimTomrer.Editor.Catalog;
 using ValheimTomrer.Editor.Doc;
+using ValheimTomrer.Editor.Placement;
 
 namespace ValheimTomrer.Editor
 {
@@ -77,6 +78,7 @@ namespace ValheimTomrer.Editor
             Kinds(found, pieces);
             Scaled(found, pieces);
             SameSpotPieces(found, pieces);
+            Falling(found, pieces);
             CardSlots(found, document);
             Icon(found, document);
             Origin(found, pieces);
@@ -334,6 +336,35 @@ namespace ValheimTomrer.Editor
                 Add(found, CheckLevel.Warning,
                     $"{Plural(ids.Count, "piece")} sit in the same spot as another piece of the same kind.",
                     ids.ToArray());
+            }
+        }
+
+        /// <summary>
+        /// The pieces the game would break the moment it checks them, by its own support rule, on
+        /// flat ground at y = 0. Their materials would be gone with them.
+        /// </summary>
+        private static void Falling(List<Check> found, IReadOnlyList<DocPiece> pieces)
+        {
+            var scene = new List<ScenePiece>(pieces.Count);
+            foreach (var piece in pieces)
+            {
+                scene.Add(new ScenePiece
+                {
+                    Id = piece.Id,
+                    Prefab = piece.PrefabName,
+                    Pos = piece.Position,
+                    Rot = piece.Rotation,
+                    Entry = PieceCatalog.Find(piece.PrefabName),
+                });
+            }
+
+            var fallen = Support.Solve(scene).Fallen;
+            if (fallen.Count > 0)
+            {
+                Add(found, CheckLevel.Warning,
+                    $"{Plural(fallen.Count, "piece")} would fall down in the game. Nothing holds "
+                        + (fallen.Count == 1 ? "it" : "them") + " up.",
+                    fallen.ToArray());
             }
         }
 
