@@ -90,9 +90,11 @@ namespace ValheimTomrer.Editor.Input
             var dt = Mathf.Min(EditorInput.Dt, 0.1f);
             SetMods(ReadMods());
 
-            if (ModUi.Typing)
+            if (ModUi.JustTyping)
             {
-                // A text box owns the keyboard: stop flying and read nothing.
+                // A text box owns the keyboard: stop flying and read nothing. "Just" counts the
+                // frame the box let go too: it reads its keys first, so the Enter that submitted
+                // the box (and maybe opened "Replace the file?") must not press anything here.
                 Held.Clear();
                 return;
             }
@@ -299,7 +301,7 @@ namespace ValheimTomrer.Editor.Input
         /// </summary>
         public static bool Cancel()
         {
-            if (Dialogs.Close())
+            if (Dialogs.Dismiss())
             {
                 return true;
             }

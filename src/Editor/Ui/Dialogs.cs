@@ -12,8 +12,9 @@ using ValheimTomrer.Editor.Input;
 namespace ValheimTomrer.Editor.Ui
 {
     /// <summary>
-    /// The editor's windows on top of the window: open, save as, help and the unsaved-changes
-    /// question. One at a time, over a dark backdrop that swallows clicks.
+    /// The editor's windows on top of the window: the blueprint list, save as, help and the
+    /// questions (unsaved changes, delete a file). One at a time, over a dark backdrop that
+    /// swallows clicks.
     ///
     /// While one is up the editor's keys are silent (<see cref="Bindings.Press"/> reads
     /// <see cref="IsOpen"/>) and Esc closes it instead of the editor.
@@ -31,6 +32,11 @@ namespace ValheimTomrer.Editor.Ui
         /// <summary>Where the name stops and the file and the date start.</summary>
         private const float NameSplit = 0.42f;
 
+        /// <summary>The Delete button at the end of each of the player's own rows.</summary>
+        private const float DeleteWidth = 84f;
+
+        private const float DeleteGap = 6f;
+
         private static readonly Regex Name = new Regex(NamePattern);
 
         private static RectTransform _host;
@@ -46,7 +52,13 @@ namespace ValheimTomrer.Editor.Ui
         private static readonly List<TextMeshProUGUI> RowDetails = new List<TextMeshProUGUI>();
         private static readonly List<Selectable> RowButtons = new List<Selectable>();
 
+        /// <summary>One per row, null for a kit: kits live in the DLL.</summary>
+        private static readonly List<Button> DeleteButtons = new List<Button>();
+
         private static Action _confirmRun;
+
+        /// <summary>What cancelling the dialog goes back to, or null to just close it.</summary>
+        private static Action _back;
         private static TextMeshProUGUI _note;
         private static TextMeshProUGUI _fileLine;
         private static Button _submit;
@@ -89,6 +101,18 @@ namespace ValheimTomrer.Editor.Ui
             return index >= 0 && index < Rows.Count ? Rows[index] : null;
         }
 
+        /// <summary>The row itself, the widget a click or cross opens.</summary>
+        public static Selectable RowWidget(int index)
+        {
+            return index >= 0 && index < RowButtons.Count ? RowButtons[index] : null;
+        }
+
+        /// <summary>The row's Delete button, or null for a kit.</summary>
+        public static Button DeleteButton(int index)
+        {
+            return index >= 0 && index < DeleteButtons.Count ? DeleteButtons[index] : null;
+        }
+
         /// <summary>What a click on a row does. The test calls it without a mouse.</summary>
         public static void ClickRow(int index)
         {
@@ -107,6 +131,34 @@ namespace ValheimTomrer.Editor.Ui
             EditorCommands.OpenEntry(entry);
         }
 
+        /// <summary>
+        /// What the Delete button on a row does: asks first, on Cancel. Either answer comes back
+        /// to the list, on the same place.
+        /// </summary>
+        public static void ClickDelete(int index)
+        {
+            var entry = Row(index);
+            if (entry == null || entry.IsKit || string.IsNullOrEmpty(entry.Path))
+            {
+                return;
+            }
+
+            var file = Path.GetFileName(entry.Path);
+            var document = EditorState.Document;
+            var open = document != null && !string.IsNullOrEmpty(document.SourcePath)
+                && string.Equals(document.SourcePath, entry.Path, StringComparison.OrdinalIgnoreCase);
+            var text = $"{NameOf(entry)} ({file}) is deleted from your blueprint folder. This cannot be undone."
+                + (open ? " It stays open in the editor, as not saved." : "");
+            Confirm("Delete the blueprint?", text, "Delete",
+                () =>
+                {
+                    EditorCommands.DeleteEntry(entry);
+                    Open(index);
+                },
+                () => Open(index),
+                true);
+        }
+
         public static void Ensure(RectTransform host)
         {
             if (host == null || (_host == host && _root != null && _generation == UiTheme.Generation))
@@ -123,7 +175,7 @@ namespace ValheimTomrer.Editor.Ui
         /// <summary>Enter answers the question that is up. Esc goes through Bindings.Cancel.</summary>
         public static void Tick()
         {
-            if (!IsOpen || ModUi.Typing)
+            if (!IsOpen || ModUi.JustTyping)
             {
                 return;
             }
@@ -145,6 +197,23 @@ namespace ValheimTomrer.Editor.Ui
             }
         }
 
+        /// <summary>
+        /// Cancels whatever is up: Esc, circle, the X, a click beside it, a Cancel button. A
+        /// question asked from the blueprint list goes back to that list. True when there was
+        /// something.
+        /// </summary>
+        public static bool Dismiss()
+        {
+            var back = _back;
+            if (!Close())
+            {
+                return false;
+            }
+
+            back?.Invoke();
+            return true;
+        }
+
         /// <summary>Shuts whatever is up. True when there was something.</summary>
         public static bool Close()
         {
@@ -155,6 +224,7 @@ namespace ValheimTomrer.Editor.Ui
 
             Kind = "";
             _confirmRun = null;
+            _back = null;
             NameField = null;
             FocusStart = null;
             _note = null;
@@ -164,6 +234,7 @@ namespace ValheimTomrer.Editor.Ui
             RowLabels.Clear();
             RowDetails.Clear();
             RowButtons.Clear();
+            DeleteButtons.Clear();
             if (_root != null)
             {
                 _root.gameObject.SetActive(false);
@@ -178,11 +249,13 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>
         /// The blueprints that come with the mod first, with no heading over them, then the
-        /// player's own files under one.
+        /// player's own files under one, each with a Delete button. <paramref name="deleteAt"/>
+        /// puts the walk on the Delete button of that row (or the nearest one above), for the
+        /// way back from the delete question.
         /// </summary>
-        public static void Open()
+        public static void Open(int deleteAt = -1)
         {
-            if (!Begin("open", "Open a blueprint", 780f, 580f))
+            if (!Begin("open", "Blueprints", 780f, 580f))
             {
                 return;
             }
@@ -190,7 +263,7 @@ namespace ValheimTomrer.Editor.Ui
             var scroll = UiBuild.Scroll("Files", _body, 2f);
             UiBuild.Stretch((RectTransform)scroll.transform);
 
-            AddRows(scroll.content, DocumentStore.ListKits());
+            AddRows(scroll.content, DocumentStore.ListKits(), false);
             Gap(scroll.content, 12f);
             Heading(scroll.content, "Your blueprints");
             var files = DocumentStore.ListUserFiles();
@@ -199,11 +272,20 @@ namespace ValheimTomrer.Editor.Ui
                 Dim(scroll.content, "None yet. Save as writes one here.");
             }
 
-            AddRows(scroll.content, files);
+            AddRows(scroll.content, files, true);
             Foot("Close", () => Close(), null, null);
 
+            // The rows need their places now, or the walk cannot scroll a row far down into sight.
+            LayoutRebuilder.ForceRebuildLayoutImmediate(scroll.content);
+
             // The walk starts on the first blueprint, so a controller can pick one straight away.
-            Start(RowButtons.Count > 0 ? RowButtons[0] : _submit);
+            Selectable start = null;
+            for (var i = Mathf.Min(deleteAt, DeleteButtons.Count - 1); i >= 0 && start == null; i--)
+            {
+                start = DeleteButtons[i];
+            }
+
+            Start(start != null ? start : RowButtons.Count > 0 ? RowButtons[0] : _submit);
         }
 
         /// <summary>The name a blueprint is saved under. It becomes #Name: and, slugged, the file name.</summary>
@@ -239,7 +321,14 @@ namespace ValheimTomrer.Editor.Ui
             Foot("Cancel", () => Close(), "Save", SubmitSaveAs);
             CheckName();
             Start(NameField);
-            NameField.ActivateInputField();
+
+            // The keyboard types straight away. The pad gets the ring on the box instead, so the
+            // D-pad reaches Save at once: a box that is typing holds the walk, and the pad has no
+            // keys to type with (cross on the box starts typing when a keyboard is at hand).
+            if (!EditorInput.PadInUse)
+            {
+                NameField.ActivateInputField();
+            }
         }
 
         /// <summary>Everything the mouse, the keys and the controller do.</summary>
@@ -276,8 +365,11 @@ namespace ValheimTomrer.Editor.Ui
 
             Dim(scroll.content,
                 "A window like this one takes the walk on its own: the D-pad moves through what it holds, "
-                + "cross presses, and circle closes it. In a name box, circle hands the keyboard back "
-                + "first, so the next press reaches the buttons.");
+                + "cross presses, and circle closes it. Save as opened from the pad puts the ring on the "
+                + "name box without typing, so down and cross save under the name shown. In a name box "
+                + "that is typing, circle hands the keyboard back and the D-pad walks on out of it. In "
+                + "Blueprints, right from one of your own blueprints goes to its Delete button, which "
+                + "asks first.");
 
             Dim(scroll.content,
                 "Placing works like the game: the piece touches the surface you aim at, then snaps to the "
@@ -288,8 +380,12 @@ namespace ValheimTomrer.Editor.Ui
             Start(_submit);
         }
 
-        /// <summary>A yes or no question. The answer runs after the dialog is gone.</summary>
-        public static void Confirm(string title, string text, string ok, Action run)
+        /// <summary>
+        /// A yes or no question. The answer runs after the dialog is gone. <paramref name="back"/>
+        /// runs on every way of cancelling it. A <paramref name="risky"/> one (it cannot be
+        /// undone) starts the walk on Cancel, so a second press does no harm.
+        /// </summary>
+        public static void Confirm(string title, string text, string ok, Action run, Action back = null, bool risky = false)
         {
             if (!Begin("confirm", title, 560f, 240f))
             {
@@ -297,11 +393,12 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             _confirmRun = run;
+            _back = back;
             var label = UiBuild.Label("Text", _body, text, 16f, TextAlignmentOptions.TopLeft);
             label.enableWordWrapping = true;
             UiBuild.Stretch(label.rectTransform);
-            Foot("Cancel", () => Close(), ok, Answer);
-            Start(_submit);
+            var cancel = Foot("Cancel", () => Dismiss(), ok, Answer);
+            Start(risky ? cancel : _submit);
         }
 
         // ---------- building ----------
@@ -338,15 +435,18 @@ namespace ValheimTomrer.Editor.Ui
             return true;
         }
 
-        /// <summary>The buttons along the bottom. The second one is the one Enter presses.</summary>
-        private static void Foot(string left, Action onLeft, string right, Action onRight)
+        /// <summary>
+        /// The buttons along the bottom. The second one is the one Enter presses. Hands back the
+        /// first one.
+        /// </summary>
+        private static Button Foot(string left, Action onLeft, string right, Action onRight)
         {
             var cancel = UiBuild.Button("Left", _buttons, left, () => onLeft());
             Width(cancel, 120f);
             if (right == null)
             {
                 _submit = cancel;
-                return;
+                return cancel;
             }
 
             _submit = UiBuild.Button("Right", _buttons, right, () => onRight());
@@ -354,6 +454,7 @@ namespace ValheimTomrer.Editor.Ui
 
             // The pad walks the two buttons; cross presses the selected one (Tick stands back).
             UiBuild.LinkRow(new List<Selectable> { cancel, _submit });
+            return cancel;
         }
 
         /// <summary>
@@ -439,9 +540,10 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>
         /// One clickable row: the blueprint's name on the left, and on the right where it is and
-        /// when it changed.
+        /// when it changed. A <paramref name="deletable"/> row has a Delete button after it, on
+        /// the same line, so the walk reaches it with a step to the right.
         /// </summary>
-        private static void AddRows(Transform parent, List<BlueprintEntry> entries)
+        private static void AddRows(Transform parent, List<BlueprintEntry> entries, bool deletable)
         {
             foreach (var entry in entries)
             {
@@ -451,8 +553,12 @@ namespace ValheimTomrer.Editor.Ui
                 // item_background is a pale sprite, so the chip is tinted dark and the text on it
                 // stays white. A colour transition would tint it a second time on hover and undo
                 // that, so the row has none: the walk's ring is what marks the current one.
-                var background = UiBuild.Panel("Row", parent, UiTheme.ItemBackground, UiTheme.Slot);
-                background.rectTransform.gameObject.AddComponent<LayoutElement>().preferredHeight = RowHeight;
+                var line = deletable ? UiBuild.Rect("Line", parent) : null;
+                var background = UiBuild.Panel("Row", deletable ? line : parent, UiTheme.ItemBackground, UiTheme.Slot);
+                (deletable ? line : background.rectTransform).gameObject.AddComponent<LayoutElement>().preferredHeight =
+                    RowHeight;
+                DeleteButtons.Add(deletable ? DeleteAfter(line, background.rectTransform, index) : null);
+
                 var button = background.gameObject.AddComponent<Button>();
                 button.targetGraphic = background;
                 button.transition = Selectable.Transition.None;
@@ -469,6 +575,21 @@ namespace ValheimTomrer.Editor.Ui
                     NameSplit, 1f, 6f, 10f);
                 RowDetails.Add(detail);
             }
+        }
+
+        /// <summary>The row gives up its right end to a Delete button of the game's button style.</summary>
+        private static Button DeleteAfter(RectTransform line, RectTransform row, int index)
+        {
+            UiBuild.Stretch(row, 0f, 0f, DeleteWidth + DeleteGap, 0f);
+            var delete = UiBuild.Button("Delete", line, "Delete", () => ClickDelete(index), RowHeight);
+            delete.GetComponentInChildren<TextMeshProUGUI>().fontSize = 15f;
+            var rect = (RectTransform)delete.transform;
+            rect.anchorMin = new Vector2(1f, 0f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(1f, 0.5f);
+            rect.anchoredPosition = Vector2.zero;
+            rect.sizeDelta = new Vector2(DeleteWidth, 0f);
+            return delete;
         }
 
         /// <summary>One column of a row, pinned between two fractions of its width.</summary>
@@ -598,7 +719,7 @@ namespace ValheimTomrer.Editor.Ui
 
             var backdrop = UiBuild.Panel("Backdrop", _root, null, new Color(0f, 0f, 0f, 0.55f));
             UiBuild.Stretch(backdrop.rectTransform);
-            backdrop.gameObject.AddComponent<Button>().onClick.AddListener(() => Close());
+            backdrop.gameObject.AddComponent<Button>().onClick.AddListener(() => Dismiss());
 
             var panel = UiBuild.Panel("Modal", _root, UiTheme.Panel);
             _modal = panel.rectTransform;
@@ -614,7 +735,7 @@ namespace ValheimTomrer.Editor.Ui
             _title.rectTransform.offsetMin = new Vector2(Pad + 8f, -Head - 6f);
             _title.rectTransform.offsetMax = new Vector2(-Pad - 40f, -8f);
 
-            var close = UiBuild.Button("Close", _modal, "X", () => Close(), 26f);
+            var close = UiBuild.Button("Close", _modal, "X", () => Dismiss(), 26f);
             var closeRect = (RectTransform)close.transform;
             closeRect.anchorMin = closeRect.anchorMax = new Vector2(1f, 1f);
             closeRect.pivot = new Vector2(1f, 1f);

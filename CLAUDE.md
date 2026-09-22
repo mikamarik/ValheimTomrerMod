@@ -143,7 +143,7 @@ xattr -d com.apple.quarantine libdoorstop.dylib
 
 ## Project structure, every file
 
-Nothing here is a guess. Use this instead of searching. All 86 source files, and every other
+Nothing here is a guess. Use this instead of searching. All 87 source files, and every other
 file in the repo outside `bin/`, `obj/` and `.devtest/`.
 
 **Build, scripts, data**
@@ -201,6 +201,9 @@ Plugin.cs                         BepInEx entry. Binds ModEnabled and BlueprintK
 **`src/Patches/`**, one class per target, file named `<Type><Method>Patch.cs`
 
 ```
+BuildUiOnLayoutChangedPatch.cs    while the editor is up, the build menu no longer clears the UI
+                                  selection when the player switches keyboard and pad (it threw a
+                                  typing box out of the keyboard)
 EditorInputBlockPatches.cs        the whole input takeover, nine patches in one file on purpose,
                                   all gated on ModUi.Blocking
 EnvManAwakePatch.cs               keeps the world's sun out of the editor's scene
@@ -318,7 +321,8 @@ Ui/UiTheme.cs                     the theme: colours, the TMP font, two own copi
                                   off the running game, nothing on disk. Keyed on the live Hud
                                   object, which dies on every world load
 Ui/UiBuild.cs                     small widget builders: TMP text with the HUD font, sliced
-                                  sprites, and OverPicture for text drawn on the 3D pane
+                                  sprites, OverPicture for text drawn on the 3D pane, and TextBox,
+                                  the text box that ignores the game UI's pad Submit/Cancel/Move
 Ui/PadGlyphs.cs                   the game's own controller icons, out of its gamepad_glyphs TMP
                                   sprite asset, handed out as Sprites
 Ui/HintBar.cs                     the row of controls along the bottom of the pane: pad icons and
@@ -338,7 +342,8 @@ Ui/ChecksPanel.cs                 the problem list. Click a row to select the pi
 Ui/PiecePicker.cs                 the controller's piece menu
 Ui/FocusNav.cs                    the panel walk behind Tab and L3: three regions, steps by
                                   screen position, and the orange ring
-Ui/Dialogs.cs                     open, save as, help, unsaved changes. One at a time
+Ui/Dialogs.cs                     Blueprints (open, delete your own), save as, help, the
+                                  questions. One at a time
 Ui/Toasts.cs                      short messages over the bottom right
 
 View/EditorScene.cs               the little world: ground, grid, origin ring, front marker, two
@@ -492,8 +497,8 @@ Valheim has no modding API or docs. Finding a patch target means reading the gam
 `HarmonyException` in the log). By name: the nine input targets of `EditorInputBlockPatches.cs`
 (`Player.TakeInput`, `PlayerController.TakeInput`, `TextInput.IsVisible`, `InventoryGui.Show`,
 `HotkeyBar.Update`, `Menu.Update`, `Minimap.Update`, `GameCamera.UpdateMouseCapture`,
-`ZInput.Internal_GetMouseScrollWheel`), `ZInput.TryGetButtonState` (the world pad's hold-back) and
-`KeyHints.UpdateHints` (the controls row).
+`ZInput.Internal_GetMouseScrollWheel`), `ZInput.TryGetButtonState` (the world pad's hold-back),
+`KeyHints.UpdateHints` (the controls row) and `BuildUi.OnLayoutChanged` (a typing box keeps the keyboard).
 
 ---
 
@@ -541,11 +546,18 @@ F7 opens a window with a 3D view, the piece list and the game's snapping. Read
 - **A new dialog** ends its builder with `Start()` (it sets `Dialogs.FocusStart`), so the walk can
   enter it. `Dialogs.Tick` stands back on Enter while the walk is in the dialog, or one press fires
   twice.
-- **The Esc and circle ladder**, in this order: a text box in a dialog gives the keyboard back
-  (`EditorSession.Tick`, the pad's only way out of a box), then the dialog, the piece menu, what is
+- **Text boxes** are `UiBuild.InputField` (a `TextBox`), never a plain `TMP_InputField`: the game's UI
+  sends the real pad's cross, circle and D-pad to a typing box, and a plain one saved Save as on cross.
+  On the pad, circle or a D-pad step leaves a typing box; Save as starts typing only when
+  `EditorInput.PadInUse` is false. Reasons: §3.
+- **The Esc and circle ladder**, in this order: a text box gives the keyboard back
+  (`EditorSession.Tick`, read through `ModUi.JustTyping`, so an Esc the box took first this frame
+  cannot also close the dialog), then the dialog, the piece menu, what is
   in hand, release the pane, leave the walk, clear the selection, close the window.
 - **A row chip that carries text** (`item_background`) is tinted `UiTheme.Slot`, and a `Button` on
   it uses `Selectable.Transition.None`. Icon-only tiles keep the sprite as it is.
+- **Cancelling a dialog goes through `Dialogs.Dismiss`** (Esc, circle, the X, the backdrop, Cancel),
+  so a question asked from the Blueprints list goes back to it. `Close()` alone skips that.
 - **An empty blueprint is a real file.** `BlueprintFormat` and `DocumentStore` read and write one,
   `BlueprintLibrary.TryAdd` keeps it out of `All`, the problem list calls it a warning.
 - **Closing keeps everything** (the document and its undo, the selection, the hand, the camera, the
@@ -688,9 +700,9 @@ Layout, numbers and the full sets: §8, §9.
 | `editor_snap` | placing and snapping against a table of rays, no UI |
 | `editor_edit` | place, select, copy, turn, nudge, undo |
 | `editor_panels` | the card, the selection fields, the problem list, the materials list |
-| `editor_keys` | every key, the wheel, the mouse, the top bar, the dialogs |
+| `editor_keys` | every key, the wheel, the mouse, the top bar, the dialogs, deleting a blueprint |
 | `editor_pad` | every pad button through a made-up pad, the piece menu |
-| `editor_focus` | the panel walk with the pad and Tab |
+| `editor_focus` | the panel walk with the pad and Tab, text boxes on the pad (a real pad's cross and circle too), deleting a blueprint with the pad |
 | `editor_keep` | close and open again finds everything as it was |
 | `editor_build` | a blueprint made in the editor, built in the world, edited again |
 | `editor_capture` | the capture, keyboard and pad |
@@ -762,4 +774,6 @@ Symptoms whose cause is not already a rule above. The rest are named next to the
 | The pad's L2 + triangle opens the inventory, or the D-pad moves the hotbar during a capture | `ZInputTryGetButtonStatePatch` did not apply (`ZInput.TryGetButtonState` renamed or inlined), or `WorldPad.Live` is false (a game menu is up) |
 | In blueprint mode or a capture the bottom row still shows the game's snapping and copy hints | `KeyHintsUpdateHintsPatch` did not apply (`KeyHints.UpdateHints` renamed), or the log says "hint row: the game's build hints do not look as expected" (the game renamed its `Place`, `key_bkg`, `Text - Place` entries or the wheel sprite) |
 | A test says the game's pad entry reads `MISSING BUTTON DEF "Place"` | normal while the keyboard is in use: the game localizes its hidden pad row with keyboard names. Compare pad icons only while `ZInput.IsGamepadActive()` |
+| Save as saves its first name and closes on the pad's cross | a text box built as a plain `TMP_InputField` instead of `UiBuild.InputField` |
+| A name box stops typing on the first pad or mouse press after the other device | `BuildUiOnLayoutChangedPatch` did not apply (`BuildUi.OnLayoutChanged` renamed) |
 | A pad test presses a button and nothing happens | the button went to a real pad: test presses go to `AutoTest`'s own "AutoTestPad DualSense" device, never `InputSystem.FindControl`, which can pick the real DualSense |

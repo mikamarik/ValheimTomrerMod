@@ -379,6 +379,16 @@ namespace ValheimTomrer.Editor.Doc
             Revision++;
         }
 
+        /// <summary>
+        /// Its file was deleted. It stays open, as a blueprint that was never saved: Save goes to
+        /// Save as, and opening another one asks first. Not an edit, so it makes no undo step.
+        /// </summary>
+        public void LoseFile()
+        {
+            SourcePath = null;
+            _saved = null;
+        }
+
         private void Change(string tag, Action<Snapshot> edit)
         {
             var before = _now;

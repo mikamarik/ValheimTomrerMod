@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace ValheimTomrer.Editor.Input
 {
@@ -20,6 +21,14 @@ namespace ValheimTomrer.Editor.Input
 
         public static Glyphs Glyphs => Pad != null ? Glyphs.For(Pad.Ps) : Glyphs.Any;
 
+        /// <summary>
+        /// The pad was used last, not the keyboard or the mouse. A window opens for what is in
+        /// hand: Save as starts typing in its name box only for the keyboard, since the pad has
+        /// no keys to type with and a box that is typing holds the walk. It starts from the
+        /// game's own idea of the last device, so a pad press in the world counts too.
+        /// </summary>
+        public static bool PadInUse { get; private set; }
+
         /// <summary>Esc, or the pad's B/circle.</summary>
         public static bool Cancel => ZInput.GetKeyDown(KeyCode.Escape) || Pressed(PadButton.Circle);
 
@@ -36,6 +45,31 @@ namespace ValheimTomrer.Editor.Input
             _polledFrame = Time.frameCount;
             Dt = Time.unscaledDeltaTime;
             Pad = Reader.Read();
+            if (Pad != null && Pad.Woke)
+            {
+                PadInUse = true;
+            }
+            else if (KeysOrMouse())
+            {
+                PadInUse = false;
+            }
+        }
+
+        /// <summary>A key or a mouse button went down, the wheel turned, or the mouse really moved.</summary>
+        private static bool KeysOrMouse()
+        {
+            var keyboard = Keyboard.current;
+            if (keyboard != null && keyboard.anyKey.wasPressedThisFrame)
+            {
+                return true;
+            }
+
+            var mouse = Mouse.current;
+            return mouse != null && (mouse.leftButton.wasPressedThisFrame
+                || mouse.rightButton.wasPressedThisFrame
+                || mouse.middleButton.wasPressedThisFrame
+                || mouse.scroll.ReadValue().sqrMagnitude > 0f
+                || mouse.delta.ReadValue().sqrMagnitude > 9f);
         }
 
         public static bool Pressed(PadButton button) => Pad != null && Pad.Pressed(button);
@@ -48,6 +82,7 @@ namespace ValheimTomrer.Editor.Input
             Reader.Reset();
             Pad = null;
             _polledFrame = -1;
+            PadInUse = ZInput.IsGamepadActive();
         }
     }
 }

@@ -147,17 +147,19 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>
         /// The pad woke: the crosshair takes the aim and the UI lets go of its button. While the
-        /// panel walk is on it does nothing at all, or a stick would kill the focus at once.
+        /// panel walk is on the aim stays put, or a stick would kill the focus at once, but the
+        /// button still lets go: one the mouse clicked stays selected, and the game's own UI
+        /// would press it on the pad's cross as well as the walk's widget.
         /// </summary>
         public static void TakeAim()
         {
+            ModUi.ClearSelection();
             if (FocusNav.Active)
             {
                 return;
             }
 
             PadAim = true;
-            ModUi.ClearSelection();
         }
 
         /// <summary>The mouse is in charge again: a click on the pane, or a real move over it.</summary>

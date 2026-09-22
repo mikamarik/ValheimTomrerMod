@@ -2125,6 +2125,19 @@ namespace ValheimTomrer.Dev
                 report.AppendLine("  modules on the object: " + string.Join(", ", events
                     .GetComponents<UnityEngine.EventSystems.BaseInputModule>()
                     .Select(m => m.GetType().FullName)));
+
+                // What the game's UI module sends as Submit and Cancel to the selected widget. A
+                // text box takes Submit as its own submit, whatever key or button sent it.
+                if (module is UnityEngine.InputSystem.UI.InputSystemUIInputModule ui)
+                {
+                    foreach (var (label, reference) in new[] { ("submit", ui.submit), ("cancel", ui.cancel), ("move", ui.move) })
+                    {
+                        var action = reference != null ? reference.action : null;
+                        report.AppendLine($"  ui {label}: " + (action == null
+                            ? "<none>"
+                            : string.Join(", ", action.bindings.Select(b => b.effectivePath))));
+                    }
+                }
             }
 
             var pad = UnityEngine.InputSystem.Gamepad.current;
@@ -9319,9 +9332,12 @@ namespace ValheimTomrer.Dev
             Dialogs.Close();
 
             // ---- save as ----
+            // A key down first, so the keyboard is what was used last.
+            yield return PressKey(UnityEngine.InputSystem.Key.LeftShift);
             Dialogs.SaveAs("Keys test");
             yield return null;
             Check(Dialogs.Kind == "saveAs" && Dialogs.NameField != null, "Save as opened with a name box");
+            yield return SaveAsDeleteKeys();
             Check(Dialogs.NoteText.Contains("exists"), $"a name that is taken warns: '{Dialogs.NoteText}'");
             Dialogs.NameField.text = "a..b";
             Check(Dialogs.NoteText.StartsWith("Use letters"), $"two dots are refused: '{Dialogs.NoteText}'");
@@ -9370,6 +9386,8 @@ namespace ValheimTomrer.Dev
             Check(kit >= 0 && !Dialogs.IsOpen && EditorSession.Document.Pieces.Count > 0,
                 $"clicking a kit opened it: {EditorSession.Document.Pieces.Count} pieces");
 
+            yield return DeleteKeys();
+
             // ---- toasts ----
             Toasts.Clear();
             Toasts.Info("a note");
@@ -9381,6 +9399,126 @@ namespace ValheimTomrer.Dev
             Check(Toasts.Count == 1 && Toasts.LevelOf(0) == ToastLevel.Error,
                 $"the note went after {Toasts.Seconds} s and the error is still up: {Toasts.Count}");
             Toasts.Clear();
+        }
+
+        /// <summary>
+        /// Deleting one of the player's blueprints with the mouse and the keys: a real click on
+        /// its Delete button asks first, Esc goes back to the list, the right arrow and Enter
+        /// answer. Kits have no Delete button. The file is the test's own, in the test's folder.
+        /// </summary>
+        private static IEnumerator DeleteKeys()
+        {
+            EditorCommands.OpenDialog();
+            yield return null;
+            yield return null;
+            var own = -1;
+            var kitsWithout = true;
+            for (var i = 0; i < Dialogs.RowCount; i++)
+            {
+                if (Dialogs.Row(i).IsKit)
+                {
+                    kitsWithout &= Dialogs.DeleteButton(i) == null;
+                }
+                else if (own < 0)
+                {
+                    own = i;
+                }
+            }
+
+            var path = own >= 0 ? Dialogs.Row(own).Path : null;
+            Check(Dialogs.TitleText == "Blueprints" && own >= 0 && Dialogs.DeleteButton(own) != null && kitsWithout,
+                $"the list is called '{Dialogs.TitleText}', your own row {own} has a Delete button, the kits have none");
+            if (own < 0)
+            {
+                Dialogs.Close();
+                yield break;
+            }
+
+            yield return ClickScreen(ScreenBox((RectTransform)Dialogs.DeleteButton(own).transform).center);
+            Check(Dialogs.Kind == "confirm" && Dialogs.TitleText == "Delete the blueprint?"
+                && WidgetName(FocusNav.Focused) == "Left",
+                $"a mouse click on Delete asks first ('{Dialogs.TitleText}'), on '{WidgetName(FocusNav.Focused)}'");
+            Check(Bindings.Cancel() && Dialogs.Kind == "open" && File.Exists(path)
+                && Dialogs.Row(own) != null && Dialogs.Row(own).Path == path,
+                "Esc goes back to the list, and the file is still there");
+
+            yield return null;
+            yield return ClickScreen(ScreenBox((RectTransform)Dialogs.DeleteButton(own).transform).center);
+            var asked = Dialogs.Kind == "confirm";
+            Bindings.Press(KeyCode.RightArrow, KeyMods.None);
+            var on = WidgetName(FocusNav.Focused);
+            Bindings.Press(KeyCode.Return, KeyMods.None);
+            yield return null;
+            var gone = true;
+            for (var i = 0; i < Dialogs.RowCount; i++)
+            {
+                gone &= Dialogs.Row(i).Path != path;
+            }
+
+            Check(asked && on == "Right" && !File.Exists(path) && Dialogs.Kind == "open" && gone,
+                $"asked again, the right arrow went to '{on}', Enter deleted {Path.GetFileName(path)} "
+                + $"and the list came back without it: {Dialogs.RowCount} rows");
+            Check(Toasts.Count > 0 && Toasts.TextOf(0).StartsWith("Deleted"),
+                $"a message says so: '{(Toasts.Count > 0 ? Toasts.TextOf(0) : "none")}'");
+            Dialogs.Close();
+        }
+
+        /// <summary>
+        /// Save as with the keyboard: it opens typing, and a real mouse click on the name box
+        /// followed by Delete and Backspace saves nothing and closes nothing. "Keys test" is taken,
+        /// so a save would ask "Replace the file?" and the dialog would read "confirm". The keys go
+        /// through the input system, so the editor and the game's UI see them. The box itself
+        /// reads its keys another way the test cannot reach, which is why its text stays.
+        /// </summary>
+        private static IEnumerator SaveAsDeleteKeys()
+        {
+            var waited = 0f;
+            while (!ModUi.Typing && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(!EditorInput.PadInUse && ModUi.Typing,
+                $"with the keyboard in use, Save as opens typing in the name box after {waited:0.00} s");
+
+            var box = Dialogs.NameField;
+            var file = Path.Combine(BlueprintLibrary.UserFolder, BlueprintFormat.FileNameFor("Keys test"));
+            var stamp = File.Exists(file) ? File.GetLastWriteTimeUtc(file) : DateTime.MinValue;
+            yield return ClickScreen(ScreenBox((RectTransform)box.transform).center);
+            yield return PressKey(UnityEngine.InputSystem.Key.Delete);
+            yield return PressKey(UnityEngine.InputSystem.Key.Backspace);
+            yield return Frames(2);
+            var same = File.Exists(file) && File.GetLastWriteTimeUtc(file) == stamp;
+            Check(Dialogs.Kind == "saveAs" && Dialogs.NameField == box && same && ModUi.Typing,
+                $"a click on the name box, then Delete and Backspace: still '{Dialogs.Kind}', typing={ModUi.Typing}, "
+                + $"the file untouched={same}");
+
+            // Enter in the box on a name another file has asks "Replace the file?". The box reads
+            // Enter before the editor's tick, as here: it submits and lets go, then the editor sees
+            // the same Enter. (The open blueprint is keys-test.blueprint itself, which saves unasked.)
+            var other = BlueprintDocument.New("Taken name");
+            Check(DocumentStore.SaveAs(other, "Taken name", true, out var takenError), $"a second file: {takenError ?? "ok"}");
+            var taken = other.SourcePath;
+            var takenStamp = File.GetLastWriteTimeUtc(taken);
+            var keyboard = UnityEngine.InputSystem.Keyboard.current;
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(
+                keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState(UnityEngine.InputSystem.Key.Enter));
+            box.text = "Taken name";
+            box.onSubmit.Invoke(box.text);
+            box.DeactivateInputField();
+            yield return Frames(3);
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(keyboard, new UnityEngine.InputSystem.LowLevel.KeyboardState());
+            yield return Frames(2);
+            var untouched = File.GetLastWriteTimeUtc(taken) == takenStamp;
+            Check(Dialogs.Kind == "confirm" && Dialogs.TitleText == "Replace the file?" && untouched,
+                $"Enter in the box on a taken name asks first ('{Dialogs.TitleText}'), and the same Enter "
+                + $"does not answer it: {Path.GetFileName(taken)} untouched={untouched}");
+            File.Delete(taken);
+
+            Dialogs.Close();
+            Dialogs.SaveAs("Keys test");
+            yield return null;
         }
 
         /// <summary>Rich text out of a label, so a log line reads as what a person sees.</summary>
@@ -9997,6 +10135,7 @@ namespace ValheimTomrer.Dev
             yield return FocusRegions(document);
             yield return FocusPress(document);
             yield return FocusDialog();
+            yield return FocusDelete(wall);
             yield return FocusLeave();
 
             Check(_focusSelected == 0,
@@ -10251,11 +10390,41 @@ namespace ValheimTomrer.Dev
             Check(ModUi.Typing, $"cross on the box starts typing after {waited:0.00} s");
             var at = FocusNav.Index;
             var text = field.text;
-            yield return FocusTap(PadButton.Down);
+            yield return FocusTap(PadButton.R1);
             Check(FocusNav.Index == at && ModUi.Typing && field.text == text,
-                $"and the pad does nothing on the next tick: still widget {FocusNav.Index} of {FocusNav.Count}");
+                $"and R1 does nothing while it types: still widget {FocusNav.Index} of {FocusNav.Count}");
+
+            // The pad has no keys to type with: the D-pad walks on out of the box.
+            yield return FocusTap(PadButton.Down);
+            var below = FocusNav.Focused;
+            Check(!ModUi.Typing && below != field && FocusNav.Current == FocusRegion.Right && !ModUi.HasSelection,
+                $"the D-pad leaves the box and walks on down, to '{WidgetName(below)}', nothing selected in the UI");
+            yield return FocusTap(PadButton.Up);
+            Check(FocusNav.Focused == field && !ModUi.Typing, "up comes back to the box, not typing");
+
+            // Circle, straight on a box that types: it lets go, the walk keeps it.
+            yield return FocusTap(PadButton.Cross);
+            waited = 0f;
+            while (!ModUi.Typing && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            yield return FocusTap(PadButton.Circle);
+            yield return null;
+            Check(ModUi.Typing == false && FocusNav.Active && FocusNav.Focused == field && field.text == text,
+                $"circle stops the typing and the walk stays on the box: '{WidgetName(FocusNav.Focused)}'");
 
             // Esc's job, straight on the box: it stops typing but the walk keeps it.
+            yield return FocusTap(PadButton.Cross);
+            waited = 0f;
+            while (!ModUi.Typing && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
             field.DeactivateInputField();
             yield return null;
             yield return null;
@@ -10331,25 +10500,16 @@ namespace ValheimTomrer.Dev
         /// <summary>Save as: the name box, and under it Cancel and Save side by side.</summary>
         private static IEnumerator FocusSaveAs()
         {
+            var padInUse = EditorInput.PadInUse;
             Dialogs.SaveAs("focus test");
             yield return null;
             yield return null;
-            var box = FocusNav.Focused;
-            var typing = ModUi.Typing;
+            var box = FocusNav.Focused as TMPro.TMP_InputField;
 
-            // Circle hands the keyboard back first, the dialog stays.
-            yield return FocusTap(PadButton.Circle);
-            var waited = 0f;
-            while (ModUi.Typing && waited < 1f)
-            {
-                waited += Time.deltaTime;
-                yield return null;
-            }
-
-            Check(Dialogs.Kind == "saveAs" && box is TMPro.TMP_InputField && typing && !ModUi.Typing
-                && FocusNav.InDialog && FocusNav.Focused == box,
-                $"Save as opens typing in the name box, circle stops the typing and keeps the dialog: "
-                + $"'{WidgetName(FocusNav.Focused)}'");
+            // The pad has no keys: the ring waits on the box, not typing, so the D-pad walks at once.
+            Check(padInUse && Dialogs.Kind == "saveAs" && box != null && !ModUi.Typing && FocusNav.InDialog,
+                $"with the pad in use, Save as opens with the ring on the name box, not typing: "
+                + $"'{WidgetName(FocusNav.Focused)}', pad in use={padInUse}");
 
             yield return FocusTap(PadButton.Down);
             var down = WidgetName(FocusNav.Focused);
@@ -10362,11 +10522,86 @@ namespace ValheimTomrer.Dev
                 && FocusNav.InDialog,
                 $"down goes to Cancel ('{down}'), right to Save ('{right}'), left back ('{left}'), "
                 + $"the stick up to the name box ('{WidgetName(FocusNav.Focused)}')");
+            if (box == null)
+            {
+                Dialogs.Close();
+                yield break;
+            }
+
+            yield return FocusSaveAsTyping(box);
 
             yield return FocusTap(PadButton.Circle);
             yield return null;
             yield return null;
             Check(!Dialogs.IsOpen, "circle closes Save as");
+        }
+
+        /// <summary>
+        /// The name box while it types, with a real pad the game's own UI reads too (its module
+        /// sends cross as Submit and circle as Cancel to the box): cross must not save the first
+        /// name and close, circle must stop the typing and keep the text and the dialog, and the
+        /// D-pad walks on out of the box. The made-up pad drives the editor at the same time.
+        /// </summary>
+        private static IEnumerator FocusSaveAsTyping(TMPro.TMP_InputField box)
+        {
+            // A folder of its own, so a save that should not happen cannot touch the player's files.
+            var folder = Path.Combine(OutDir, "focus-saveas");
+            var wasFolder = BlueprintLibrary.UserFolder;
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, true);
+            }
+
+            Directory.CreateDirectory(folder);
+            BlueprintLibrary.UserFolder = folder;
+
+            yield return FocusTap(PadButton.Cross);
+            var waited = 0f;
+            while (!ModUi.Typing && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(ModUi.Typing && FocusNav.Focused == box, $"cross on the box starts typing after {waited:0.00} s");
+            box.text = "focus typed";
+
+            WorldPadOn();
+            yield return PadPress(false, PadKey.South);
+            yield return Frames(3);
+            var written = Directory.GetFiles(folder).Length;
+            Check(Dialogs.Kind == "saveAs" && ModUi.Typing && box.text == "focus typed" && written == 0,
+                $"a real pad's cross, which the game's UI sends to the box, saves nothing and the box keeps "
+                + $"typing: dialog '{Dialogs.Kind}', text '{box.text}', {written} files written");
+
+            // Circle reaches the box through the game's UI and the editor in the same frames.
+            PadDown(false, PadKey.East);
+            _pad.Down.Add(PadButton.Circle);
+            yield return Frames(2);
+            PadDown(false);
+            _pad.Down.Remove(PadButton.Circle);
+            yield return Frames(3);
+            Check(Dialogs.Kind == "saveAs" && !ModUi.Typing && box.text == "focus typed"
+                && FocusNav.Focused == box && !ModUi.HasSelection,
+                $"circle from both stops the typing, keeps the text and the dialog: dialog '{Dialogs.Kind}', "
+                + $"text '{box.text}', on '{WidgetName(FocusNav.Focused)}'");
+
+            // Typing again, the D-pad leaves the box for the buttons under it.
+            yield return FocusTap(PadButton.Cross);
+            waited = 0f;
+            while (!ModUi.Typing && waited < 2f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            yield return FocusTap(PadButton.Down);
+            Check(Dialogs.Kind == "saveAs" && !ModUi.Typing && WidgetName(FocusNav.Focused) == "Left" && !ModUi.HasSelection,
+                $"while it types, the D-pad leaves the box and walks down to '{WidgetName(FocusNav.Focused)}'");
+            yield return FocusStick(new Vector2(0f, 1f));
+            yield return WorldPadOff();
+            BlueprintLibrary.UserFolder = wasFolder;
+            Directory.Delete(folder, true);
         }
 
         /// <summary>A yes or no question: the two buttons side by side, and the X over them.</summary>
@@ -10392,6 +10627,128 @@ namespace ValheimTomrer.Dev
             yield return null;
             yield return null;
             Check(!Dialogs.IsOpen, "circle closes the question and nothing was answered");
+        }
+
+        /// <summary>
+        /// Deleting one of the player's blueprints with the pad alone, in a folder of the test's
+        /// own: right from its row to Delete, cross asks first on Cancel, circle and Cancel both
+        /// come back to the list on the same row, the answer deletes the file and the walk lands
+        /// on the row that took its place, or the one above after the last. The blueprint open
+        /// from that file stays open, as not saved.
+        /// </summary>
+        private static IEnumerator FocusDelete(PieceEntry wall)
+        {
+            var before = FocusNav.Current;
+            var folder = Path.Combine(OutDir, "focus-delete");
+            var wasFolder = BlueprintLibrary.UserFolder;
+            var wasDocument = EditorSession.Document;
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, true);
+            }
+
+            Directory.CreateDirectory(folder);
+            BlueprintLibrary.UserFolder = folder;
+            foreach (var name in new[] { "Alpha", "Beta", "Gamma" })
+            {
+                var made = BlueprintDocument.New(name);
+                made.AddPiece(wall.PrefabName, Vector3.zero, Quaternion.identity);
+                Check(DocumentStore.SaveAs(made, name, true, out var error), $"wrote {name}: {error ?? "ok"}");
+            }
+
+            var beta = Path.Combine(folder, BlueprintFormat.FileNameFor("Beta"));
+            Check(DocumentStore.Open(beta, out var opened, out var openError), $"opened Beta: {openError ?? "ok"}");
+            EditorSession.Replace(opened);
+
+            EditorCommands.OpenDialog();
+            yield return null;
+            yield return null;
+            var rows = Dialogs.RowCount;
+            var at = -1;
+            for (var i = 0; i < rows; i++)
+            {
+                if (Dialogs.Row(i).Path == beta)
+                {
+                    at = i;
+                }
+            }
+
+            var taps = 0;
+            while (at >= 0 && FocusNav.Focused != Dialogs.RowWidget(at) && taps < 30)
+            {
+                yield return FocusTap(PadButton.Down);
+                taps++;
+            }
+
+            yield return FocusTap(PadButton.Right);
+            Check(at > 0 && FocusNav.InDialog && FocusNav.Focused == Dialogs.DeleteButton(at),
+                $"down {taps} times to Beta's row, right to its Delete button: '{WidgetName(FocusNav.Focused)}'");
+            yield return FocusTap(PadButton.Left);
+            var back = FocusNav.Focused == Dialogs.RowWidget(at);
+            yield return FocusTap(PadButton.Right);
+            yield return FocusTap(PadButton.Down);
+            var down = FocusNav.Focused == Dialogs.DeleteButton(at + 1);
+            yield return FocusTap(PadButton.Up);
+            Check(back && down && FocusNav.Focused == Dialogs.DeleteButton(at),
+                "left goes back to the row, down goes to the Delete button under it, up comes back");
+
+            yield return FocusTap(PadButton.Cross);
+            var text = ModalText();
+            Check(Dialogs.Kind == "confirm" && Dialogs.TitleText == "Delete the blueprint?"
+                && WidgetName(FocusNav.Focused) == "Left" && text.Contains("Beta") && text.Contains("stays open"),
+                $"cross asks first, on Cancel ('{WidgetName(FocusNav.Focused)}'): '{text}'");
+
+            yield return FocusTap(PadButton.Circle);
+            yield return null;
+            Check(Dialogs.Kind == "open" && File.Exists(beta) && FocusNav.Focused == Dialogs.DeleteButton(at)
+                && Dialogs.Row(at).Path == beta,
+                $"circle goes back to the list, on Beta's Delete button, and the file stays: '{WidgetName(FocusNav.Focused)}'");
+
+            yield return FocusTap(PadButton.Cross);
+            yield return FocusTap(PadButton.Cross);
+            yield return null;
+            Check(Dialogs.Kind == "open" && File.Exists(beta) && FocusNav.Focused == Dialogs.DeleteButton(at),
+                "cross twice (ask, then Cancel) comes back the same way and deletes nothing");
+
+            yield return FocusTap(PadButton.Cross);
+            yield return FocusTap(PadButton.Right);
+            var answer = WidgetName(FocusNav.Focused);
+            yield return FocusTap(PadButton.Cross);
+            yield return null;
+            Check(answer == "Right" && !File.Exists(beta) && Dialogs.Kind == "open" && Dialogs.RowCount == rows - 1
+                && FocusNav.Focused == Dialogs.DeleteButton(at) && Dialogs.Row(at).Name == "Gamma",
+                $"right to Delete ('{answer}') and cross: the file is gone, {Dialogs.RowCount} of {rows} rows, "
+                + $"the walk is on the Delete button of '{(Dialogs.Row(at) != null ? Dialogs.Row(at).Name : "none")}'");
+            Check(opened.SourcePath == null && opened.Dirty && TopBar.FileText.Contains("not saved yet"),
+                $"the blueprint from that file stays open, as not saved: '{Strip(TopBar.FileText)}'");
+
+            yield return FocusTap(PadButton.Cross);
+            yield return FocusTap(PadButton.Right);
+            yield return FocusTap(PadButton.Cross);
+            yield return null;
+            Check(Dialogs.RowCount == rows - 2 && FocusNav.Focused == Dialogs.DeleteButton(at - 1)
+                && Dialogs.Row(at - 1).Name == "Alpha",
+                $"deleting the last row puts the walk on the one above: "
+                + $"'{(Dialogs.Row(at - 1) != null ? Dialogs.Row(at - 1).Name : "none")}'");
+            yield return Screenshot("editor-focus-delete");
+
+            yield return FocusTap(PadButton.Circle);
+            yield return null;
+            yield return null;
+            Check(!Dialogs.IsOpen && FocusNav.Active && FocusNav.Current == before,
+                $"circle closes the list, the walk is back on the {FocusNav.Current} region");
+
+            BlueprintLibrary.UserFolder = wasFolder;
+            EditorSession.Replace(wasDocument);
+            Directory.Delete(folder, true);
+        }
+
+        /// <summary>Every text the dialog shows, in one line.</summary>
+        private static string ModalText()
+        {
+            return Dialogs.Modal == null
+                ? ""
+                : string.Join(" | ", Dialogs.Modal.GetComponentsInChildren<TMPro.TextMeshProUGUI>(false).Select(t => t.text));
         }
 
         /// <summary>The help: the Close button at the bottom and the X at the top.</summary>

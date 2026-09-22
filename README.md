@@ -24,7 +24,7 @@ Make blueprints in the game, then build them with the hammer. **Valheim 1.0**, s
   character has unlocked.
 - **Mouse and controller.** Everything works on a pad: picking a blueprint, building, finishing a
   build later, opening the editor (L2 + □), copying a building (L2 + △ and the D-pad) and all of the
-  editor. In the editor L3 walks the top bar, the side panels and every window, so Save, Open, the
+  editor. In the editor L3 walks the top bar, the side panels and every window, so Save, Blueprints, the
   filters and the name field work without a mouse. The controls along the bottom of the 3D view
   show the game's own button icons.
 - **The controls where the game shows its own.** With a blueprint in hand, and during a capture,
@@ -73,6 +73,10 @@ Valheim/BepInEx/plugins/
    closes the window. Aim at the ground and click, like any other piece.
 
 The blueprints that ship with the mod are read only. Edit one and Save as makes your own copy.
+
+**Blueprints** in the top bar lists them all: the ones that ship with the mod, then yours. Click a
+row to open it. **Delete** at the end of one of your rows removes the file, after a question
+(pad: D-pad right from the row, then ×). A blueprint you have open stays open, as not saved.
 
 ## Copy a building you already have
 
@@ -274,8 +278,9 @@ let a piece fall; its materials drop on the ground.
 | `F` | Look at the selection, or at everything |
 | `Ctrl+S` | Save |
 | `H` `?` | The help window, with the same tables |
-| `Tab`, `Shift+Tab` | Walk the top bar and the two side panels, on and back. In a window like Open or Save as, it walks what that window holds. |
+| `Tab`, `Shift+Tab` | Walk the top bar and the two side panels, on and back. In a window like Blueprints or Save as, it walks what that window holds. |
 | Arrows, `Enter` (while walking) | Step to the next thing, and press it. A text box starts typing. |
+| Click **Delete** in Blueprints | Delete one of your blueprints. It asks first; `Esc` goes back to the list. |
 | `Esc` | In this order: give a text box back, close the window, stop placing, give the mouse back, leave the walk, clear the selection, close the editor |
 
 On a Mac, `Cmd` works everywhere `Ctrl` does.
@@ -301,6 +306,8 @@ PlayStation names first, Xbox names in brackets.
 | While walking: × (A) | Press what the ring is on. A text box starts typing. |
 | While walking: right stick up, down | Scroll the panel, like the wheel (the materials list, the piece grid) |
 | While walking: ○ (B) | Back to the 3D view. In a name box it gives the keyboard back first. |
+| While walking, in a name box | The D-pad leaves the box and moves on, like ○ and a step together |
+| In Blueprints: D-pad right, × | From one of your blueprints to its Delete button, and press it. The question starts on Cancel; ○ goes back to the list. |
 | × (A) | Pieces menu: D-pad chooses, L1 R1 change the tab, × places, ○ closes |
 | ○ (B) | The same order as `Esc`: give a text box back, close the window, stop placing, leave the walk, clear the selection, close the editor |
 | □ (X) | Move the piece in the middle of the view. It follows the crosshair, R2 drops it. |
@@ -314,14 +321,15 @@ PlayStation names first, Xbox names in brackets.
 
 **L3 reaches the top bar and both side panels.** An orange ring marks where you are, and every
 button, tab, chip and text box on the walk can be pressed with ×. That covers Build this, Save,
-Open, the name and description, the icon and the piece filters. The right stick scrolls the panel
+Blueprints, the name and description, the icon and the piece filters. The right stick scrolls the panel
 the ring is in, so a long materials list can be read to the end. The rows of three lists cannot be
 clicked with the pad: the piece grid, In blueprint and Checks. The pieces menu on × is the way to
 place without a mouse.
 
-**Windows take the walk on their own.** Open, Save as and every question put the ring on
+**Windows take the walk on their own.** Blueprints, Save as and every question put the ring on
 themselves the moment they show up: the D-pad steps through the blueprints or the buttons, × picks
-one, ○ closes. A long list scrolls to follow the ring. The rest of the pad does nothing while a
+one, ○ closes. Save as opened from the pad puts the ring on the name box without typing, so down
+and × save under the name shown; × on the box types, when a keyboard is at hand. A long list scrolls to follow the ring. The rest of the pad does nothing while a
 window is up.
 
 ## Configuration

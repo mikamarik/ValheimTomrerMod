@@ -180,7 +180,7 @@ Shift+Tab and L1/R1 change region, Enter and cross press, Esc and circle leave.
 
 ### A dialog is the fourth region
 
-Open, Save as, the help and every question take the walk on their own, so a controller can work
+Blueprints (the list), Save as, the help and every question take the walk on their own, so a controller can work
 them: `Dialogs` names the widget to start on (`Dialogs.FocusStart`, set by `Start()` at the end of
 each builder), `FocusNav.EnterDialog` goes in and `LeaveDialog` puts the walk back where it was. L1
 and R1 cannot walk out of a dialog, and `FocusNav.ShowInList` scrolls a row into view so a long file
@@ -188,10 +188,51 @@ list can be walked. While one is up `Bindings.DialogKey` is the whole keyboard m
 Enter) and `PadBindings` step 2 is the whole pad. `Dialogs.Tick` stands back on Enter while the walk
 is in the dialog, or one press would fire twice.
 
+### Text boxes and the pad
+
+A text box that is typing is the one widget the EventSystem really selects, so the game's own UI
+module (`InputSystemUIInputModule`, which reads the real pad) sends it events: the pad's cross as
+Submit (`*/{Submit}` is Enter and cross), circle as Cancel, the D-pad as Move. A plain
+`TMP_InputField` fires `onSubmit` on Submit: Save as saved its first name ("New blueprint") and closed
+on one cross. On Cancel it stopped typing and put the old text back before the editor's tick saw the
+press, and the editor then took the same circle as "close the dialog". So every box is a `TextBox`
+(`UiBuild.cs`) that ignores all three; keys typed into it still work (Enter submits, Esc puts the text
+back), because TMP reads those through its own key events, not these.
+
+Two more things threw a typing box out of the keyboard:
+
+- The game fires `ZInput.OnInputLayoutChanged` on every switch between keyboard/mouse and pad (and
+  when a pad is plugged in). The build menu, alive behind the editor, answers with
+  `SetSelectedGameObject(null)`. `BuildUiOnLayoutChangedPatch` skips that while the window is up.
+- The box reads its keys in the game's UI update, which may come before the editor's tick in the
+  same frame. `ModUi.JustTyping` (typing now or last frame) makes that key the box's: an Esc the box
+  took cannot also close the dialog, and the Enter that submitted a taken name (which opens "Replace
+  the file?") cannot also press Replace. Before, it did, and the file was written over unasked.
+
+On the pad: circle leaves a typing box and keeps its text; a D-pad or stick step leaves it and steps
+on (the pad has no keys to type with, so a box must never hold the walk). Save as starts typing only
+when the keyboard or mouse was used last (`EditorInput.PadInUse`, seeded from the game's
+`ZInput.IsGamepadActive()` when the window opens); from the pad the ring waits on the box, so down
+and cross save under the name shown. The autotest proves the first two with a real test pad device
+the game's UI reads (`FocusSaveAsTyping`): with a plain box the same presses saved the file.
+
+### Deleting a blueprint
+
+Each of the player's rows in Blueprints has a Delete button on its own line to the right, not
+inside the row: the walk steps by screen position, and a button inside the row's box is never "to
+the right" of it. Kits have none (they live in the DLL). The question (`Dialogs.ClickDelete`) is a
+`Confirm` with `risky`, so the walk starts on Cancel and a second cross does no harm, the way the
+game's own "are you sure" dialogs start on No. Every way of cancelling it (Esc, circle, the X, a
+click beside it, Cancel) goes through `Dialogs.Dismiss`, which runs its `back`: the list again, on
+the same row's Delete button. After a delete the walk lands on the row that took its place, or the
+one above. A blueprint open in the editor from the deleted file stays open as not saved
+(`BlueprintDocument.LoseFile`), so nothing is lost without a second question. Unfinished builds keep
+their own copy of the blueprint, so a delete does not touch them.
+
 ### Row chips are tinted dark
 
 `item_background` is a pale sprite, and every label in the window is white, so a row that carries
-text has to be tinted `UiTheme.Slot` or the text is white on white. That is what the open dialog,
+text has to be tinted `UiTheme.Slot` or the text is white on white. That is what the Blueprints list,
 the "In blueprint" list and the problem list do. Icon-only tiles (the palette, the piece menu, the
 materials list's icons) keep the sprite as it is. A `Button` on such a row also needs
 `Selectable.Transition.None`, or its colour transition tints the chip a second time.
@@ -663,9 +704,9 @@ along the bottom of the screen (`KeyHints`), in its look:
 | `editor_snap` | the placing and snapping engine against a table of rays, no UI |
 | `editor_edit` | place, select, copy, turn, nudge, undo |
 | `editor_panels` | the build card (its text: the description and "N pieces.", no controls), the selection fields, the problem list; L3, R1 and the right stick scroll the right panel up and down, the ring shown only while its widget is in sight; the materials list: a row per item and station of the document, have = `MaterialSources.Around(player).Count`, stations by the player, no footer, one column, nothing the walk can reach, the region grows so a 4-row card needs no scroll, 12 items + the workbench in one card with none cut or overlapping, no card-slots problem, the bag followed within a second, 2 to 3 refreshes in 2.5 s. Screenshots `editor-panels-1-right-panel`, `editor-panels-card` |
-| `editor_keys` | every key, the wheel, the mouse, the top bar, the dialogs |
+| `editor_keys` | every key, the wheel, the mouse, the top bar, the dialogs; deleting one of your blueprints with a real mouse click, Esc back to the list, the right arrow and Enter |
 | `editor_pad` | every controller button through a made-up pad, and the piece menu. The help table has 22 rows, the close row included |
-| `editor_focus` | the pad and Tab walk the top bar and both panels, and press what they find |
+| `editor_focus` | the pad and Tab walk the top bar and both panels, and press what they find; deleting blueprints in Blueprints with the pad alone (right to Delete, the question on Cancel, circle and Cancel back to the same row, the walk on the next row after, the open blueprint left as not saved). Screenshot `editor-focus-delete` |
 | `editor_keep` | close and open again finds everything as it was, with F7 and with L2 + square, the hand blueprint asks over unsaved changes, a dead pane is built again on the same view, Forget leaves nothing |
 | `editor_build` | a blueprint made in the editor, built in the world (blueprint mode off after), taken back with the key, then edited again |
 | `editor_capture` | F8 on bare ground; a kit built turned 45 degrees, a wall across the edge and a cultivator piece inside; real wheel notches turn and size the rectangle (no camera zoom); yellow and orange glow counts; the capture holds the kit file unturned; Save as up, and after "Discard?" over a kept blueprint; Esc leaves no colour; the whole capture on a pad the game reads (L2 + triangle, each D-pad step, the status line one line with no controls and the game's hint row on the capture's pad set, taken into Save as, a second one stopped by circle) with the hotbar, the forsaken power, the camera and minimap zoom, the inventory and the jump untouched, then the same presses with no capture up reaching the game; the glow's cost on 400 floors. Screenshot `editor-capture-3-pad` |

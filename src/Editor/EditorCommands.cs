@@ -9,8 +9,9 @@ namespace ValheimTomrer.Editor
 {
     /// <summary>
     /// The verbs behind the top bar, the dialogs and the shortcuts: new, open, save, save as,
-    /// build it in the world, centre the origin and the two view switches. Every one of them
-    /// reports what happened through a toast, so a button, a key and the test all take the same path.
+    /// delete a file, build it in the world, centre the origin and the two view switches. Every
+    /// one of them reports what happened through a toast, so a button, a key and the test all
+    /// take the same path.
     /// </summary>
     internal static class EditorCommands
     {
@@ -36,7 +37,7 @@ namespace ValheimTomrer.Editor
             Toasts.Info("New blueprint.");
         }
 
-        /// <summary>Shows the list of kits and files.</summary>
+        /// <summary>Shows the list of kits and files: the Blueprints button.</summary>
         public static void OpenDialog()
         {
             Dialogs.Open();
@@ -71,6 +72,45 @@ namespace ValheimTomrer.Editor
             Dialogs.Close();
             EditorSession.Replace(document);
             Toasts.Ok($"Opened {document.Name}, {document.Pieces.Count} pieces.");
+        }
+
+        /// <summary>
+        /// Deletes one of the player's files. A blueprint open in the editor from that file stays
+        /// open, as not saved. Kits live in the DLL and cannot be deleted.
+        /// </summary>
+        public static bool DeleteEntry(BlueprintEntry entry)
+        {
+            if (entry == null || entry.IsKit || string.IsNullOrEmpty(entry.Path))
+            {
+                return false;
+            }
+
+            var file = Path.GetFileName(entry.Path);
+            if (!File.Exists(entry.Path))
+            {
+                Toasts.Error($"{file} is not there any more.");
+                return false;
+            }
+
+            Begin("Deleting");
+            var ok = DocumentStore.Delete(entry.Path, out var error);
+            Done();
+            if (!ok)
+            {
+                Toasts.Error(error);
+                return false;
+            }
+
+            var document = EditorState.Document;
+            if (document != null
+                && string.Equals(document.SourcePath, entry.Path, System.StringComparison.OrdinalIgnoreCase))
+            {
+                document.LoseFile();
+            }
+
+            ValheimTomrerPlugin.Log.LogInfo($"editor deleted blueprint file {entry.Path}");
+            Toasts.Ok($"Deleted {file}.");
+            return true;
         }
 
         /// <summary>
