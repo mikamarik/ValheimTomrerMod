@@ -602,6 +602,10 @@ the game's own button names, so the game's layout decides. "L2" is the game's mo
 - **A press that closes something must not reach the game** (circle is the jump, read in the next
   FixedUpdate): the capture holds it until let go, the remove window resets it
   (`SiteRemovePopup.SwallowPad`, through `ZInput.ResetButtonStatus`).
+- **The editor's look is the game's** (`EditorCamera.TurnPad`): 110 degrees a second times
+  `PlayerController.m_gamepadSens`, the game's invert settings, no setting of our own. `PadReader`
+  reads the sticks with `ReadUnprocessedValue`, never `ReadValue()`: the game sets Unity's stick
+  filter to 0.4 to 0.75, which made the look clunky (§4).
 - **In the editor the pad works off the crosshair.** Square moves, triangle copies, R1 deletes, each
   on its own, all through `PadBindings.TakeAimed`. Keep the three the same.
 
@@ -701,7 +705,7 @@ Layout, numbers and the full sets: §8, §9.
 | `editor_edit` | place, select, copy, turn, nudge, undo |
 | `editor_panels` | the card, the selection fields, the problem list, the materials list |
 | `editor_keys` | every key, the wheel, the mouse, the top bar, the dialogs, deleting a blueprint |
-| `editor_pad` | every pad button through a made-up pad, the piece menu |
+| `editor_pad` | every pad button through a made-up pad, the piece menu, the look against the game's |
 | `editor_focus` | the panel walk with the pad and Tab, text boxes on the pad (a real pad's cross and circle too), deleting a blueprint with the pad |
 | `editor_keep` | close and open again finds everything as it was |
 | `editor_build` | a blueprint made in the editor, built in the world, edited again |

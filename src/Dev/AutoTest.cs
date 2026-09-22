@@ -433,7 +433,6 @@ namespace ValheimTomrer.Dev
             Default(EditorConfig.SnapDots);
             Default(EditorConfig.Boxes);
             Default(EditorConfig.LookSensitivity);
-            Default(EditorConfig.PadLookSensitivity);
             Default(BuildConfig.UseChests);
             Default(BuildConfig.ChestRange);
         }
@@ -9590,6 +9589,7 @@ namespace ValheimTomrer.Dev
                 yield return PadDialogs(document);
                 yield return PadMenu();
                 yield return PadCamera();
+                yield return PadLook();
                 yield return PadPlacing(document, wall);
                 yield return PadAimed(document);
                 yield return PadMouse();
@@ -9794,8 +9794,9 @@ namespace ValheimTomrer.Dev
             _pad.Rs = Vector2.zero;
             var speed = Mathf.Abs(Mathf.DeltaAngle(yaw, camera.Yaw)) / Mathf.Max(Time.unscaledTime - from, 1e-3f);
             yield return null;
-            Check(speed > 110f && speed < 190f,
-                $"the right stick turns the camera at about 150 degrees a second: {speed:0}");
+            var want = 110f * PlayerController.m_gamepadSens;
+            Check(speed > want * 0.8f && speed < want * 1.2f,
+                $"the right stick turns the camera at the game's {want:0} degrees a second: {speed:0}");
 
             yield return FlySpeed(camera, false);
             var one = _flySpeed;
@@ -9835,6 +9836,129 @@ namespace ValheimTomrer.Dev
             }
 
             yield return null;
+        }
+
+        /// <summary>
+        /// The right stick looks around the way the game's does (PlayerController.LateUpdate): the
+        /// same stick numbers as <c>ZInput.GetJoyRightStick</c>, 110 degrees a second times the
+        /// game's own Gamepad sensitivity, the same step every frame, and the game's invert
+        /// settings. Driven through the made-up DualSense, so the reader's real device path runs.
+        /// </summary>
+        private static IEnumerator PadLook()
+        {
+            var camera = ViewportHost.Camera;
+            var settings = UnityEngine.InputSystem.InputSystem.settings;
+            var game = GameCamera.instance != null ? GameCamera.instance.m_camera : null;
+            Log($"pad look: input update {settings.updateMode}, Unity's stick dead zone {settings.defaultDeadzoneMin}"
+                + $" to {settings.defaultDeadzoneMax}, game Gamepad sensitivity {PlayerController.m_gamepadSens}, invert"
+                + $" x {PlayerController.m_invertCameraX} y {PlayerController.m_invertCameraY}, field of view: game"
+                + $" {(game != null ? game.fieldOfView : 0f):0}, pane {camera.FieldOfView:0}");
+
+            PadReader.Fake = null;
+            WorldPadOn();
+
+            // The dead zone and the ramp: every stick position reads what the game reads.
+            var worst = 0f;
+            var table = new List<string>();
+            foreach (var raw in new[]
+            {
+                new Vector2(0.1f, 0f), new Vector2(0.22f, 0f), new Vector2(0.3f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(0.7f, 0f), new Vector2(0.9f, 0f), new Vector2(1f, 0f), new Vector2(0.4f, 0.4f),
+                new Vector2(-0.35f, 0.6f),
+            })
+            {
+                PadSticks(raw, -raw);
+                yield return Frames(2);
+                var mine = EditorInput.Pad != null ? EditorInput.Pad.Rs : new Vector2(9f, 9f);
+                var theirs = ZInput.GetJoyRightStick();
+                var left = EditorInput.Pad != null ? EditorInput.Pad.Ls : new Vector2(9f, 9f);
+                worst = Mathf.Max(worst, Mathf.Max(Vector2.Distance(mine, theirs), Vector2.Distance(left, ZInput.GetJoyLeftStick())));
+                table.Add($"{raw.x:0.00},{raw.y:0.00} -> {mine.x:0.000},{mine.y:0.000} (game {theirs.x:0.000},{theirs.y:0.000})");
+            }
+
+            Log("pad look: stick table " + string.Join("; ", table));
+            Check(worst < 0.002f, $"both sticks read what the game reads at every position: off by at most {worst:0.0000}");
+
+            // The speed, and the same step every frame.
+            PadSticks(new Vector2(0.6f, 0f), Vector2.zero);
+            yield return Frames(3);
+            var stick = ZInput.GetJoyRightStick().x;
+            var want = 110f * PlayerController.m_gamepadSens * stick;
+            var rates = new List<float>();
+            var times = new List<float>();
+            var yaw = camera.Yaw;
+            var until = Time.unscaledTime + 0.6f;
+            while (Time.unscaledTime < until)
+            {
+                yield return null;
+                rates.Add(Mathf.DeltaAngle(yaw, camera.Yaw) / Mathf.Max(EditorInput.Dt, 1e-5f));
+                times.Add(Time.unscaledDeltaTime * 1000f);
+                yaw = camera.Yaw;
+            }
+
+            PadSticks(Vector2.zero, Vector2.zero);
+            yield return Frames(2);
+            rates.Sort();
+            times.Sort();
+            var mean = 0f;
+            foreach (var rate in rates)
+            {
+                mean += rate / rates.Count;
+            }
+
+            Log($"pad look: {rates.Count} frames, {times[0]:0.0} / {times[times.Count / 2]:0.0} / {times[times.Count - 1]:0.0} ms"
+                + $" (fastest / middle / slowest), degrees a second per frame {rates[0]:0.0} to {rates[rates.Count - 1]:0.0}");
+            Check(Mathf.Abs(mean - want) < want * 0.02f,
+                $"the stick at {stick:0.00} turns {mean:0.0} degrees a second, the game's {want:0.0} (110 x {stick:0.00} x {PlayerController.m_gamepadSens})");
+            Check(rates[rates.Count - 1] - rates[0] < want * 0.01f,
+                $"the same turn every frame, no smoothing or jumps: {rates[0]:0.0} to {rates[rates.Count - 1]:0.0}");
+
+            // The game's own settings: twice the sensitivity turns twice as fast, invert Y looks down.
+            var wasSens = PlayerController.m_gamepadSens;
+            var wasInvertY = PlayerController.m_invertCameraY;
+            PlayerController.m_gamepadSens = wasSens * 2f;
+            PlayerController.m_invertCameraY = true;
+            PadSticks(new Vector2(0.6f, 0.6f), Vector2.zero);
+            yield return Frames(4);
+            var step = 0f;
+            var turned = 0f;
+            var looked = 0f;
+            for (var frame = 0; frame < 10; frame++)
+            {
+                var before = camera.Yaw;
+                var beforePitch = camera.Pitch;
+                yield return null;
+                step += EditorInput.Dt;
+                turned += Mathf.DeltaAngle(before, camera.Yaw);
+                looked += camera.Pitch - beforePitch;
+            }
+
+            PadSticks(Vector2.zero, Vector2.zero);
+            PlayerController.m_gamepadSens = wasSens;
+            PlayerController.m_invertCameraY = wasInvertY;
+            yield return Frames(2);
+            var diagonal = ZInputStick(new Vector2(0.6f, 0.6f));
+            var fast = 110f * wasSens * 2f * diagonal.x;
+            Check(Mathf.Abs(turned / step - fast) < fast * 0.02f && looked < 0f,
+                $"the game's settings count: sensitivity x2 turns {turned / step:0.0} degrees a second (want {fast:0.0}),"
+                + $" invert Y turns the stick's up into looking down ({looked:0.0} degrees)");
+
+            yield return WorldPadOff();
+            PadReader.Fake = _pad;
+            yield return Frames(2);
+        }
+
+        /// <summary>Both sticks of the made-up DualSense, raw, nothing pressed.</summary>
+        private static void PadSticks(Vector2 right, Vector2 left)
+        {
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(
+                _worldPad, new UnityEngine.InputSystem.LowLevel.GamepadState { rightStick = right, leftStick = left });
+        }
+
+        /// <summary>ZInput's own dead zone on a raw stick, the numbers the game turns by.</summary>
+        private static Vector2 ZInputStick(Vector2 raw)
+        {
+            return ZInput.m_instance.ApplyDeadzoneVector(raw);
         }
 
         /// <summary>Rows 5, 6, 7, 12 and 13, with a piece in hand over open ground.</summary>

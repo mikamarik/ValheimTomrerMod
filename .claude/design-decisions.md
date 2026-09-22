@@ -354,6 +354,26 @@ selection when that piece is part of it, and falls back to the existing selectio
 is on nothing. They used to disagree (square and triangle needed R2 first, delete did not, copy was
 `L2 + R1`) and no one could tell what they did. That is why the three stay the same.
 
+### The editor's look is the game's
+
+The right stick in the 3D pane turns exactly like the game's camera (`PlayerController.LateUpdate`):
+110 degrees a second at full stick, times the game's own Gamepad sensitivity
+(`PlayerController.m_gamepadSens`), with its invert X and Y settings. The game's settings screen
+writes those statics live, so a change there shows in the editor at once. The mod has no pad look
+setting any more (`PadLookSensitivity` is gone, and `EditorConfig.Drop` takes its line, and the old
+`CameraMode` one, out of the player's file: BepInEx keeps an unknown line forever).
+
+- **The sticks are read raw** (`ReadUnprocessedValue`), then ZInput's radial dead zone (0.2, rescaled
+  to 0..1), the way `ZInput.ReadValueDef` does. `ReadValue()` adds Unity's own stick filter, which the
+  game sets to 0.4 to 0.75 (measured). With the old reader the stick did nothing up to about half
+  way and was at full speed by three quarters (raw 0.5 read 0.11, raw 0.7 read 0.82, the game 0.375
+  and 0.625): the "clunky" look the user reported. Frame steps were already even.
+- The pane's field of view is 45 degrees, the game's camera 65, so the same degrees a second cross
+  the pane about 1.4 times faster than the game's screen.
+- `editor_pad` (`AutoTest.PadLook`) holds this through the made-up DualSense, the real read path:
+  both sticks against `ZInput.GetJoyRightStick` / `GetJoyLeftStick` at nine positions, the speed,
+  the same step every frame, twice the sensitivity and invert Y.
+
 ### What the autotest cannot press
 
 A real pad pressing cross while the walk is on. The fake pad is invisible to
@@ -705,7 +725,7 @@ along the bottom of the screen (`KeyHints`), in its look:
 | `editor_edit` | place, select, copy, turn, nudge, undo |
 | `editor_panels` | the build card (its text: the description and "N pieces.", no controls), the selection fields, the problem list; L3, R1 and the right stick scroll the right panel up and down, the ring shown only while its widget is in sight; the materials list: a row per item and station of the document, have = `MaterialSources.Around(player).Count`, stations by the player, no footer, one column, nothing the walk can reach, the region grows so a 4-row card needs no scroll, 12 items + the workbench in one card with none cut or overlapping, no card-slots problem, the bag followed within a second, 2 to 3 refreshes in 2.5 s. Screenshots `editor-panels-1-right-panel`, `editor-panels-card` |
 | `editor_keys` | every key, the wheel, the mouse, the top bar, the dialogs; deleting one of your blueprints with a real mouse click, Esc back to the list, the right arrow and Enter |
-| `editor_pad` | every controller button through a made-up pad, and the piece menu. The help table has 22 rows, the close row included |
+| `editor_pad` | every controller button through a made-up pad, and the piece menu. The help table has 22 rows, the close row included. The right stick reads and turns like the game's: its stick numbers, 110 degrees a second times the game's Gamepad sensitivity, its invert Y (§4) |
 | `editor_focus` | the pad and Tab walk the top bar and both panels, and press what they find; deleting blueprints in Blueprints with the pad alone (right to Delete, the question on Cancel, circle and Cancel back to the same row, the walk on the next row after, the open blueprint left as not saved). Screenshot `editor-focus-delete` |
 | `editor_keep` | close and open again finds everything as it was, with F7 and with L2 + square, the hand blueprint asks over unsaved changes, a dead pane is built again on the same view, Forget leaves nothing |
 | `editor_build` | a blueprint made in the editor, built in the world (blueprint mode off after), taken back with the key, then edited again |

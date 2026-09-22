@@ -293,7 +293,7 @@ PlayStation names first, Xbox names in brackets.
 |---|---|
 | Left stick | Fly forward, back, left, right |
 | L1 (LB) + left stick | Fly 3 times faster |
-| Right stick | Look around |
+| Right stick | Look around, at the speed of the game's own Gamepad sensitivity setting |
 | D-pad up, down | Fly up, down |
 | R2 (RT) | Place, else select the piece in the middle of the view |
 | L1 (LB) + R2 (RT) | Add that piece to the selection, or take it out |
@@ -350,7 +350,6 @@ Valheim/BepInEx/config/com.mikamarik.valheimtomrer.cfg
 | Editor | `SnapDots` | `true` | Show the snap dots while placing. Snapping itself is always on. |
 | Editor | `Boxes` | `false` | Draw pieces as plain boxes instead of models. |
 | Editor | `LookSensitivity` | `1.0` | Mouse look speed in the 3D view. 2 is twice as fast. |
-| Editor | `PadLookSensitivity` | `1.0` | Right stick look speed. 2 is twice as fast. |
 | Build | `UseChests` | `true` | A blueprint build also takes materials from chests near you, after your bag. Off: the bag only. |
 | Build | `ChestRange` | `20` | How far a chest may be from you, in metres (0 to 100), and still give materials. |
 
