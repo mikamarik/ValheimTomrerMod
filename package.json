@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "build": "dotnet build -c Debug",
-    "build:release": "dotnet build -c Release"
+    "build:release": "dotnet build -c Release",
+    "zip": "bash scripts/zip.sh"
   }
 }

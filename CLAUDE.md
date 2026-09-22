@@ -57,8 +57,8 @@ command grep -rn "ZDO().Set\|\.Set(ZDOVars\|InvokeRPC\|RoutedRPC\|Register<" src
 disk, in any format, under any folder. The only files it writes are `.blueprint` text files: the
 player's blueprints in `config/ValheimTomrer/blueprints/` and the unfinished builds in
 `config/ValheimTomrer/sites/`. Everything it draws is made at runtime from what the game already
-loaded. `editor_all` ends with a guard for it and `autotest.sh` walks the repo (§10). Do not weaken
-either.
+loaded. `editor_all` ends with a guard for it and `autotest.sh` walks the repo (§10), skipping only
+`thunderstore/icon.png`. Do not weaken either.
 
 ---
 
@@ -149,21 +149,31 @@ file in the repo outside `bin/`, `obj/` and `.devtest/`.
 **Build, scripts, data**
 
 ```
-ValheimTomrer.csproj              netstandard2.1, local refs, publicizer, embeds the kits,
-                                  auto-deploys the DLL into BepInEx/plugins after every build
+ValheimTomrer.csproj              netstandard2.1, local refs, publicizer, embeds the kits, the AI
+                                  metadata Thunderstore asks for, auto-deploys the DLL into
+                                  BepInEx/plugins after every build (-p:DeployToGame=false skips it)
 Directory.Build.props             finds the install: ValheimInstall, ValheimManaged, BepInExDir
-README.md                         the player-facing readme: features, install, keys, the
-                                  controller tables
-package.json                      npm run build (-c Debug) and build:release (-c Release)
+README.md                         the player-facing readme, also the Thunderstore page: features,
+                                  install, keys, the controller tables. Written to read human (no
+                                  bold lead-ins, no fragment lists), images by GitHub raw URL
+CHANGELOG.md                      the player-facing changes, one block per released version
+LICENSE                           MIT
+package.json                      npm run build (-c Debug), build:release (-c Release), zip
 .gitignore                        ignores bin, obj, .devtest and .claude/ except
                                   design-decisions.md (open the rest by exact path, the search
                                   tools skip them)
 scripts/dev.sh                    build, deploy, launch, tail our log lines (--debug adds the debugger)
 scripts/autotest.sh               run one AutoTest scenario, output lands in .devtest/
+scripts/zip.sh                    npm run zip: Release build (not deployed), checks the manifest,
+                                  one version everywhere and the icon, then
+                                  thunderstore/build/ValheimTomrer.zip, made from scratch
+scripts/make-gifs.py              the readme_gifs frames in .devtest/gifs/ to docs/media/*.gif
+docs/media/*.gif                  the README's GIFs: editor, build, capture
 blueprints/workshop.blueprint     the only shipped kit, embedded in the DLL as ValheimTomrer.Kits.*
 tests/fixtures/                   workshop.canonical.blueprint, exactly what the writer must
                                   produce. Embedded in Debug only, the autotest reads it in game
-thunderstore/manifest.json        packaging stub, not wired to anything yet
+thunderstore/manifest.json        the package's manifest (description 250 characters at most)
+thunderstore/icon.png             the package icon, 256x256. The one image the art guard allows
 .vscode/tasks.json                tasks "build" and "run: game (debug)"
 .vscode/launch.json               "Attach to Valheim", vstuc, 127.0.0.1:10000
 ```
@@ -411,6 +421,7 @@ AutoTestPeace.cs                  stops the AI, the spawns and the raids in the 
 ```bash
 dotnet build                 # or: npm run build
 dotnet build -c Release      # or: npm run build:release (no src/Dev, no autotest)
+npm run zip                  # the Thunderstore zip, thunderstore/build/ValheimTomrer.zip
 ```
 
 ~1.6s. A successful build **auto-deploys** `ValheimTomrer.dll` + `.pdb` into
@@ -713,6 +724,7 @@ Layout, numbers and the full sets: §8, §9.
 | `editor_capture` | the capture, keyboard and pad |
 | `editor_support` | the support rule against the game's numbers. `VT_SUPPORT_EDITOR_ONLY=1` skips the world half |
 | `editor_all` | all of the above except `probe_build`, then the art guard. **This is the one to run.** |
+| `readme_gifs` | no test: records the README's GIF frames. Not in `editor_all`. Then `scripts/make-gifs.py` |
 
 - **The release check** is `editor_all`: `DONE pass=N fail=0` plus `art guard:` in the output. It
   takes about 11 minutes. `VT_CHAIN="editor_build,blueprints" ./scripts/autotest.sh editor_all` runs
