@@ -2,7 +2,7 @@
   "name": "ValheimTomrer",
   "version_number": "0.1.0",
   "website_url": "https://github.com/mikamarik/ValheimTomrerMod",
-  "description": "Make blueprints in the game, then build them with the hammer.",
+  "description": "In-game blueprint editor. Design a building in 3D or copy one you already built, and the hammer puts it up using materials from your inventory and nearby chests. Short on materials? It builds what it can. Controller friendly, client-side.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2350"
   ]

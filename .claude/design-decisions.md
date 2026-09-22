@@ -781,6 +781,15 @@ when the walks saw no site file, or missed one the store kept, so a folder list 
 cannot pass. A `VT_CHAIN` run in which no scenario kept a site skips that part with a logged note.
 `autotest.sh` then walks the repo for image, mesh and bundle files and prints `art guard:`.
 
+Two narrow exceptions, both added for publishing on 22-09-2026:
+
+- The repo walk skips `thunderstore/icon.png`, that one path (the user chose this). It is the
+  Thunderstore package's picture, not art the mod draws or writes. `scripts/zip.sh` deletes its
+  staged copy after zipping, or the walk would find it in `thunderstore/build/`.
+- The in-game walk of `.devtest` lets `.jpg` files sit in `.devtest/gifs/`: the `readme_gifs`
+  recorder's frames, next to the screenshots it already allows. The README's GIFs are `.gif`, which
+  neither walk looks for.
+
 ---
 
 ## 11. Tomrer

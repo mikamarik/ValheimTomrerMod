@@ -34,6 +34,9 @@
 #   ./scripts/autotest.sh editor_support build test structures, hold the editor's support rule against the game's
 #   ./scripts/autotest.sh editor_all   every scenario above but probe_build in one game (about 10 minutes),
 #                                      then the "no game art" guard, sites folder included
+#   ./scripts/autotest.sh readme_gifs  no test: records the README's GIF frames (editor, build, capture) into
+#                                      .devtest/gifs/<name>/. Not part of editor_all. scripts/make-gifs.sh
+#                                      runs it and turns the frames into docs/media/*.gif
 # Output (log, screenshots, test saves) goes to .devtest/ in the repo.
 # VT_CHAIN="editor_build,blueprints" ./scripts/autotest.sh editor_all  runs only those, in that order.
 # VT_SUPPORT_EDITOR_ONLY=1 ./scripts/autotest.sh editor_support  skips building in the world (3 min less).
@@ -93,9 +96,11 @@ fi
 cat "$OUT/result.txt"
 
 # The mod writes blueprints, nothing else. The in-game guard walks the folders the mod writes
-# to; this walks the repo, where only the autotest's own screenshots may be images.
+# to; this walks the repo, where only the autotest's own screenshots may be images, plus the
+# Thunderstore package's icon (thunderstore/icon.png, that one path only).
 if [[ "$SCENARIO" == "editor_all" ]]; then
   ART=$(find "$REPO" -path "$REPO/.git" -prune -o -path "$REPO/.devtest" -prune -o \
+    -path "$REPO/thunderstore/icon.png" -prune -o \
     \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.tga' -o -name '*.glb' \
     -o -name '*.fbx' -o -name '*.obj' -o -name '*.mat' -o -name '*.mesh' -o -name '*.bundle' \
     -o -name '*.asset' -o -name '*.prefab' \) -print)

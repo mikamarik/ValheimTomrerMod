@@ -22,6 +22,12 @@
     <PackageReference Include="Krafs.Publicizer" Version="2.3.2" PrivateAssets="all" />
   </ItemGroup>
 
+  <!-- Thunderstore asks mods made with AI to say so here and in the README. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="AI_Assisted_Creation" Value="This assembly was partially or fully created with the assistance of Generative AI (Claude Opus 5)." />
+    <AssemblyMetadata Include="AI_Model_Vendor" Value="Anthropic" />
+  </ItemGroup>
+
   <!-- Expose private/internal game members so patches can reach them. -->
   <ItemGroup>
     <Publicize Include="assembly_valheim" />
@@ -124,8 +130,9 @@
     <EmbeddedResource Include="tests/fixtures/*.blueprint" LogicalName="ValheimTomrer.Fixtures.%(Filename)%(Extension)" />
   </ItemGroup>
 
-  <!-- Build straight into the game so the loop is: dotnet build -> launch. -->
-  <Target Name="DeployToBepInEx" AfterTargets="Build" Condition="Exists('$(BepInExDir)')">
+  <!-- Build straight into the game so the loop is: dotnet build -> launch.
+       -p:DeployToGame=false skips it (scripts/zip.sh). -->
+  <Target Name="DeployToBepInEx" AfterTargets="Build" Condition="Exists('$(BepInExDir)') and '$(DeployToGame)' != 'false'">
     <PropertyGroup>
       <PluginDeployDir>$(BepInExDir)/plugins/$(AssemblyName)</PluginDeployDir>
     </PropertyGroup>
