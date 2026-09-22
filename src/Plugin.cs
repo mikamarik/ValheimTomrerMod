@@ -1,5 +1,6 @@
 using System.Reflection;
 using ValheimTomrer.Blueprints;
+using ValheimTomrer.Blueprints.Sites;
 using ValheimTomrer.Editor;
 using BepInEx;
 using BepInEx.Configuration;
@@ -41,6 +42,7 @@ namespace ValheimTomrer
                 "With a hammer in hand: selects the next blueprint. After the last one, back to normal building.");
 
             EditorConfig.Bind(Config);
+            BuildConfig.Bind(Config);
 
 #if DEBUG
             Dev.AutoTest.Init();
@@ -55,11 +57,14 @@ namespace ValheimTomrer
         }
 
         /// <summary>
-        /// The editor key is read here, not in a build patch, so it works without a hammer.
+        /// The editor key is read here, not in a build patch, so it works without a hammer. The
+        /// unfinished builds are kept in step with the world here too.
         /// </summary>
         private void Update()
         {
             EditorSession.Tick();
+            SiteTracker.Tick();
+            SiteRemovePopup.Tick();
         }
 
         /// <summary>
@@ -68,7 +73,11 @@ namespace ValheimTomrer
         /// </summary>
         private void OnDestroy()
         {
+            SiteRemovePopup.Destroy();
+            HintRow.Destroy();
             BlueprintMode.Exit();
+            BlueprintInfoCard.Destroy();
+            SiteStore.Clear();
             EditorSession.Shutdown();
             _harmony?.UnpatchSelf();
             Log?.LogInfo($"{PluginName} unloaded.");

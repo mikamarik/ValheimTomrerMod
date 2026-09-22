@@ -3,6 +3,7 @@ using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using ValheimTomrer.Blueprints;
 using ValheimTomrer.Editor.Catalog;
 using ValheimTomrer.Editor.Doc;
 
@@ -10,11 +11,18 @@ namespace ValheimTomrer.Editor.Ui
 {
     /// <summary>
     /// The right panel's top region: the blueprint's name, description and icon, and under them a
-    /// copy of the build card the game shows in build mode, so a change can be judged without
-    /// leaving the editor.
+    /// copy of the build card the game shows in build mode, with the same materials list
+    /// (<see cref="MaterialList"/>), so a change can be judged without leaving the editor. The
+    /// list's "have" is what the player has where they stand in the world (the bag and the chests
+    /// in range), and a station is "in range" when one is near the player.
     ///
     /// The two fields write straight into the document on every keystroke. The document coalesces
     /// a run of keystrokes in one field into a single undo step, so typing a name is one Ctrl+Z.
+    ///
+    /// A long list makes the region taller: the window gives it room down to a short problem list
+    /// (<see cref="EditorWindow.FitBlueprint"/>), and past that the region scrolls: the mouse wheel,
+    /// or the right stick while the panel walk is in this panel (<see cref="FocusNav.Scroll"/>).
+    /// The list's rows are plain images, so the panel walk never steps into them.
     /// </summary>
     internal static class BlueprintPanel
     {
@@ -22,8 +30,18 @@ namespace ValheimTomrer.Editor.Ui
         private const float FieldHeight = 30f;
         private const float ChoiceSize = 34f;
         private const float ChoiceAreaHeight = 76f;
-        private const float SlotWidth = 48f;
-        private const float SlotHeight = 64f;
+
+        /// <summary>The list's width until the first layout has measured the card.</summary>
+        private const float FallbackListWidth = 290f;
+
+        /// <summary>
+        /// The list goes to two columns only when it is at least as wide as the hammer card's
+        /// two-column list. The panel is narrower, so today it is always one column.
+        /// </summary>
+        private const float TwoColumnWidth = BlueprintInfoCard.TwoColumnWidth;
+
+        /// <summary>While the window is open, the list is worked out again this often (seconds), and at once when the document changes.</summary>
+        public const float MaterialsPeriod = 1f;
 
         private static RectTransform _host;
         private static RectTransform _root;
@@ -36,11 +54,18 @@ namespace ValheimTomrer.Editor.Ui
         private static TextMeshProUGUI _cardName;
         private static Image _cardIcon;
         private static TextMeshProUGUI _cardText;
-        private static RectTransform _slotRow;
-        private static TextMeshProUGUI _overflow;
+        private static ScrollRect _scroll;
+        private static RectTransform _cardPanel;
+        private static RectTransform _materials;
+        private static LayoutElement _materialsSize;
+        private static MaterialList _list;
+
+        /// <summary>The last <see cref="MaterialSources.Around"/>, and when it was made (unscaled time).</summary>
+        private static MaterialSources _sources;
+        private static float _sourcesAt = float.MinValue;
+        private static float _nextMaterials;
 
         private static readonly List<Choice> Choices = new List<Choice>();
-        private static readonly List<Slot> Slots = new List<Slot>();
 
         private static BlueprintDocument _document;
         private static int _revision = -1;
@@ -62,29 +87,25 @@ namespace ValheimTomrer.Editor.Ui
 
         public static string CardText => _cardText != null ? _cardText.text : "";
 
-        public static string OverflowText =>
-            _overflow != null && _overflow.gameObject.activeSelf ? _overflow.text : "";
-
         public static string IconWarningText =>
             _iconWarning != null && _iconWarning.gameObject.activeSelf ? _iconWarning.text : "";
 
-        /// <summary>Card squares with something in them.</summary>
-        public static int FilledSlots
-        {
-            get
-            {
-                var count = 0;
-                foreach (var slot in Slots)
-                {
-                    if (slot.Rect.gameObject.activeSelf)
-                    {
-                        count++;
-                    }
-                }
+        /// <summary>The materials list in the card. For the tests.</summary>
+        public static MaterialList List => _list;
 
-                return count;
-            }
-        }
+        /// <summary>What the list shows now.</summary>
+        public static Tally LastTally { get; private set; }
+
+        /// <summary>The card lookalike, the list's background.</summary>
+        public static RectTransform CardPanel => _cardPanel;
+
+        /// <summary>The scroll view round the whole region.</summary>
+        public static ScrollRect Scroll => _scroll;
+
+        /// <summary>How many times the list was worked out, and how many of those read the world's chests again.</summary>
+        public static int MaterialRefreshes { get; private set; }
+
+        public static int SourceReads { get; private set; }
 
         /// <summary>Picks one of the icon buttons, the way a click on it does.</summary>
         public static void Choose(int index)
@@ -110,8 +131,8 @@ namespace ValheimTomrer.Editor.Ui
             _host = host;
             _generation = UiTheme.Generation;
             Choices.Clear();
-            Slots.Clear();
             _kindsKey = "";
+            _list = null;
             Build(host);
         }
 
@@ -135,12 +156,29 @@ namespace ValheimTomrer.Editor.Ui
             {
                 Refresh();
             }
+            else if (Time.unscaledTime >= _nextMaterials)
+            {
+                // What the player has can change without the document: once a second while open.
+                FillMaterials();
+            }
+            else if (_list != null && LastTally != null && !Mathf.Approximately(ListWidth(), _list.Width))
+            {
+                // The card's width is known only after the first layout: lay the list out again when it changes.
+                ShowList();
+            }
+
+            // The region grows with a long list, as far as the window lets it (the height of the
+            // last layout, plus the scroll view's 4 px inset at the top and the bottom).
+            EditorWindow.FitBlueprint(_scroll.content.rect.height + 8f);
         }
 
         public static void Close()
         {
             _document = null;
             _revision = -1;
+
+            // Let go of the chests; the next open reads them again.
+            _sources = null;
         }
 
         /// <summary>Reads the document into every widget.</summary>
@@ -167,6 +205,7 @@ namespace ValheimTomrer.Editor.Ui
 
             FillChoices();
             FillCard();
+            FillMaterials();
         }
 
         // ---------- editing ----------
@@ -291,43 +330,68 @@ namespace ValheimTomrer.Editor.Ui
             _cardIcon.sprite = card.Icon;
             _cardIcon.enabled = card.Icon != null;
             _cardText.text = card.Description;
+        }
 
-            while (Slots.Count < card.TotalSlots)
+        /// <summary>
+        /// Works the materials list out again. <see cref="MaterialSources.Around"/> walks every
+        /// loaded piece, so it runs once a second at most; its counts are read live, so a document
+        /// change in between is counted against the same list and still shows the right numbers.
+        /// </summary>
+        private static void FillMaterials()
+        {
+            MaterialRefreshes++;
+            _nextMaterials = Time.unscaledTime + MaterialsPeriod;
+            var player = Player.m_localPlayer;
+            var costsOff = player != null && player.PlacementCostDisabled;
+            if (player != null && !costsOff && _document != null && _document.Pieces.Count > 0
+                && (_sources == null || Time.unscaledTime - _sourcesAt >= MaterialsPeriod))
             {
-                Slots.Add(NewSlot(_slotRow));
+                _sources = MaterialSources.Around(player);
+                _sourcesAt = Time.unscaledTime;
+                SourceReads++;
             }
 
-            for (var i = 0; i < Slots.Count; i++)
+            LastTally = BlueprintCard.Materials(
+                _document,
+                costsOff ? null : _sources,
+                costsOff,
+                player != null ? player.transform.position : (Vector3?)null);
+            ShowList();
+        }
+
+        private static void ShowList()
+        {
+            if (_list == null || LastTally == null)
             {
-                if (i < card.Slots.Count)
-                {
-                    Slots[i].Show(card.Slots[i]);
-                }
-                else
-                {
-                    Slots[i].Hide();
-                }
+                return;
             }
 
-            _overflow.gameObject.SetActive(card.Hidden.Count > 0);
-            if (card.Hidden.Count > 0)
+            var width = ListWidth();
+            _list.MaxColumns = width >= TwoColumnWidth ? 2 : 1;
+            _list.Width = width;
+            _list.Show(LastTally);
+            if (!Mathf.Approximately(_materialsSize.preferredHeight, _list.Height))
             {
-                var names = new List<string>(card.Hidden.Count);
-                foreach (var slot in card.Hidden)
-                {
-                    names.Add(slot.Kind == CardSlotKind.Cost ? slot.Amount + " " + slot.Name : slot.Name);
-                }
-
-                _overflow.text = $"Not shown ({card.TotalSlots} slots): " + string.Join(", ", names.ToArray());
+                _materialsSize.minHeight = _materialsSize.preferredHeight = _list.Height;
             }
+        }
+
+        private static float ListWidth()
+        {
+            var width = _materials != null ? _materials.rect.width : 0f;
+            return width > 1f ? width : FallbackListWidth;
         }
 
         // ---------- widgets ----------
 
         private static void Build(RectTransform host)
         {
-            _root = Column("Blueprint", host, 4f, 2);
-            UiBuild.Stretch(_root, 4f, 4f, 4f, 4f);
+            // One scroll view round everything: when even the grown band is too short for a long
+            // materials list, the wheel (or the right stick in the panel walk) scrolls it.
+            _scroll = UiBuild.Scroll("Blueprint", host, 4f);
+            UiBuild.Stretch((RectTransform)_scroll.transform, 4f, 4f, 4f, 4f);
+            _root = _scroll.content;
+            _root.GetComponent<VerticalLayoutGroup>().padding = new RectOffset(2, 2, 2, 2);
 
             Heading(_root, "Blueprint");
             _name = Field(_root, "Name", "The name on the build card");
@@ -359,13 +423,23 @@ namespace ValheimTomrer.Editor.Ui
             BuildCard(_root);
         }
 
-        /// <summary>The build card lookalike: name, icon, description, then the six squares.</summary>
+        /// <summary>
+        /// The build card lookalike: name, icon, description, then the materials list. It grows
+        /// with the list: its own column sizes it.
+        /// </summary>
         private static void BuildCard(RectTransform parent)
         {
             var panel = UiBuild.Panel("Card", parent, UiTheme.Sunken, UiTheme.Inset);
-            var card = Column("Inside", panel.transform, 4f, 8);
-            UiBuild.Stretch(card);
-            panel.gameObject.AddComponent<LayoutElement>().minHeight = SlotHeight + 96f;
+            _cardPanel = panel.rectTransform;
+            var column = panel.gameObject.AddComponent<VerticalLayoutGroup>();
+            column.spacing = 4f;
+            column.padding = new RectOffset(8, 8, 8, 8);
+            column.childAlignment = TextAnchor.UpperLeft;
+            column.childControlWidth = true;
+            column.childControlHeight = true;
+            column.childForceExpandWidth = true;
+            column.childForceExpandHeight = false;
+            var card = _cardPanel;
 
             _cardName = Line(card, 17f, UiTheme.Accent);
 
@@ -379,11 +453,14 @@ namespace ValheimTomrer.Editor.Ui
             size.minHeight = size.preferredHeight = 44f;
             _cardText = Line(body, 13f, UiTheme.Text);
 
-            _slotRow = Row("Slots", card, 4f);
-            _slotRow.gameObject.AddComponent<LayoutElement>().minHeight = SlotHeight;
+            // The list is laid out by hand, so its holder says how tall it is.
+            _materials = UiBuild.Rect("Materials", card);
+            _materialsSize = _materials.gameObject.AddComponent<LayoutElement>();
+            _list = MaterialList.Create(_materials, FallbackListWidth, 1);
 
-            _overflow = Line(card, 12f, UiTheme.Warn);
-            _overflow.gameObject.SetActive(false);
+            // No "Can build now" here: the blueprint stands nowhere in the world, so there is no
+            // spot to plan at, and the card text above already counts the pieces.
+            _list.FooterShown = false;
         }
 
         private static Choice NewChoice(string prefab, string text, Sprite icon)
@@ -414,46 +491,6 @@ namespace ValheimTomrer.Editor.Ui
                 Background = background,
                 Label = label,
             };
-        }
-
-        private static Slot NewSlot(Transform parent)
-        {
-            var background = UiBuild.Panel("Slot", parent, UiTheme.ItemBackground);
-            var size = background.gameObject.AddComponent<LayoutElement>();
-            size.minWidth = size.preferredWidth = SlotWidth;
-            size.minHeight = size.preferredHeight = SlotHeight;
-
-            var name = UiBuild.Label("Name", background.transform, "", 10f, TextAlignmentOptions.Top, UiTheme.TextDim);
-
-            // "Bone Fragments" has to fit one square: shrink the words instead of cutting them.
-            name.enableWordWrapping = false;
-            name.enableAutoSizing = true;
-            name.fontSizeMin = 6f;
-            name.fontSizeMax = 10f;
-            name.rectTransform.anchorMin = new Vector2(0f, 1f);
-            name.rectTransform.anchorMax = new Vector2(1f, 1f);
-            name.rectTransform.pivot = new Vector2(0.5f, 1f);
-            name.rectTransform.offsetMin = new Vector2(1f, -16f);
-            name.rectTransform.offsetMax = new Vector2(-1f, -1f);
-
-            var icon = UiBuild.Panel("Icon", background.transform, null);
-            icon.type = Image.Type.Simple;
-            icon.preserveAspect = true;
-            icon.raycastTarget = false;
-            icon.rectTransform.anchorMin = new Vector2(0.5f, 1f);
-            icon.rectTransform.anchorMax = new Vector2(0.5f, 1f);
-            icon.rectTransform.pivot = new Vector2(0.5f, 1f);
-            icon.rectTransform.anchoredPosition = new Vector2(0f, -17f);
-            icon.rectTransform.sizeDelta = new Vector2(28f, 28f);
-
-            var amount = UiBuild.Label("Amount", background.transform, "", 12f, TextAlignmentOptions.Bottom);
-            amount.rectTransform.anchorMin = Vector2.zero;
-            amount.rectTransform.anchorMax = new Vector2(1f, 0f);
-            amount.rectTransform.pivot = new Vector2(0.5f, 0f);
-            amount.rectTransform.offsetMin = new Vector2(1f, 1f);
-            amount.rectTransform.offsetMax = new Vector2(-1f, 17f);
-
-            return new Slot { Rect = background.rectTransform, Name = name, Icon = icon, Amount = amount };
         }
 
         private static TextMeshProUGUI Heading(Transform parent, string text)
@@ -495,14 +532,6 @@ namespace ValheimTomrer.Editor.Ui
             return label;
         }
 
-        /// <summary>A column whose children fill its width.</summary>
-        private static RectTransform Column(string name, Transform parent, float spacing, int padding = 0)
-        {
-            var rect = UiBuild.Column(name, parent, spacing, padding);
-            rect.GetComponent<VerticalLayoutGroup>().childForceExpandWidth = true;
-            return rect;
-        }
-
         /// <summary>A row whose children fill its height.</summary>
         private static RectTransform Row(string name, Transform parent, float spacing)
         {
@@ -525,39 +554,6 @@ namespace ValheimTomrer.Editor.Ui
                 {
                     Label.color = on ? UiTheme.TextOnAccent : UiTheme.Text;
                 }
-            }
-        }
-
-        private sealed class Slot
-        {
-            public RectTransform Rect;
-            public TextMeshProUGUI Name;
-            public Image Icon;
-            public TextMeshProUGUI Amount;
-
-            public void Show(CardSlot slot)
-            {
-                Rect.gameObject.SetActive(true);
-                Name.text = slot.Name;
-                Icon.sprite = slot.Icon;
-                Icon.enabled = slot.Icon != null;
-                if (slot.Kind == CardSlotKind.Cost)
-                {
-                    Amount.text = slot.Amount.ToString();
-                    Amount.color = UiTheme.Text;
-                    Icon.color = Color.white;
-                    return;
-                }
-
-                // The station squares: grey unless the blueprint brings the station itself.
-                Amount.text = slot.Own ? "in blueprint" : "station";
-                Amount.color = slot.Own ? UiTheme.Good : UiTheme.TextDim;
-                Icon.color = slot.Own ? Color.white : new Color(0.85f, 0.85f, 0.85f);
-            }
-
-            public void Hide()
-            {
-                Rect.gameObject.SetActive(false);
             }
         }
     }

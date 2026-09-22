@@ -9,8 +9,8 @@ namespace ValheimTomrer.Editor.Ui
 {
     /// <summary>
     /// The row of buttons along the top: Build this, the file commands, undo and redo, the two
-    /// view switches and the help. Save says how many errors the blueprint has and turns red, but
-    /// still saves, the way the browser editor does.
+    /// view switches and the help. Save always reads "Save": the problem list already counts the
+    /// errors, and none of them stops a save.
     /// </summary>
     internal static class TopBar
     {
@@ -38,11 +38,8 @@ namespace ValheimTomrer.Editor.Ui
         /// <summary>Every button in the bar, in the order the pad walks them.</summary>
         private static readonly List<Selectable> Walk = new List<Selectable>();
 
-        /// <summary>What the Save button reads, "Save" or "Save (2 errors)".</summary>
+        /// <summary>What the Save button reads.</summary>
         public static string SaveText => _saveLabel != null ? _saveLabel.text : "";
-
-        /// <summary>True while Save is red because the blueprint would be skipped by the game.</summary>
-        public static bool SaveIsRed => _saveLabel != null && _saveLabel.color == UiTheme.Warn;
 
         /// <summary>What the Build button reads.</summary>
         public static string BuildText => _buildLabel != null ? _buildLabel.text : "";
@@ -88,9 +85,6 @@ namespace ValheimTomrer.Editor.Ui
             var document = EditorState.Document;
             _file.text = FileLine(document);
 
-            var errors = EditorCommands.Errors;
-            _saveLabel.text = errors == 0 ? "Save" : $"Save ({errors} error{(errors == 1 ? "" : "s")})";
-            _saveLabel.color = errors == 0 ? UiTheme.Text : UiTheme.Warn;
             _save.interactable = document != null;
 
             _build.interactable = document != null && document.Pieces.Count > 0;

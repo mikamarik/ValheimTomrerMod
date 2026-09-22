@@ -27,6 +27,13 @@ namespace ValheimTomrer.Editor.Ui
         private const float RightWidth = 340f;
         private const float BlueprintHeight = 368f;
         private const float SelectionHeight = 252f;
+        private const float PaneEdge = 6f;  // right panel frame to its three regions
+
+        /// <summary>The problem list keeps at least this much when the blueprint region grows.</summary>
+        private const float ChecksMinHeight = 160f;
+
+        /// <summary>The blueprint region's height now: <see cref="BlueprintHeight"/>, or more for a long materials list.</summary>
+        private static float _blueprintBand = BlueprintHeight;
 
         private static GameObject _root;
         private static int _generation = -1;
@@ -214,36 +221,75 @@ namespace ValheimTomrer.Editor.Ui
         }
 
         /// <summary>
+        /// The blueprint region's height in use. For the tests.
+        /// </summary>
+        public static float BlueprintBand => _blueprintBand;
+
+        /// <summary>
+        /// Gives the blueprint region the height its content wants: never less than it always had,
+        /// never so much that the problem list keeps less than <see cref="ChecksMinHeight"/>. The
+        /// selection moves down with it and the problem list gives up the room. Past that the region
+        /// scrolls. Called once a frame by <see cref="BlueprintPanel"/>; does nothing when the
+        /// height stays the same.
+        /// </summary>
+        public static void FitBlueprint(float wanted)
+        {
+            if (RightPanel == null || BlueprintPane == null)
+            {
+                return;
+            }
+
+            var most = RightPanel.rect.height - PaneEdge - Gap - SelectionHeight - Gap - ChecksMinHeight - PaneEdge;
+            var height = Mathf.Round(Mathf.Max(BlueprintHeight, Mathf.Min(wanted, most)));
+            if (Mathf.Approximately(height, _blueprintBand))
+            {
+                return;
+            }
+
+            _blueprintBand = height;
+            LayRightPanes();
+        }
+
+        /// <summary>
         /// The right panel, top to bottom: the blueprint and its build card, the selection, then
         /// the problem list, which takes whatever is left.
         /// </summary>
         private static void BuildRightPanes()
         {
-            const float Edge = 6f;
-            var blueprintTop = Edge;
-            var selectionTop = blueprintTop + BlueprintHeight + Gap;
-            var checksTop = selectionTop + SelectionHeight + Gap;
-
-            BlueprintPane = Band("BlueprintPane", blueprintTop, BlueprintHeight, Edge);
-            SelectionPane = Band("SelectionPane", selectionTop, SelectionHeight, Edge);
+            BlueprintPane = Band("BlueprintPane");
+            SelectionPane = Band("SelectionPane");
 
             ChecksPane = UiBuild.Rect("ChecksPane", RightPanel);
             ChecksPane.anchorMin = Vector2.zero;
             ChecksPane.anchorMax = Vector2.one;
-            ChecksPane.offsetMin = new Vector2(Edge, Edge);
-            ChecksPane.offsetMax = new Vector2(-Edge, -checksTop);
+            LayRightPanes();
         }
 
-        /// <summary>One region of fixed height, measured down from the right panel's top edge.</summary>
-        private static RectTransform Band(string name, float top, float height, float edge)
+        private static void LayRightPanes()
+        {
+            var blueprintTop = PaneEdge;
+            var selectionTop = blueprintTop + _blueprintBand + Gap;
+            var checksTop = selectionTop + SelectionHeight + Gap;
+            Place(BlueprintPane, blueprintTop, _blueprintBand);
+            Place(SelectionPane, selectionTop, SelectionHeight);
+            ChecksPane.offsetMin = new Vector2(PaneEdge, PaneEdge);
+            ChecksPane.offsetMax = new Vector2(-PaneEdge, -checksTop);
+        }
+
+        /// <summary>One region across the right panel, its top edge measured down from the panel's top.</summary>
+        private static RectTransform Band(string name)
         {
             var rect = UiBuild.Rect(name, RightPanel);
             rect.anchorMin = new Vector2(0f, 1f);
             rect.anchorMax = new Vector2(1f, 1f);
             rect.pivot = new Vector2(0.5f, 1f);
-            rect.offsetMin = new Vector2(edge, -top - height);
-            rect.offsetMax = new Vector2(-edge, -top);
             return rect;
+        }
+
+        private static void Place(RectTransform rect, float top, float height)
+        {
+            rect.offsetMin = new Vector2(PaneEdge, -top - height);
+            rect.offsetMax = new Vector2(-PaneEdge, -top);
         }
 
         /// <summary>Two tabs over the left panel, and an empty pane under each.</summary>

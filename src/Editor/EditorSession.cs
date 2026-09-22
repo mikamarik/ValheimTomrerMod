@@ -32,6 +32,9 @@ namespace ValheimTomrer.Editor
 
         public static void Tick()
         {
+            // The pad's world combos read the game's buttons; which of them the game must not see
+            // this frame is worked out first.
+            WorldPad.Tick();
             if (!ValheimTomrerPlugin.ModEnabled.Value)
             {
                 WorldCapture.Cancel();
@@ -55,7 +58,8 @@ namespace ValheimTomrer.Editor
                     return;
                 }
 
-                if (ZInput.GetKeyDown(EditorConfig.Key.Value))
+                // The key, or the pad's modifier + square (L2 + square in the game's default layout).
+                if (ZInput.GetKeyDown(EditorConfig.Key.Value) || WorldPad.OpenEditor)
                 {
                     // With a blueprint in hand the key edits that one, not the one left open. The
                     // build tool lets go of it: the Build this button puts it back.
@@ -122,7 +126,8 @@ namespace ValheimTomrer.Editor
                 return;
             }
 
-            if (ZInput.GetKeyDown(EditorConfig.Key.Value) || cancel)
+            // The key, or the same pad combo that opened it.
+            if (ZInput.GetKeyDown(EditorConfig.Key.Value) || cancel || PadBindings.ClosePressed())
             {
                 Close();
             }
@@ -166,8 +171,11 @@ namespace ValheimTomrer.Editor
         /// Opens the window on a document that is already read, whatever is in it. The pane builds
         /// the pieces itself, so a blueprint holding a piece this game does not have still opens.
         /// A blueprint left open with unsaved changes is asked about first.
+        ///
+        /// <paramref name="opened"/> runs once the document is the open one: straight away, or
+        /// after the question is answered with Discard. Never when the question is turned down.
         /// </summary>
-        public static void OpenDocument(BlueprintDocument document)
+        public static void OpenDocument(BlueprintDocument document, System.Action opened = null)
         {
             if (ModUi.Open || document == null)
             {
@@ -177,13 +185,18 @@ namespace ValheimTomrer.Editor
             if (EditorState.Document == null)
             {
                 Begin(document, null);
+                if (ModUi.Open)
+                {
+                    opened?.Invoke();
+                }
+
                 return;
             }
 
             Begin(null, null);
             if (ModUi.Open)
             {
-                EditorCommands.Take(document, null);
+                EditorCommands.Take(document, null, opened);
             }
         }
 
@@ -214,7 +227,7 @@ namespace ValheimTomrer.Editor
         /// <summary>Shows the window. A null document comes back to everything that was kept.</summary>
         private static void Begin(BlueprintDocument document, ResolvedBlueprint blueprint)
         {
-            // The window is about to cover the world, so a half-picked capture box goes.
+            // The window is about to cover the world, so a capture in progress goes, glow and all.
             WorldCapture.Cancel();
             if (!EditorWindow.Ensure())
             {
@@ -406,7 +419,8 @@ namespace ValheimTomrer.Editor
                 Path.GetFullPath(document.SourcePath), Path.GetFullPath(blueprint.SourcePath), System.StringComparison.Ordinal);
         }
 
-        private static bool CanOpen()
+        /// <summary>The player can act and no game window has the keys: the editor may open, the capture may run.</summary>
+        internal static bool CanOpen()
         {
             var player = Player.m_localPlayer;
             if (player == null || player.IsDead() || player.InCutscene() || player.IsTeleporting())

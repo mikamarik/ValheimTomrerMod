@@ -14,11 +14,12 @@ namespace ValheimTomrer.Editor.Placement
         private readonly Dictionary<int, int> _byId = new Dictionary<int, int>();
         private readonly List<int> _fallen = new List<int>();
 
-        internal SupportMap(Support.Body[] bodies, Dictionary<long, List<int>> grid, bool ground)
+        internal SupportMap(Support.Body[] bodies, Dictionary<long, List<int>> grid, bool ground, Func<Vector3, float> groundAt)
         {
             Bodies = bodies;
             Grid = grid;
             Ground = ground;
+            GroundAt = groundAt;
             for (var i = 0; i < bodies.Length; i++)
             {
                 _byId[bodies[i].Id] = i;
@@ -34,6 +35,13 @@ namespace ValheimTomrer.Editor.Placement
         internal Dictionary<long, List<int>> Grid { get; }
 
         internal bool Ground { get; }
+
+        /// <summary>
+        /// The ground height under a point, both in the model's space. Null: the editor's floor at
+        /// y = 0. <see cref="Support.Evaluate"/> takes it from here, so the pieces in hand stand on
+        /// the same ground as the scene.
+        /// </summary>
+        internal Func<Vector3, float> GroundAt { get; }
 
         /// <summary>Ids of the pieces that would break in the game, in the scene's order.</summary>
         public IReadOnlyList<int> Fallen => _fallen;
@@ -89,7 +97,8 @@ namespace ValheimTomrer.Editor.Placement
     /// worked out again without them, until nothing more breaks.
     ///
     /// Two shortcuts, both the same ones the placing rule takes: a mesh collider is its box, and
-    /// the ground is the editor's floor at y = 0.
+    /// the ground is the editor's floor at y = 0. A build in the world passes the terrain's height
+    /// instead (the groundAt callback), measured under the lowest point of each collider.
     /// </summary>
     internal static class Support
     {
@@ -143,11 +152,21 @@ namespace ValheimTomrer.Editor.Placement
                 }
             }
 
-            return Solve(bodies, index == null || index.HasGround);
+            return Solve(bodies, index == null || index.HasGround, null);
         }
 
         /// <summary>Every piece of a list, standing on the editor's floor, and which of them would break.</summary>
         public static SupportMap Solve(IEnumerable<ScenePiece> pieces)
+        {
+            return Solve(pieces, null);
+        }
+
+        /// <summary>
+        /// Every piece of a list, standing on the ground <paramref name="groundAt"/> gives (a point
+        /// in the model's space to the ground height there, in the same space), and which of them
+        /// would break. Null is the editor's floor at y = 0.
+        /// </summary>
+        public static SupportMap Solve(IEnumerable<ScenePiece> pieces, Func<Vector3, float> groundAt)
         {
             var bodies = new List<Body>();
             foreach (var piece in pieces)
@@ -155,7 +174,7 @@ namespace ValheimTomrer.Editor.Placement
                 Add(bodies, Build(piece.Id, piece.Entry, piece.Pos, piece.Rot));
             }
 
-            return Solve(bodies, true);
+            return Solve(bodies, true, groundAt);
         }
 
         private static void Add(List<Body> bodies, Body body)
@@ -166,7 +185,7 @@ namespace ValheimTomrer.Editor.Placement
             }
         }
 
-        private static SupportMap Solve(List<Body> bodies, bool ground)
+        private static SupportMap Solve(List<Body> bodies, bool ground, Func<Vector3, float> groundAt)
         {
             var nodes = bodies.ToArray();
             var grid = new Dictionary<long, List<int>>();
@@ -180,17 +199,19 @@ namespace ValheimTomrer.Editor.Placement
             for (var i = 0; i < nodes.Length; i++)
             {
                 Near(grid, nodes[i].BoxBounds, candidates, seen);
-                Connect(nodes, i, candidates, ground);
+                Connect(nodes, i, candidates, ground, groundAt);
             }
 
             Relax(nodes, 0);
-            return new SupportMap(nodes, grid, ground);
+            return new SupportMap(nodes, grid, ground, groundAt);
         }
 
         /// <summary>
         /// Where the pieces in hand would land: the support of each and whether it would break,
         /// against a scene that is already solved. The scene's own values do not change; the pieces
         /// in hand hold each other up as well. True when any of them would break.
+        ///
+        /// Pass a real map: with none the ground is the editor's floor, whatever the caller solved on.
         /// </summary>
         public static bool Evaluate(SupportMap map, IList<PlacedPiece> placed, float[] values, bool[] falls)
         {
@@ -210,6 +231,7 @@ namespace ValheimTomrer.Editor.Placement
             }
 
             var ground = map == null || map.Ground;
+            var groundAt = map?.GroundAt;
             var candidates = new List<int>();
             var seen = new HashSet<int>();
             for (var k = 0; k < placed.Count; k++)
@@ -232,7 +254,7 @@ namespace ValheimTomrer.Editor.Placement
                     }
                 }
 
-                Connect(nodes, i, candidates, ground);
+                Connect(nodes, i, candidates, ground, groundAt);
             }
 
             Relax(nodes, baseCount);
@@ -395,7 +417,7 @@ namespace ValheimTomrer.Editor.Placement
         /// Steps 1 to 4 for one piece, turned into numbers: which neighbours pass on how much of
         /// their support. The values themselves come later, in <see cref="Relax"/>.
         /// </summary>
-        private static void Connect(Body[] nodes, int i, List<int> candidates, bool ground)
+        private static void Connect(Body[] nodes, int i, List<int> candidates, bool ground, Func<Vector3, float> groundAt)
         {
             var body = nodes[i];
             body.Links.Clear();
@@ -419,7 +441,7 @@ namespace ValheimTomrer.Editor.Placement
             {
                 foreach (var box in body.Boxes)
                 {
-                    if (box.LowestY() <= 0f)
+                    if (OnGround(box, groundAt))
                     {
                         body.Fixed = true;
                         return;
@@ -527,6 +549,22 @@ namespace ValheimTomrer.Editor.Placement
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// The grown box reaches the ground. With a ground callback: its lowest point is at or under
+        /// the ground right there. On a slope a box can touch higher ground at another corner; this
+        /// then says no where the game says yes, which is the careful side.
+        /// </summary>
+        private static bool OnGround(PlaceShape box, Func<Vector3, float> groundAt)
+        {
+            if (groundAt == null)
+            {
+                return box.LowestY() <= 0f;
+            }
+
+            var low = box.LowestPoint();
+            return low.y <= groundAt(low);
         }
 
         /// <summary>

@@ -15,12 +15,31 @@ namespace ValheimTomrer.Blueprints
         Solid,
     }
 
+    /// <summary>How one part of an unfinished build's ghost looks (<see cref="BlueprintPreview.SetPart"/>).</summary>
+    internal enum PartLook
+    {
+        /// <summary>Already built in the world: the copy is switched off.</summary>
+        Hidden,
+
+        /// <summary>
+        /// The next click builds it: light blue (<see cref="BlueprintPreview.ReadyTint"/>) on a site's
+        /// ghost, the plain see-through ghost on any other preview.
+        /// </summary>
+        Ready,
+
+        /// <summary>Not yet: the game's own red "cannot place" tint (<see cref="BlueprintPreview.RedTint"/>).</summary>
+        Waiting,
+    }
+
     /// <summary>What a preview is for: which layer it lives on, how it is painted, whether it can be hit.</summary>
     internal struct PreviewStyle
     {
         public int Layer;
         public PreviewLook Look;
         public bool Colliders;
+
+        /// <summary>Parts the next click builds (<see cref="PartLook.Ready"/>) are tinted light blue.</summary>
+        public bool BlueReady;
 
         /// <summary>Blueprint mode: the game's "ghost" layer, tinted copies, nothing to collide with.</summary>
         public static PreviewStyle Ghost()
@@ -31,6 +50,18 @@ namespace ValheimTomrer.Blueprints
                 Look = PreviewLook.Ghost,
                 Colliders = false,
             };
+        }
+
+        /// <summary>
+        /// An unfinished build's ghost: the same as <see cref="Ghost"/>, and the parts the next click
+        /// builds are light blue. The game's ghost material is nearly opaque, so untinted they would
+        /// look like built wood.
+        /// </summary>
+        public static PreviewStyle Site()
+        {
+            var style = Ghost();
+            style.BlueReady = true;
+            return style;
         }
 
         /// <summary>The editor pane: the editor's own layer, real materials, clickable.</summary>
@@ -50,13 +81,29 @@ namespace ValheimTomrer.Blueprints
     /// <c>Player.SetupPlacementGhost</c> sets up the vanilla preview: no network object, no physics,
     /// no lights or sounds. Nothing here is saved.
     ///
-    /// Two users, told apart by <see cref="PreviewStyle"/>: blueprint mode's see-through preview that
-    /// follows the player's aim, and the editor's solid model standing in its own scene.
+    /// Three users: blueprint mode's see-through preview that follows the player's aim, the ghost of
+    /// an unfinished build (the same look, one <see cref="PartLook"/> per part: hidden, light blue or
+    /// red, Sites/SiteTracker.cs), and the editor's solid model standing in its own scene
+    /// (<see cref="PreviewStyle"/>).
     /// </summary>
     internal sealed class BlueprintPreview
     {
         /// <summary>How many pieces one <see cref="Fill"/> step builds, so a big kit does not stall a frame.</summary>
         public const int PiecesPerStep = 8;
+
+        /// <summary>
+        /// The glow is the tint at this strength. The game's own red uses 0.7
+        /// (<c>Piece.SetInvalidPlacementHeightlight</c>).
+        /// </summary>
+        public const float TintGlow = 0.7f;
+
+        /// <summary>A part that is blocked or waiting: the game's own "cannot place" red.</summary>
+        public static readonly Color RedTint = Color.red;
+
+        /// <summary>A part of a site's ghost the next click builds. Reads on grass and wood in daylight.</summary>
+        public static readonly Color ReadyTint = new Color(0.35f, 0.7f, 1f);
+
+        private static readonly Dictionary<GameObject, Bounds> PrefabBoxes = new Dictionary<GameObject, Bounds>();
 
         private static int _ghostLayer = -1;
 
@@ -65,13 +112,24 @@ namespace ValheimTomrer.Blueprints
         private readonly GameObject _root;
         private readonly List<Piece> _pieces = new List<Piece>();
         private readonly List<bool> _invalid = new List<bool>();
+        private readonly List<PartLook> _looks = new List<PartLook>();
+
+        /// <summary>The tint a part wears now: red (blocked or waiting), blue (ready on a site's ghost) or none.</summary>
+        private readonly List<Tint> _tints = new List<Tint>();
+
         private readonly List<Material> _materials = new List<Material>();
+
+        /// <summary>Renderers kept from drawing until <see cref="Done"/>, see <see cref="Empty"/>.</summary>
+        private readonly List<Renderer> _held = new List<Renderer>();
+
+        private readonly bool _hideUntilDone;
         private bool _filling;
 
-        private BlueprintPreview(ResolvedBlueprint blueprint, PreviewStyle style)
+        private BlueprintPreview(ResolvedBlueprint blueprint, PreviewStyle style, bool hideUntilDone)
         {
             _blueprint = blueprint;
             _style = style;
+            _hideUntilDone = hideUntilDone;
             _root = new GameObject("ValheimTomrer_Blueprint_" + blueprint.Name) { layer = style.Layer };
         }
 
@@ -103,6 +161,44 @@ namespace ValheimTomrer.Blueprints
 
         public bool Done { get; private set; }
 
+        /// <summary>True while the root is switched on (<see cref="SetVisible"/>).</summary>
+        public bool Visible => _root != null && _root.activeSelf;
+
+        /// <summary>The copy of one part, by its index in the blueprint. Null while it is not built yet.</summary>
+        public Piece Part(int index)
+        {
+            return index >= 0 && index < _pieces.Count ? _pieces[index] : null;
+        }
+
+        /// <summary>How a part looks now. <see cref="PartLook.Ready"/> until <see cref="SetPart"/> says otherwise.</summary>
+        public PartLook LookOf(int index)
+        {
+            return index >= 0 && index < _looks.Count ? _looks[index] : PartLook.Ready;
+        }
+
+        /// <summary>Parts drawn now: the root is on and the part is not hidden.</summary>
+        public int VisibleParts
+        {
+            get
+            {
+                if (!Visible)
+                {
+                    return 0;
+                }
+
+                var count = 0;
+                foreach (var piece in _pieces)
+                {
+                    if (piece != null && piece.gameObject.activeSelf)
+                    {
+                        count++;
+                    }
+                }
+
+                return count;
+            }
+        }
+
         /// <summary>
         /// The point that goes where the player aims: bottom of the blueprint, middle of its front
         /// edge (+Z faces the player). The building then always stands in front of the player,
@@ -119,7 +215,7 @@ namespace ValheimTomrer.Blueprints
         /// <summary>Builds every piece at once. Fine for a kit, use <see cref="Fill"/> for anything big.</summary>
         public static BlueprintPreview Create(ResolvedBlueprint blueprint, PreviewStyle style)
         {
-            var preview = new BlueprintPreview(blueprint, style);
+            var preview = new BlueprintPreview(blueprint, style, false);
             var fill = preview.Fill();
             while (fill.MoveNext())
             {
@@ -128,10 +224,16 @@ namespace ValheimTomrer.Blueprints
             return preview;
         }
 
-        /// <summary>An empty preview. Step <see cref="Fill"/> once a frame to build it up.</summary>
-        public static BlueprintPreview Empty(ResolvedBlueprint blueprint, PreviewStyle style)
+        /// <summary>
+        /// An empty preview. Step <see cref="Fill"/> once a frame to build it up. Keep the root
+        /// unturned until <see cref="Done"/>, the bounds are measured on it.
+        /// <paramref name="hideUntilDone"/>: nothing is drawn before the last copy stands, so a ghost
+        /// built over several frames never shows half made or unturned. The renderers stay on, only
+        /// their drawing is held, so the bounds are still measured.
+        /// </summary>
+        public static BlueprintPreview Empty(ResolvedBlueprint blueprint, PreviewStyle style, bool hideUntilDone = false)
         {
-            return new BlueprintPreview(blueprint, style);
+            return new BlueprintPreview(blueprint, style, hideUntilDone);
         }
 
         /// <summary>
@@ -160,6 +262,12 @@ namespace ValheimTomrer.Blueprints
                 copy.transform.localRotation = part.Source.Rotation;
                 _pieces.Add(copy.GetComponent<Piece>());
                 _invalid.Add(false);
+                _looks.Add(PartLook.Ready);
+                _tints.Add(Tint.None);
+                if (_hideUntilDone)
+                {
+                    Hold(copy);
+                }
 
                 if ((i + 1) % PiecesPerStep == 0 && i + 1 < parts.Count)
                 {
@@ -168,8 +276,30 @@ namespace ValheimTomrer.Blueprints
             }
 
             LocalBounds = MeasureBounds();
+            foreach (var renderer in _held)
+            {
+                if (renderer != null)
+                {
+                    renderer.forceRenderingOff = false;
+                }
+            }
+
+            _held.Clear();
             Done = true;
             _filling = false;
+        }
+
+        /// <summary>Stops a copy's renderers from drawing, and remembers which, so Done lets them go again.</summary>
+        private void Hold(GameObject copy)
+        {
+            foreach (var renderer in copy.GetComponentsInChildren<Renderer>(true))
+            {
+                if (!renderer.forceRenderingOff)
+                {
+                    renderer.forceRenderingOff = true;
+                    _held.Add(renderer);
+                }
+            }
         }
 
         /// <summary>
@@ -209,7 +339,61 @@ namespace ValheimTomrer.Blueprints
             }
 
             _invalid[index] = invalid;
-            _pieces[index].SetInvalidPlacementHeightlight(invalid);
+            Paint(index);
+        }
+
+        /// <summary>
+        /// One part of an unfinished build: hidden (built), light blue on a site's ghost (the next
+        /// click builds it) or red (not yet). A part is red when <see cref="SetInvalid"/> or its look
+        /// asks for it. Every call checks the tint, so the first one also paints a part that is Ready
+        /// from the start.
+        /// </summary>
+        public void SetPart(int index, PartLook look)
+        {
+            if (index < 0 || index >= _looks.Count)
+            {
+                return;
+            }
+
+            _looks[index] = look;
+            var go = _pieces[index].gameObject;
+            var show = look != PartLook.Hidden;
+            if (go.activeSelf != show)
+            {
+                go.SetActive(show);
+            }
+
+            Paint(index);
+        }
+
+        /// <summary>
+        /// Puts the part's tint on through the game's <c>MaterialMan</c>, the calls
+        /// <c>Piece.SetInvalidPlacementHeightlight</c> makes: <c>_Color</c> and a glow in
+        /// <c>_EmissionColor</c>. No tint takes both off again. Only a change is sent.
+        /// </summary>
+        private void Paint(int index)
+        {
+            var tint = _invalid[index] || _looks[index] == PartLook.Waiting ? Tint.Red
+                : _style.BlueReady && _looks[index] == PartLook.Ready ? Tint.Blue
+                : Tint.None;
+            var man = MaterialMan.instance;
+            if (_tints[index] == tint || man == null)
+            {
+                return;
+            }
+
+            _tints[index] = tint;
+            var go = _pieces[index].gameObject;
+            if (tint == Tint.None)
+            {
+                man.ResetValue(go, ShaderProps._Color);
+                man.ResetValue(go, ShaderProps._EmissionColor);
+                return;
+            }
+
+            var colour = tint == Tint.Red ? RedTint : ReadyTint;
+            man.SetValue(go, ShaderProps._Color, colour);
+            man.SetValue(go, ShaderProps._EmissionColor, colour * TintGlow);
         }
 
         public void Destroy()
@@ -305,6 +489,22 @@ namespace ValheimTomrer.Blueprints
             // shadows in the world. Kill the projector and they are never made.
             DestroyAll<CircleProjector>(copy);
 
+            // CraftingStation.Start lists any station whose ZNetView is gone as a real one, and the
+            // copy's ZNetView removes itself. So a preview workbench let the hammer build with no
+            // real bench near, and its first range check threw (no CircleProjector, see above).
+            // Switched off, Start never runs (Unity skips it on a disabled script), and the
+            // component is gone at the end of the frame. Start also hid the area marker; do that here.
+            foreach (var station in copy.GetComponentsInChildren<CraftingStation>(true))
+            {
+                if (station.m_areaMarker != null)
+                {
+                    station.m_areaMarker.SetActive(false);
+                }
+
+                station.enabled = false;
+                Object.Destroy(station);
+            }
+
             // The aim preview never needs collisions; the editor keeps them so a piece can be clicked.
             if (!style.Colliders)
             {
@@ -378,6 +578,18 @@ namespace ValheimTomrer.Blueprints
             var box = copy.AddComponent<BoxCollider>();
             box.center = bounds.center;
             box.size = Vector3.Max(bounds.size, new Vector3(0.25f, 0.25f, 0.25f));
+        }
+
+        /// <summary>The box around a prefab's meshes, in the piece's own space. Measured once per prefab.</summary>
+        public static Bounds OwnBounds(GameObject prefab)
+        {
+            if (!PrefabBoxes.TryGetValue(prefab, out var box))
+            {
+                box = MeshBounds(prefab);
+                PrefabBoxes[prefab] = box;
+            }
+
+            return box;
         }
 
         /// <summary>The box around a copy's meshes, in the copy's own space.</summary>
@@ -462,6 +674,13 @@ namespace ValheimTomrer.Blueprints
             {
                 Object.Destroy(component);
             }
+        }
+
+        private enum Tint
+        {
+            None,
+            Red,
+            Blue,
         }
     }
 }

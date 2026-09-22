@@ -122,6 +122,35 @@ namespace ValheimTomrer.Editor.Placement
         }
 
         /// <summary>
+        /// A point at the height of <see cref="LowestY"/>. Where a whole face or edge is lowest, the
+        /// middle of it, so a flat box gives the middle of its bottom face.
+        /// </summary>
+        public Vector3 LowestPoint()
+        {
+            if (Kind == ShapeKind.Sphere)
+            {
+                return Center + (Vector3.down * Radius);
+            }
+
+            if (Kind == ShapeKind.Capsule)
+            {
+                var low = P0.y < P1.y ? P0 : P1.y < P0.y ? P1 : (P0 + P1) * 0.5f;
+                return low + (Vector3.down * Radius);
+            }
+
+            return Center
+                - Down(Rotation * Vector3.right, Half.x)
+                - Down(Rotation * Vector3.up, Half.y)
+                - Down(Rotation * Vector3.forward, Half.z);
+        }
+
+        /// <summary>Half an axis, pointing up, or nothing when the axis is level.</summary>
+        private static Vector3 Down(Vector3 axis, float half)
+        {
+            return Mathf.Abs(axis.y) < 1e-5f ? Vector3.zero : axis * (Mathf.Sign(axis.y) * half);
+        }
+
+        /// <summary>
         /// Ray against this shape. The direction must have length 1. A ray that starts inside the
         /// shape does not hit it, the same as Unity's own raycast.
         /// </summary>
