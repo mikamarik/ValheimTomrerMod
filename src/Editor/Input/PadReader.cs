@@ -74,12 +74,11 @@ namespace ValheimTomrer.Editor.Input
     }
 
     /// <summary>
-    /// Reads the first connected pad. Same rules as the Tomrer editor's browser reader
-    /// (src/view/gamepad.ts), so both editors feel the same: radial dead zone 0.2 rescaled to
-    /// 0..1, triggers down above 0.5 and up again below 0.3, PlayStation detected by name.
+    /// Reads the first connected pad. The sticks read what the game's own ZInput reads (the raw
+    /// stick, radial dead zone 0.2 rescaled to 0..1), so the look feels like the game's. Triggers
+    /// are down above 0.5 and up again below 0.3, PlayStation is detected by name.
     ///
-    /// Unity already reports stick up as positive, so nothing is inverted here; the browser
-    /// version flips Y only because its axes point down.
+    /// Unity already reports stick up as positive, so nothing is inverted here.
     /// </summary>
     internal sealed class PadReader
     {
@@ -141,8 +140,10 @@ namespace ValheimTomrer.Editor.Input
             }
 
             var before = _fresh ? down : _prev;
-            var ls = Stick(fake != null ? fake.Ls : pad.leftStick.ReadValue());
-            var rs = Stick(fake != null ? fake.Rs : pad.rightStick.ReadValue());
+            // Unprocessed, like ZInput.ReadValueDef: ReadValue adds Unity's own stick dead zone
+            // (0.125 to 0.925) under ours, a bigger dead zone and a steeper ramp than the game's.
+            var ls = Stick(fake != null ? fake.Ls : pad.leftStick.ReadUnprocessedValue());
+            var rs = Stick(fake != null ? fake.Rs : pad.rightStick.ReadUnprocessedValue());
             var still = ls == Vector2.zero && rs == Vector2.zero;
 
             var woke = false;
@@ -175,7 +176,7 @@ namespace ValheimTomrer.Editor.Input
             return frame;
         }
 
-        /// <summary>Radial dead zone, then 0..1 again beyond it.</summary>
+        /// <summary>Radial dead zone, then 0..1 again beyond it: ZInput.ApplyDeadzoneVector.</summary>
         private static Vector2 Stick(Vector2 raw)
         {
             var length = raw.magnitude;

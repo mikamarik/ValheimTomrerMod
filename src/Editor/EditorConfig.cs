@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using BepInEx.Configuration;
+using HarmonyLib;
 using UnityEngine;
 
 namespace ValheimTomrer.Editor
@@ -29,10 +31,6 @@ namespace ValheimTomrer.Editor
 
         /// <summary>Pieces as wire boxes instead of models. The top bar's Boxes button writes this.</summary>
         public static ConfigEntry<bool> Boxes;
-
-        public static ConfigEntry<float> LookSensitivity;
-
-        public static ConfigEntry<float> PadLookSensitivity;
 
         public static void Bind(ConfigFile config)
         {
@@ -68,21 +66,21 @@ namespace ValheimTomrer.Editor
                 false,
                 "Draw pieces as plain boxes instead of models. Easier to see through a full blueprint.");
 
-            LookSensitivity = config.Bind(
-                "Editor",
-                "LookSensitivity",
-                1f,
-                new ConfigDescription(
-                    "Mouse look speed in the 3D view. 2 is twice as fast.",
-                    new AcceptableValueRange<float>(0.1f, 5f)));
+            // Settings the mod no longer has. The mouse and the right stick follow the game's own
+            // sensitivity settings, and the camera has one mode.
+            Drop(config, "Editor", "LookSensitivity");
+            Drop(config, "Editor", "PadLookSensitivity");
+            Drop(config, "Editor", "CameraMode");
+        }
 
-            PadLookSensitivity = config.Bind(
-                "Editor",
-                "PadLookSensitivity",
-                1f,
-                new ConfigDescription(
-                    "Right stick look speed on a controller. 2 is twice as fast.",
-                    new AcceptableValueRange<float>(0.1f, 5f)));
+        /// <summary>Takes a setting that is gone out of the file. BepInEx keeps its line and writes it back on every save.</summary>
+        private static void Drop(ConfigFile config, string section, string key)
+        {
+            var orphans = AccessTools.Property(typeof(ConfigFile), "OrphanedEntries")?.GetValue(config) as Dictionary<ConfigDefinition, string>;
+            if (orphans != null && orphans.Remove(new ConfigDefinition(section, key)))
+            {
+                config.Save();
+            }
         }
     }
 }

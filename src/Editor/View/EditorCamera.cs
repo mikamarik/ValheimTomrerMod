@@ -17,8 +17,8 @@ namespace ValheimTomrer.Editor.View
         private const float FlySpeed = 5f;            // m/s, Shift x3
         private const float FlyBoost = 3f;
         private const float PadFlySpeed = 6f;         // m/s, L1 x3
-        private const float PadTurn = 150f;           // degrees a second
-        private const float LookStep = 0.14f;         // degrees per mouse pixel
+        private const float PadTurn = 110f;           // degrees a second, the game's (PlayerController.LateUpdate)
+        private const float LookStep = 0.05f;         // degrees per mouse pixel, the game's (ZInput's mouse delta scale)
         private const float LookJump = 300f;          // pixels in one move: more is a jump, not a hand
         private const float DragSpeed = 0.6f;         // a drag turns slower than the same pixels of mouse look
 
@@ -42,6 +42,8 @@ namespace ValheimTomrer.Editor.View
         public float Pitch => _pitch;
 
         public float Yaw => _yaw;
+
+        public float FieldOfView => _camera.Unity.fieldOfView;
 
         /// <summary>How far ahead the point the camera turns, pans and zooms around sits.</summary>
         public float Distance => _dist;
@@ -128,7 +130,11 @@ namespace ValheimTomrer.Editor.View
             Turn(pixels.x * k * DragSpeed, pixels.y * k * DragSpeed);
         }
 
-        /// <summary>First person: every mouse move turns the view. A jump bigger than a hand is clipped.</summary>
+        /// <summary>
+        /// First person: every mouse move turns the view, the way the game's mouse look does
+        /// (PlayerController.LateUpdate): 0.05 degrees a pixel times the game's Mouse sensitivity,
+        /// with its invert setting. No setting of the mod's. A jump bigger than a hand is clipped.
+        /// </summary>
         public void MouseLook(Vector2 pixels)
         {
             if (pixels == Vector2.zero)
@@ -136,9 +142,9 @@ namespace ValheimTomrer.Editor.View
                 return;
             }
 
-            var step = LookStep * (EditorConfig.LookSensitivity != null ? EditorConfig.LookSensitivity.Value : 1f);
+            var step = LookStep * (ZInput.IsGamepadMouseActive() ? PlayerController.m_switchMouseSens : PlayerController.m_mouseSens);
             Turn(Mathf.Clamp(pixels.x, -LookJump, LookJump) * step,
-                Mathf.Clamp(pixels.y, -LookJump, LookJump) * step);
+                Mathf.Clamp(pixels.y, -LookJump, LookJump) * step * (PlayerController.m_invertMouse ? -1f : 1f));
         }
 
         /// <summary>Moves in the view plane by pane pixels, so the point <paramref name="depth"/> away follows the mouse.</summary>
@@ -182,6 +188,10 @@ namespace ValheimTomrer.Editor.View
             Fly(wish, PadFlySpeed * (boost ? FlyBoost : 1f), dt);
         }
 
+        /// <summary>
+        /// The game's own right-stick look: 110 degrees a second at full stick, times the game's
+        /// Gamepad sensitivity, with its invert settings. No setting of the mod's.
+        /// </summary>
         public void TurnPad(Vector2 stick, float dt)
         {
             if (stick == Vector2.zero)
@@ -189,8 +199,9 @@ namespace ValheimTomrer.Editor.View
                 return;
             }
 
-            var speed = PadTurn * (EditorConfig.PadLookSensitivity != null ? EditorConfig.PadLookSensitivity.Value : 1f);
-            Turn(stick.x * speed * dt, stick.y * speed * dt);
+            var step = PadTurn * PlayerController.m_gamepadSens * dt;
+            Turn(stick.x * step * (PlayerController.m_invertCameraX ? -1f : 1f),
+                stick.y * step * (PlayerController.m_invertCameraY ? -1f : 1f));
         }
 
         private void Fly(Vector3 wish, float speed, float dt)
