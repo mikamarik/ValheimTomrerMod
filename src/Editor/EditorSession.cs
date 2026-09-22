@@ -103,13 +103,14 @@ namespace ValheimTomrer.Editor
             Toasts.Tick();
             SyncSelection();
 
-            // A text box has the keyboard: Esc puts the old text back, it does not close the window.
-            if (ModUi.Typing)
+            // A text box has the keyboard, now or a frame ago: Esc is the box's (it puts the old
+            // text back and lets go), never the window's. The box may have read that Esc already,
+            // earlier this frame, so "a frame ago" counts too, or the same press closes the dialog.
+            if (ModUi.JustTyping)
             {
-                // The one exception, and the pad's only way out of a box: Esc or circle in a
-                // dialog hands the keyboard back, so the rest of the dialog can be reached. The
-                // press is used up here, or the same one would close the dialog as well.
-                if (Dialogs.IsOpen && EditorInput.Cancel)
+                // Circle is the pad's way out of any box: it keeps the text and lets go, so the
+                // walk can go on. The press is used up here, or it would close the dialog as well.
+                if (EditorInput.Pressed(PadButton.Circle))
                 {
                     FocusNav.StopTyping();
                 }

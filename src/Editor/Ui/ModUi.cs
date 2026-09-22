@@ -11,6 +11,7 @@ namespace ValheimTomrer.Editor.Ui
     internal static class ModUi
     {
         private static int _closedFrame = -10;
+        private static int _typedFrame = -10;
 
         public static bool Open;
 
@@ -32,6 +33,26 @@ namespace ValheimTomrer.Editor.Ui
                 var selected = system != null ? system.currentSelectedGameObject : null;
                 var field = selected != null ? selected.GetComponent<TMP_InputField>() : null;
                 return field != null && field.isFocused;
+            }
+        }
+
+        /// <summary>
+        /// A text box has the keyboard now, or had it last frame. The box reads its keys in the
+        /// game's UI update, which may run before the editor's in the same frame: Esc there stops
+        /// the typing first, and the editor must still take that Esc as the box's, not as "close
+        /// the dialog". Read once a frame (the editor's tick does), or the last frame is not known.
+        /// </summary>
+        public static bool JustTyping
+        {
+            get
+            {
+                if (Typing)
+                {
+                    _typedFrame = Time.frameCount;
+                    return true;
+                }
+
+                return Time.frameCount - _typedFrame <= 1;
             }
         }
 
@@ -60,6 +81,21 @@ namespace ValheimTomrer.Editor.Ui
         }
 
         public static bool HasSelection => Selected != null;
+
+        /// <summary>The box that has the keyboard lets go of it and is no longer selected. Its text stays.</summary>
+        public static void StopTyping()
+        {
+            var system = EventSystem.current;
+            var selected = system != null ? system.currentSelectedGameObject : null;
+            var field = selected != null ? selected.GetComponent<TMP_InputField>() : null;
+            if (field == null)
+            {
+                return;
+            }
+
+            field.DeactivateInputField();
+            system.SetSelectedGameObject(null);
+        }
 
         /// <summary>Lets go of our selected button, so the pad aims the pane instead.</summary>
         public static void ClearSelection()

@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace ValheimTomrer.Editor.Ui
@@ -124,7 +125,7 @@ namespace ValheimTomrer.Editor.Ui
             var hint = Label("Placeholder", area, placeholder, 18f, TextAlignmentOptions.Left, UiTheme.TextDim);
             Stretch(hint.rectTransform);
 
-            var field = background.gameObject.AddComponent<TMP_InputField>();
+            var field = background.gameObject.AddComponent<TextBox>();
             field.textViewport = area;
             field.textComponent = text;
             field.placeholder = hint;
@@ -240,6 +241,30 @@ namespace ValheimTomrer.Editor.Ui
             layout.childControlHeight = true;
             layout.childForceExpandWidth = false;
             layout.childForceExpandHeight = false;
+        }
+    }
+
+    /// <summary>
+    /// The editor's text box. A box being typed in is the one widget the EventSystem really
+    /// selects, so the game's own UI module sends it the pad's buttons: cross as Submit (a plain
+    /// box would fire onSubmit, and Save as saved its first name and closed), circle as Cancel
+    /// (the typing stopped and the old text came back before the editor saw the press, which then
+    /// closed the dialog) and the D-pad as Move (the game's selection wandered off to a button the
+    /// walk did not have). The editor reads the pad itself, so the box takes none of the three.
+    /// Keys typed into it are not these events: Enter still submits, Esc still puts the text back.
+    /// </summary>
+    internal sealed class TextBox : TMP_InputField
+    {
+        public override void OnSubmit(BaseEventData eventData)
+        {
+        }
+
+        public override void OnCancel(BaseEventData eventData)
+        {
+        }
+
+        public override void OnMove(AxisEventData eventData)
+        {
         }
     }
 }

@@ -67,6 +67,14 @@ namespace ValheimTomrer.Editor.Input
 
             if (ModUi.Typing)
             {
+                // The pad has no keys to type with. A step on the D-pad or the stick leaves the
+                // box the walk is on and goes on from it, the way circle leaves it and stays.
+                if (FocusNav.Active && FocusNav.Focused is TMPro.TMP_InputField && Stepping(pad))
+                {
+                    FocusNav.StopTyping();
+                    Focus(pad, dt);
+                }
+
                 return;
             }
 
@@ -292,6 +300,14 @@ namespace ValheimTomrer.Editor.Input
 
             // The right stick scrolls the panel, the way the wheel does under the mouse.
             FocusNav.Scroll(pad.Rs.y, dt);
+        }
+
+        /// <summary>A D-pad button went down, or the left stick is pushed far enough to step.</summary>
+        private static bool Stepping(PadFrame pad)
+        {
+            return pad.Pressed(PadButton.Up) || pad.Pressed(PadButton.Down)
+                || pad.Pressed(PadButton.Left) || pad.Pressed(PadButton.Right)
+                || pad.Ls.magnitude > NavStick;
         }
 
         /// <summary>In the piece menu: the D-pad or the left stick moves, L1 and R1 change the tab.</summary>

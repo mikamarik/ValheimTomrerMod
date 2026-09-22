@@ -156,7 +156,7 @@ namespace ValheimTomrer.Editor.Ui
             Gap(row);
 
             Add(row, "New", EditorCommands.NewBlueprint);
-            Add(row, "Open…", EditorCommands.OpenDialog);
+            Add(row, "Blueprints", EditorCommands.OpenDialog);
             _save = Add(row, "Save", () => EditorCommands.Save());
             _saveLabel = _save.GetComponentInChildren<TextMeshProUGUI>();
             Add(row, "Save as…",

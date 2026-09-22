@@ -256,11 +256,13 @@ namespace ValheimTomrer.Editor.Ui
 
         /// <summary>
         /// A focused text box gives the keyboard back. The pad has no Esc, so this is how circle
-        /// gets out of a box and on to the rest of the dialog.
+        /// gets out of a box and on to the rest of the dialog. A box the mouse clicked, off the
+        /// walk, lets go all the same.
         /// </summary>
         public static void StopTyping()
         {
             LetGoOfField();
+            ModUi.StopTyping();
         }
 
         /// <summary>
