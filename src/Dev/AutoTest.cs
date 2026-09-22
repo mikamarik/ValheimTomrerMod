@@ -52,7 +52,8 @@ namespace ValheimTomrer.Dev
     /// "editor_capture" builds a kit turned 45 degrees, captures it with the turned rectangle, and compares it to the file;
     /// "editor_support" holds the editor's support rule against the game's, then checks the ghost's colours;
     /// "editor_all" runs every scenario above but probe_build in one game, then checks the mod wrote
-    /// no art, in the unfinished-build folder too.
+    /// no art, in the unfinished-build folder too;
+    /// "readme_gifs" is no test: it records the README's GIF frames into .devtest/gifs (scripts/make-gifs.sh).
     /// </summary>
     internal static class AutoTest
     {
@@ -267,6 +268,9 @@ namespace ValheimTomrer.Dev
                     break;
                 case "editor_all":
                     scenario = TestEverything(player);
+                    break;
+                case "readme_gifs":
+                    scenario = RecordReadmeGifs(player);
                     break;
                 default:
                     Log("unknown scenario " + Scenario);
@@ -572,8 +576,10 @@ namespace ValheimTomrer.Dev
             }
 
             // 3. The test's own output folder. Screenshots are the test's, so .png is allowed in
-            //    its root; the saved test worlds are the game's, so that folder is skipped.
+            //    its root, and so are the readme_gifs recorder's .jpg frames in gifs/; the saved
+            //    test worlds are the game's, so that folder is skipped.
             var saves = Path.Combine(OutDir, "saves") + Path.DirectorySeparatorChar;
+            var frames = Path.Combine(OutDir, "gifs") + Path.DirectorySeparatorChar;
             foreach (var file in Files(OutDir))
             {
                 if (file.StartsWith(saves, StringComparison.Ordinal))
@@ -598,6 +604,10 @@ namespace ValheimTomrer.Dev
                 else if (ext == ".png" && inRoot)
                 {
                     continue; // the autotest's own screenshots
+                }
+                else if (ext == ".jpg" && file.StartsWith(frames, StringComparison.Ordinal))
+                {
+                    continue; // the GIF recorder's frames (readme_gifs)
                 }
                 else if (ext != ".txt" && ext != ".log")
                 {
@@ -12918,6 +12928,1092 @@ namespace ValheimTomrer.Dev
         private static string Box(Bounds b)
         {
             return $"min {V4(b.min)} max {V4(b.max)}";
+        }
+
+        // ---------- scenario: readme_gifs (a recording tool, not a test) ----------
+
+        /// <summary>Frames a second in the clips. Game time moves one frame's worth per rendered frame.</summary>
+        private const int GifFps = 15;
+
+        /// <summary>Where the sun stands in the clips (0.5 is noon): late morning, soft shadows.</summary>
+        private const float GifTimeOfDay = 0.40f;
+
+        /// <summary>What the character wears in the clips, instead of the test character's bare skin.</summary>
+        private static readonly string[] GifClothes = { "ArmorBronzeChest", "ArmorBronzeLegs", "HelmetBronze", "CapeDeerHide" };
+
+        private static GifRecorder _gif;
+
+        private sealed class GifRecorder
+        {
+            public string Folder;
+            public bool Running;
+            public int Frames;
+            public int Writing;
+        }
+
+        /// <summary>
+        /// Records the frames of the README's GIFs into .devtest/gifs/NAME/, one JPG per rendered
+        /// frame. Time.captureFramerate holds game time to a fixed step per frame, so a clip plays
+        /// smooth however slow the capture is. scripts/make-gifs.py turns the frames into
+        /// docs/media/*.gif. A tool, not a test: it is not in editor_all.
+        /// VT_GIFS="build,capture" records only those, in that order.
+        /// </summary>
+        private static IEnumerator RecordReadmeGifs(Player player)
+        {
+            var names = (Environment.GetEnvironmentVariable("VT_GIFS") ?? "editor,build,capture")
+                .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var raw in names)
+            {
+                var name = raw.Trim();
+                IEnumerator clip;
+                switch (name)
+                {
+                    case "editor":
+                        clip = GifEditor(player);
+                        break;
+                    case "build":
+                        clip = GifBuild(player);
+                        break;
+                    case "capture":
+                        clip = GifCapture(player);
+                        break;
+                    default:
+                        Check(false, "no such gif: " + name);
+                        continue;
+                }
+
+                Log($"===== gif {name}");
+                yield return clip;
+                yield return StopGif();
+                GameCamera.instance.m_maxDistance = 6f;
+                yield return Reset(player);
+            }
+        }
+
+        /// <summary>The kit every clip builds.</summary>
+        private static ResolvedBlueprint GifKit()
+        {
+            var kit = BlueprintLibrary.All.FirstOrDefault(b => b.Name == "Workshop") ?? BlueprintLibrary.All.FirstOrDefault();
+            if (kit == null || !ResolvedBlueprint.TryResolve(kit, out var resolved, out var error))
+            {
+                Check(false, "no kit to record with");
+                return null;
+            }
+
+            return resolved;
+        }
+
+        /// <summary>
+        /// The set: the flat build spot with nothing on it and its ground dug to dirt the way the
+        /// hoe does it, clear late-morning light, no wind, only the shipped kit in the library, the
+        /// kit's pieces known, the character dressed, the hammer out (or away), a clean screen.
+        /// </summary>
+        private static IEnumerator GifStage(Player player, ResolvedBlueprint kit, bool hammer)
+        {
+            yield return MoveToBuildSpot(player);
+            RemoveOldTestBuildings(player);
+            ClearDrops(player.transform.position);
+            AutoTestPeace.Apply();
+            yield return GifDirt(player.transform.position + (BuildFacing * Vector3.forward * 5f), 13f);
+
+            var env = EnvMan.instance;
+            env.m_debugTimeOfDay = true;
+            env.m_debugTime = GifTimeOfDay;
+            env.SetForceEnvironment("Clear");
+            env.SetDebugWind(30f, 0f);
+
+            // Only the shipped kit: the player's own blueprints stay out of the clips.
+            var shelf = Path.Combine(OutDir, "gifs", "blueprints");
+            Directory.CreateDirectory(shelf);
+            BlueprintLibrary.UserFolder = shelf;
+            BlueprintLibrary.Reload();
+
+            Unlock(player, kit);
+            ClearInventoryExceptHammer(player);
+            foreach (var name in GifClothes)
+            {
+                var item = player.GetInventory().AddItem(name, 1, 1, 0, 0L, "", false);
+                if (item != null)
+                {
+                    player.EquipItem(item, false);
+                }
+            }
+
+            if (hammer)
+            {
+                yield return EquipHammer(player);
+                var wall = PiecePrefab("woodwall");
+                if (wall != null)
+                {
+                    player.SetSelectedPiece(wall);
+                }
+            }
+            else
+            {
+                var held = player.GetRightItem();
+                if (held != null)
+                {
+                    player.UnequipItem(held, false);
+                }
+            }
+
+            yield return new WaitForSeconds(0.5f);
+            GifQuiet();
+            Log($"gif set: place reach {player.m_maxPlaceDistance}, {GifCameraInfo()}");
+        }
+
+        /// <summary>What the main camera renders with, anti-aliasing above all, for the log.</summary>
+        private static string GifCameraInfo()
+        {
+            var camera = GameCamera.instance != null ? GameCamera.instance.GetComponent<Camera>() : null;
+            if (camera == null)
+            {
+                return "no camera";
+            }
+
+            var parts = new List<string> { $"camera {camera.name} hdr {camera.allowHDR} msaa {camera.allowMSAA} quality aa {QualitySettings.antiAliasing}" };
+            foreach (var component in camera.GetComponents<Component>())
+            {
+                var field = component.GetType().GetField("antialiasingMode");
+                if (field != null)
+                {
+                    parts.Add($"{component.GetType().Name}.antialiasingMode {field.GetValue(component)}");
+                }
+            }
+
+            return string.Join(", ", parts);
+        }
+
+        /// <summary>
+        /// Digs the ground round the set to dirt, what the hoe's levelling does to a real build site,
+        /// so the tall grass does not hide the building's feet or the capture's outline. A terrain
+        /// op of the game's own, set up the way <see cref="LevelGround"/> sets up its op.
+        /// </summary>
+        private static IEnumerator GifDirt(Vector3 center, float radius)
+        {
+            var settings = new TerrainOp.Settings
+            {
+                m_level = false,
+                m_raise = false,
+                m_smooth = false,
+                m_paintCleared = true,
+                m_paintType = TerrainModifier.PaintType.Dirt,
+                m_paintRadius = radius,
+                m_paintStrength = 1f,
+                m_paintExp = 0.35f,
+            };
+
+            const string name = "ValheimTomrer_GifDirt";
+            var hash = name.GetStableHashCode();
+            var keeper = new GameObject(name);
+            keeper.SetActive(false);
+            keeper.AddComponent<TerrainOp>().m_settings = settings;
+            ObjectDB.instance.m_terrainOpsByHash[hash] = keeper.GetComponent<TerrainOp>();
+
+            var go = new GameObject(name);
+            go.SetActive(false);
+            go.transform.position = center;
+            go.AddComponent<TerrainOp>().m_settings = settings;
+            go.SetActive(true);
+
+            yield return new WaitForSeconds(1.5f);
+            ObjectDB.instance.m_terrainOpsByHash.Remove(hash);
+            UnityEngine.Object.Destroy(keeper);
+        }
+
+        /// <summary>No popup, message or unlock notice left on the screen from the set-up.</summary>
+        private static void GifQuiet()
+        {
+            if (MessageHud.instance != null)
+            {
+                MessageHud.instance.ClearUnlockQueue();
+                MessageHud.instance.HideAll();
+            }
+        }
+
+        private static void GifLook(Player player, float yaw, float pitch)
+        {
+            player.m_lookYaw = Quaternion.Euler(0f, yaw, 0f);
+            player.m_lookPitch = pitch;
+        }
+
+        /// <summary>Faces the body the way the view looks at once; it turns slowly on its own.</summary>
+        private static void GifFace(Player player, float yaw)
+        {
+            var turn = Quaternion.Euler(0f, yaw, 0f);
+            player.transform.rotation = turn;
+            player.m_body.rotation = turn;
+        }
+
+        /// <summary>Turns the view smoothly from one yaw and pitch to another.</summary>
+        private static IEnumerator GifLookGlide(Player player, float yaw0, float pitch0, float yaw1, float pitch1, float seconds)
+        {
+            var start = Time.time;
+            while (true)
+            {
+                var t = Mathf.Clamp01((Time.time - start) / seconds);
+                var e = t * t * (3f - (2f * t));
+                GifLook(player, Mathf.Lerp(yaw0, yaw1, e), Mathf.Lerp(pitch0, pitch1, e));
+                if (t >= 1f)
+                {
+                    yield break;
+                }
+
+                yield return null;
+            }
+        }
+
+        /// <summary>A left click in the world: the hammer's place button, through the input system.</summary>
+        private static IEnumerator GifClick()
+        {
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            if (mouse == null)
+            {
+                Check(false, "no mouse to click with");
+                yield break;
+            }
+
+            var down = new UnityEngine.InputSystem.LowLevel.MouseState().WithButton(UnityEngine.InputSystem.LowLevel.MouseButton.Left);
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, down);
+            yield return Frames(2);
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, new UnityEngine.InputSystem.LowLevel.MouseState());
+            yield return Frames(1);
+        }
+
+        private static UnityEngine.InputSystem.Key BlueprintKeyOnKeyboard()
+        {
+            return (UnityEngine.InputSystem.Key)Enum.Parse(typeof(UnityEngine.InputSystem.Key), ValheimTomrerPlugin.BlueprintKey.Value.ToString());
+        }
+
+        private static void StartGif(string name)
+        {
+            var folder = Path.Combine(OutDir, "gifs", name);
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, true);
+            }
+
+            Directory.CreateDirectory(folder);
+            _gif = new GifRecorder { Folder = folder, Running = true };
+            Time.captureFramerate = GifFps;
+            ValheimTomrerPlugin.Instance.StartCoroutine(GifFrames(_gif));
+            Log($"gif '{name}': recording {Screen.width}x{Screen.height} at {GifFps} fps into {folder}");
+        }
+
+        /// <summary>
+        /// Tells make-gifs.py which part of the frames to keep: the box round these regions and the
+        /// window frame round them, in the frames' own pixels (half the screen's), from the top left.
+        /// </summary>
+        private static void GifCrop(params RectTransform[] regions)
+        {
+            if (_gif == null)
+            {
+                return;
+            }
+
+            var box = Rect.zero;
+            var first = true;
+            foreach (var region in regions.Where(r => r != null))
+            {
+                var r = ScreenBox(region);
+                box = first ? r : Rect.MinMaxRect(Mathf.Min(box.xMin, r.xMin), Mathf.Min(box.yMin, r.yMin), Mathf.Max(box.xMax, r.xMax), Mathf.Max(box.yMax, r.yMax));
+                first = false;
+            }
+
+            if (first)
+            {
+                return;
+            }
+
+            const float frame = 24f;
+            var x = Mathf.Max(0, Mathf.FloorToInt((box.xMin - frame) / 2f));
+            var y = Mathf.Max(0, Mathf.FloorToInt((Screen.height - box.yMax - frame) / 2f));
+            var w = Mathf.Min((Screen.width / 2) - x, Mathf.CeilToInt((box.width + (2f * frame)) / 2f));
+            var h = Mathf.Min((Screen.height / 2) - y, Mathf.CeilToInt((box.height + (2f * frame)) / 2f));
+            File.WriteAllText(Path.Combine(_gif.Folder, "crop.txt"), $"{x},{y},{w},{h}\n");
+        }
+
+        private static IEnumerator StopGif()
+        {
+            var gif = _gif;
+            if (gif == null)
+            {
+                yield break;
+            }
+
+            gif.Running = false;
+            yield return null;
+            yield return null;
+            Time.captureFramerate = 0;
+            var waited = 0;
+            while (System.Threading.Volatile.Read(ref gif.Writing) > 0 && waited++ < 600)
+            {
+                yield return null;
+            }
+
+            _gif = null;
+            Log($"gif: {gif.Frames} frames ({gif.Frames / (float)GifFps:0.0} s) in {gif.Folder}");
+        }
+
+        /// <summary>
+        /// Every rendered frame, once it is complete: the screen at half size (a 2 x 2 average, as
+        /// sharp as the final GIF can use) as a JPG, written off the main thread.
+        /// </summary>
+        private static IEnumerator GifFrames(GifRecorder gif)
+        {
+            // The JPG writer lives in Unity's ImageConversion module, which the plugin does not
+            // reference; the game has it loaded, so it is looked up once here.
+            var encoder = Type.GetType("UnityEngine.ImageConversion, UnityEngine.ImageConversionModule")
+                ?.GetMethod("EncodeToJPG", new[] { typeof(Texture2D), typeof(int) });
+            if (encoder == null)
+            {
+                Check(false, "Unity's JPG encoder is not loaded");
+                yield break;
+            }
+
+            var encode = (Func<Texture2D, int, byte[]>)Delegate.CreateDelegate(typeof(Func<Texture2D, int, byte[]>), encoder);
+            var width = Screen.width / 2;
+            var height = Screen.height / 2;
+            var full = new RenderTexture(Screen.width, Screen.height, 0, RenderTextureFormat.ARGB32);
+            var half = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
+            var pixels = new Texture2D(width, height, TextureFormat.RGB24, false);
+            var flip = SystemInfo.graphicsUVStartsAtTop;
+            var end = new WaitForEndOfFrame();
+            try
+            {
+                while (gif.Running)
+                {
+                    yield return end;
+                    if (!gif.Running)
+                    {
+                        break;
+                    }
+
+                    ScreenCapture.CaptureScreenshotIntoRenderTexture(full);
+                    if (flip)
+                    {
+                        Graphics.Blit(full, half, new Vector2(1f, -1f), new Vector2(0f, 1f));
+                    }
+                    else
+                    {
+                        Graphics.Blit(full, half);
+                    }
+
+                    var active = RenderTexture.active;
+                    RenderTexture.active = half;
+                    pixels.ReadPixels(new Rect(0f, 0f, width, height), 0, 0, false);
+                    RenderTexture.active = active;
+                    var bytes = encode(pixels, 94);
+                    var path = Path.Combine(gif.Folder, $"{++gif.Frames:0000}.jpg");
+                    System.Threading.Interlocked.Increment(ref gif.Writing);
+                    System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                    {
+                        try
+                        {
+                            File.WriteAllBytes(path, bytes);
+                        }
+                        finally
+                        {
+                            System.Threading.Interlocked.Decrement(ref gif.Writing);
+                        }
+                    });
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.Destroy(full);
+                UnityEngine.Object.Destroy(half);
+                UnityEngine.Object.Destroy(pixels);
+            }
+        }
+
+        // ---------- gif: the editor ----------
+
+        /// <summary>
+        /// The order the editor clip builds the kit's pieces in: the walls, the torch, the bench, the
+        /// upper walls, the roof. Every piece of the kit, each once: the take is refused otherwise.
+        /// The torch goes before the bench: from the clip's camera the bench hides the torch's spot.
+        /// </summary>
+        private static readonly int[] GifEditorOrder = { 0, 1, 3, 2, 15, 4, 14, 13, 5, 6, 7, 8, 11, 12, 10, 9 };
+
+        /// <summary>Pieces that stand on the ground with no snap point to find, so a little off is still right.</summary>
+        private static readonly string[] GifFreePieces = { "piece_workbench", "piece_groundtorch_wood" };
+
+        /// <summary>
+        /// The editor, on a new blueprint: the kit's pieces go in hand one after the other, the ghost
+        /// glides to its spot in the support colours, snaps and drops. Then the camera turns round
+        /// the finished building.
+        /// </summary>
+        private static IEnumerator GifEditor(Player player)
+        {
+            var kit = GifKit();
+            if (kit == null)
+            {
+                yield break;
+            }
+
+            yield return GifStage(player, kit, true);
+            foreach (var cost in kit.TotalCost)
+            {
+                AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, cost.m_amount);
+            }
+
+            PieceCatalog.Clear();
+            PieceCatalog.Ensure();
+            EditorSession.OpenDocument(BlueprintDocument.New("Workshop"));
+            var waited = 0f;
+            while (!ViewportHost.Ready && waited < 15f)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            Check(ModUi.Open && ViewportHost.Ready, "the editor is open on a new blueprint");
+            if (!ViewportHost.Ready)
+            {
+                yield break;
+            }
+
+            var order = GifEditorOrder.ToList();
+            if (order.Count != kit.Blueprint.Pieces.Count || order.Distinct().Count() != order.Count
+                || order.Any(i => i < 0 || i >= kit.Blueprint.Pieces.Count))
+            {
+                GifRefuse("editor", $"the clip's order ({order.Count} entries) is not every piece of the kit ({kit.Blueprint.Pieces.Count}) once");
+                yield break;
+            }
+
+            var pivot = new Vector3(0f, 1.6f, -0.4f);
+
+            void View(float yawDegrees)
+            {
+                var yaw = yawDegrees * Mathf.Deg2Rad;
+                const float pitch = 25f * Mathf.Deg2Rad;
+                const float distance = 10f;
+                var from = pivot + (new Vector3(Mathf.Sin(yaw) * Mathf.Cos(pitch), Mathf.Sin(pitch), Mathf.Cos(yaw) * Mathf.Cos(pitch)) * distance);
+                ViewportHost.Camera.LookFrom(from, pivot);
+            }
+
+            const float startYaw = 30f;
+            const float endYaw = -6f;
+            View(startYaw);
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            var cursor = ScreenBox(EditorWindow.ViewportHost).center + new Vector2(0f, -120f);
+            GifMouse(mouse, cursor);
+            yield return new WaitForSeconds(1f);
+            GifQuiet();
+
+            StartGif("editor");
+            GifCrop(EditorWindow.TopBar, EditorWindow.LeftPanel, EditorWindow.RightPanel, EditorWindow.StatusBar);
+            yield return new WaitForSeconds(0.5f);
+
+            var offset = new Vector3(0f, -0.0477f, 0f);
+            var first = true;
+            foreach (var index in order)
+            {
+                var source = kit.Blueprint.Pieces[index];
+                var entry = PieceCatalog.Find(source.PrefabName);
+                if (entry == null)
+                {
+                    Check(false, "the catalog has " + source.PrefabName);
+                    continue;
+                }
+
+                EditorSession.StartAdd(entry);
+                var steps = Mathf.RoundToInt(Mathf.Repeat(source.Rotation.eulerAngles.y, 360f) / Placer.RotateStep);
+                EditorState.SetPlaceSteps(steps);
+                var want = source.Position + offset;
+                GifTolerance(source.PrefabName, out var tolerance, out var high);
+                if (first)
+                {
+                    tolerance = 0.3f;
+                }
+
+                // Where on the picture the ghost lands on its spot. The camera holds still while
+                // placing, so the point found here is still right when the click comes.
+                var aim = GifAimFor(entry, want, source.Rotation, high, tolerance);
+                if (aim == null)
+                {
+                    GifRefuse("editor", $"no aim puts piece {index} ({source.PrefabName}) at {V4(want)}");
+                    yield break;
+                }
+
+                var from = cursor;
+                var glide = 0.3f;
+                var start = Time.time;
+                while (true)
+                {
+                    var t = Mathf.Clamp01((Time.time - start) / glide);
+                    var e = t * t * (3f - (2f * t));
+                    cursor = Vector2.Lerp(from, aim.Value, e);
+                    GifMouse(mouse, cursor);
+                    if (t >= 1f)
+                    {
+                        break;
+                    }
+
+                    yield return null;
+                }
+
+                yield return new WaitForSeconds(0.08f);
+                var landed = EditorState.Aimed;
+                var count = EditorState.Document.Pieces.Count;
+                ViewportHost.ClickAt(cursor, false);
+                var dropped = EditorState.Document.Pieces.Count == count + 1;
+                var at = dropped ? EditorState.Document.Pieces[count].Position : Vector3.zero;
+                Log($"gif editor: {index} {source.PrefabName} dropped {dropped} at {V4(at)}, wanted {V4(want)}"
+                    + (landed != null ? $", snapped {landed.Snapped}" : ", no aim"));
+                if (!dropped)
+                {
+                    GifRefuse("editor", $"the click did not drop piece {index} ({source.PrefabName}) at {V4(want)}");
+                    yield break;
+                }
+
+                if (first)
+                {
+                    // The rest are laid out from where the first one really stands.
+                    offset = at - source.Position;
+                    first = false;
+                }
+
+                // No gold box on the piece just dropped: the picture stays on the building.
+                EditorState.Select(Array.Empty<int>());
+                yield return new WaitForSeconds(0.1f);
+            }
+
+            EditorState.CancelMode();
+            EditorState.Select(Array.Empty<int>());
+            GifMouse(mouse, ScreenBox(EditorWindow.ViewportHost).max + new Vector2(-20f, -20f));
+
+            // A good take holds the whole kit: as many pieces, each where the kit has it.
+            var missing = GifEditorMissing(kit, offset);
+            if (missing.Count > 0)
+            {
+                foreach (var line in missing)
+                {
+                    Log("gif editor: not in the blueprint: " + line);
+                }
+
+                GifRefuse("editor", $"the blueprint has {EditorState.Document.Pieces.Count} pieces, {missing.Count} of the kit's {kit.Blueprint.Pieces.Count} are missing or off their spot");
+                yield break;
+            }
+
+            Check(true, $"the editor clip placed all {kit.Blueprint.Pieces.Count} pieces of the kit, each on its spot");
+
+            // The camera turns round the finished building.
+            yield return new WaitForSeconds(0.3f);
+            var turnStart = Time.time;
+            while (true)
+            {
+                var t = Mathf.Clamp01((Time.time - turnStart) / 1.5f);
+                var e = t * t * (3f - (2f * t));
+                View(Mathf.Lerp(startYaw, endYaw, e));
+                if (t >= 1f)
+                {
+                    break;
+                }
+
+                yield return null;
+            }
+
+            yield return new WaitForSeconds(0.8f);
+            yield return StopGif();
+        }
+
+        private static void GifMouse(UnityEngine.InputSystem.Mouse mouse, Vector2 at)
+        {
+            if (mouse != null)
+            {
+                UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, new UnityEngine.InputSystem.LowLevel.MouseState { position = at });
+            }
+        }
+
+        /// <summary>
+        /// A screen point where the editor's placing rule puts the piece in hand on this spot. Every
+        /// pixel pair over the piece's box on the picture is tried, and of the points that work the
+        /// one with the most working neighbours wins, so a pixel more or less cannot miss.
+        /// </summary>
+        private static Vector2? GifAimFor(PieceEntry entry, Vector3 want, Quaternion rotation, float yTolerance, float tolerance)
+        {
+            var raycast = ViewportHost.Raycast;
+            var root = ViewportHost.Scene.Root;
+            var bounds = entry.Bounds;
+            var min = new Vector2(float.MaxValue, float.MaxValue);
+            var max = new Vector2(float.MinValue, float.MinValue);
+            for (var i = 0; i < 8; i++)
+            {
+                var corner = new Vector3(
+                    (i & 1) == 0 ? bounds.min.x : bounds.max.x,
+                    (i & 2) == 0 ? bounds.min.y : bounds.max.y,
+                    (i & 4) == 0 ? bounds.min.z : bounds.max.z);
+                if (raycast.Project(root.TransformPoint(want + (rotation * corner)), out var screen))
+                {
+                    min = Vector2.Min(min, screen);
+                    max = Vector2.Max(max, screen);
+                }
+            }
+
+            if (min.x > max.x)
+            {
+                return null;
+            }
+
+            const float step = 4f;
+            min -= new Vector2(40f, 60f);
+            max += new Vector2(40f, 20f);
+            var columns = Mathf.CeilToInt((max.x - min.x) / step) + 1;
+            var rows = Mathf.CeilToInt((max.y - min.y) / step) + 1;
+            var good = new bool[columns, rows];
+            var any = false;
+            var nearestOff = float.MaxValue;
+            var nearest = "nothing";
+            for (var cx = 0; cx < columns; cx++)
+            {
+                for (var cy = 0; cy < rows; cy++)
+                {
+                    var screen = min + new Vector2(cx * step, cy * step);
+                    if (!raycast.ScreenToViewport(screen, out var viewport))
+                    {
+                        continue;
+                    }
+
+                    var ray = raycast.RayAt(viewport);
+                    if (!EditorState.Aim(root.InverseTransformPoint(ray.origin), root.InverseTransformDirection(ray.direction), out var result)
+                        || !GifLands(result, want, rotation, yTolerance, tolerance))
+                    {
+                        if (result != null && result.World != null && result.World.Length > 0)
+                        {
+                            var got = result.World[0].Pos;
+                            var off = new Vector2(got.x - want.x, got.z - want.z).magnitude + Mathf.Abs(got.y - want.y);
+                            if (off < nearestOff)
+                            {
+                                nearestOff = off;
+                                nearest = $"{V4(got)} blocked {result.Blocked} snapped {result.Snapped}";
+                            }
+                        }
+
+                        continue;
+                    }
+
+                    good[cx, cy] = true;
+                    any = true;
+                }
+            }
+
+            if (!any)
+            {
+                Log($"gif editor: no aim for {entry.PrefabName} at {V4(want)} in {columns} x {rows} tries, the nearest landing {nearest}");
+                return null;
+            }
+
+            var bestScore = -1;
+            var best = Vector2.zero;
+            var middle = (min + max) * 0.5f;
+            for (var cx = 0; cx < columns; cx++)
+            {
+                for (var cy = 0; cy < rows; cy++)
+                {
+                    if (!good[cx, cy])
+                    {
+                        continue;
+                    }
+
+                    var score = 0;
+                    for (var dx = -2; dx <= 2; dx++)
+                    {
+                        for (var dy = -2; dy <= 2; dy++)
+                        {
+                            var nx = cx + dx;
+                            var ny = cy + dy;
+                            if (nx >= 0 && ny >= 0 && nx < columns && ny < rows && good[nx, ny])
+                            {
+                                score++;
+                            }
+                        }
+                    }
+
+                    var screen = min + new Vector2(cx * step, cy * step);
+                    if (score > bestScore || (score == bestScore && Vector2.Distance(screen, middle) < Vector2.Distance(best, middle)))
+                    {
+                        bestScore = score;
+                        best = screen;
+                    }
+                }
+            }
+
+            return best;
+        }
+
+        private static bool GifLands(PlaceResult result, Vector3 want, Quaternion rotation, float yTolerance, float tolerance)
+        {
+            if (result == null || result.Blocked || result.World == null || result.World.Length == 0)
+            {
+                return false;
+            }
+
+            var got = result.World[0].Pos;
+            return new Vector2(got.x - want.x, got.z - want.z).magnitude <= tolerance
+                && Mathf.Abs(got.y - want.y) <= yTolerance
+                && Quaternion.Angle(result.World[0].Rot, rotation) < 1f;
+        }
+
+        /// <summary>How far off its spot a piece may land: a snapped piece 2 cm, one that stands free a little more.</summary>
+        private static void GifTolerance(string prefab, out float across, out float up)
+        {
+            var free = GifFreePieces.Contains(prefab);
+            across = free ? 0.15f : 0.02f;
+            up = free ? 0.3f : 0.02f;
+        }
+
+        /// <summary>
+        /// Every piece of the kit the open blueprint does not hold on its spot (the kit's position
+        /// moved by <paramref name="offset"/>, same turn), and any piece the kit does not have.
+        /// </summary>
+        private static List<string> GifEditorMissing(ResolvedBlueprint kit, Vector3 offset)
+        {
+            var missing = new List<string>();
+            var pieces = EditorState.Document.Pieces;
+            var used = new bool[pieces.Count];
+            for (var index = 0; index < kit.Blueprint.Pieces.Count; index++)
+            {
+                var source = kit.Blueprint.Pieces[index];
+                var want = source.Position + offset;
+                GifTolerance(source.PrefabName, out var across, out var up);
+                var found = -1;
+                for (var k = 0; k < pieces.Count && found < 0; k++)
+                {
+                    var got = pieces[k];
+                    if (!used[k] && got.PrefabName == source.PrefabName
+                        && new Vector2(got.Position.x - want.x, got.Position.z - want.z).magnitude <= across
+                        && Mathf.Abs(got.Position.y - want.y) <= up
+                        && Quaternion.Angle(got.Rotation, source.Rotation) < 1f)
+                    {
+                        found = k;
+                    }
+                }
+
+                if (found < 0)
+                {
+                    missing.Add($"piece {index} ({source.PrefabName}) at {V4(want)}");
+                }
+                else
+                {
+                    used[found] = true;
+                }
+            }
+
+            for (var k = 0; k < pieces.Count; k++)
+            {
+                if (!used[k])
+                {
+                    missing.Add($"an extra {pieces[k].PrefabName} at {V4(pieces[k].Position)}");
+                }
+            }
+
+            return missing;
+        }
+
+        /// <summary>
+        /// Refuses a take: a FAIL line in the log with the reason, and bad.txt next to the clip's
+        /// frames, so make-gifs.py will not turn them into a GIF. Before the recording starts the
+        /// clip's old frames go too.
+        /// </summary>
+        private static void GifRefuse(string name, string reason)
+        {
+            Check(false, $"gif {name}: bad take, {reason}");
+            var folder = Path.Combine(OutDir, "gifs", name);
+            if (_gif == null || _gif.Folder != folder)
+            {
+                if (Directory.Exists(folder))
+                {
+                    Directory.Delete(folder, true);
+                }
+
+                Directory.CreateDirectory(folder);
+            }
+
+            File.AppendAllText(Path.Combine(folder, "bad.txt"), reason + "\n");
+        }
+
+        // ---------- gif: building with the hammer ----------
+
+        /// <summary>How far round the set nothing may stand before the build clip, and only the kit after it.</summary>
+        private const float GifSetRadius = 40f;
+
+        /// <summary>
+        /// The hammer in the world, one shot on empty ground: the Workshop's see-through preview (B,
+        /// pressed just before the first frame) follows the aim and turns two notches, one click puts
+        /// the whole building up and the hammer goes on the back, so no ghost is left. The
+        /// camera holds still but for the aim, since a moving picture costs a GIF ten times what a
+        /// still one does. The take is refused when anything already stands on the set (the test
+        /// world is saved between runs, and the scenarios build here), and when the click did not
+        /// put up the whole kit and nothing else.
+        /// </summary>
+        private static IEnumerator GifBuild(Player player)
+        {
+            var kit = GifKit();
+            if (kit == null)
+            {
+                yield break;
+            }
+
+            yield return GifStage(player, kit, true);
+            foreach (var cost in kit.TotalCost)
+            {
+                AddTo(player.GetInventory(), cost.m_resItem.gameObject.name, cost.m_amount);
+            }
+
+            // GifStage took the player's own buildings down. Whatever else stands on the set comes
+            // down too, the way the hammer's remove takes a piece that has no WearNTear (the test
+            // world keeps what old test versions built with no creator). Then count: nothing at all.
+            var set = player.transform.position;
+            foreach (var piece in GifPiecesAround(set))
+            {
+                Log($"gif build: taking down {piece.name} (built by {piece.GetCreator()}) at {V(piece.transform.position)}");
+                piece.m_nview.ClaimOwnership();
+                ZNetScene.instance.Destroy(piece.gameObject);
+            }
+
+            yield return Frames(2);
+            var before = GifPiecesAround(set);
+            if (before.Count > 0)
+            {
+                foreach (var piece in before)
+                {
+                    Log($"gif build: {piece.name} (built by {piece.GetCreator()}) stands at {V(piece.transform.position)}");
+                }
+
+                GifRefuse("build", $"{before.Count} pieces already stand within {GifSetRadius:0} m of the set");
+                yield break;
+            }
+
+            Log($"gif build: the ground is empty, no piece within {GifSetRadius:0} m");
+            var camera = GameCamera.instance;
+            camera.m_maxDistance = 8f;
+            camera.m_distance = 8f;
+            var face = BuildFacing.eulerAngles.y;
+            const float pitch = 22f;
+            GifFace(player, face);
+            GifLook(player, face + 6f, pitch);
+            yield return new WaitForSeconds(1.5f);
+
+            // The set's still air takes the game 5 s to blend in, after any blend already under
+            // way. Until it has, the leaves sway, and every frame of the GIF stores the trees again.
+            var env = EnvMan.instance;
+            var calm = 0f;
+            while ((env.m_windTransitionTimer >= 0f || env.GetWindIntensity() > 0.1f) && calm < 15f)
+            {
+                calm += Time.deltaTime;
+                yield return null;
+            }
+
+            Log($"gif build: wind {env.GetWindIntensity():0.00} after {calm:0.0} s more");
+
+            // B before the first frame: the clip opens on the Workshop's preview, never on the
+            // hammer's lone Wood Wall ghost.
+            yield return PressKey(BlueprintKeyOnKeyboard());
+            Check(BlueprintMode.Active && BlueprintMode.Current != null && BlueprintMode.Current.Name == kit.Name,
+                "B picked the Workshop: " + (BlueprintMode.EntryName ?? "none"));
+            yield return new WaitForSeconds(0.5f);
+            GifQuiet();
+
+            StartGif("build");
+            yield return new WaitForSeconds(0.8f);
+            yield return GifLookGlide(player, face + 6f, pitch, face - 6f, pitch + 1f, 0.5f);
+            yield return new WaitForSeconds(0.2f);
+            yield return WheelNotch(-1f);
+            yield return new WaitForSeconds(0.25f);
+            yield return WheelNotch(-1f);
+            yield return new WaitForSeconds(0.4f);
+            player.m_lastToolUseTime = 0f;
+            yield return GifClickThenPutAway(player);
+            yield return new WaitForSeconds(3.2f);
+            yield return StopGif();
+
+            // A good take put up the whole kit and nothing else stands on the set.
+            var after = GifPiecesAround(set);
+            var built = after.Count(p => p.GetCreator() == player.GetPlayerID());
+            if (BlueprintMode.Active || built != kit.Parts.Count || after.Count != built)
+            {
+                GifRefuse("build", $"the click left {built} of the kit's {kit.Parts.Count} pieces standing, "
+                    + $"{after.Count - built} other pieces on the set, blueprint mode {(BlueprintMode.Active ? "still on" : "off")}");
+                yield break;
+            }
+
+            Check(true, $"the build clip put up the whole Workshop ({built} pieces) on empty ground");
+        }
+
+        /// <summary>Set by the build clip just before its click: put the hammer away in the frame the click builds.</summary>
+        private static bool _gifPutAwayOnBuild;
+
+        /// <summary>Whether <see cref="GifPutAwayPatch"/> put the hammer away.</summary>
+        private static bool _gifPutAway;
+
+        /// <summary>
+        /// The build click, and the hammer put on the back (the game's own HideHandItems) in the
+        /// very Player.Update that builds: after it the hammer would go back to the Wood Wall, and
+        /// its card (Hud.Update) and ghost (LateUpdate) would show for a frame.
+        /// </summary>
+        private static IEnumerator GifClickThenPutAway(Player player)
+        {
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            if (mouse == null)
+            {
+                Check(false, "no mouse to click with");
+                yield break;
+            }
+
+            _gifPutAway = false;
+            _gifPutAwayOnBuild = true;
+            var down = new UnityEngine.InputSystem.LowLevel.MouseState().WithButton(UnityEngine.InputSystem.LowLevel.MouseButton.Left);
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, down);
+            for (var frame = 0; frame < 10 && !_gifPutAway; frame++)
+            {
+                yield return null;
+            }
+
+            _gifPutAwayOnBuild = false;
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, new UnityEngine.InputSystem.LowLevel.MouseState());
+            yield return null;
+            Log($"gif build: {GifPiecesAround(player.transform.position).Count} pieces down, hammer put away {_gifPutAway}");
+            Check(_gifPutAway && !player.InPlaceMode(), "the click built and the hammer went away in the same frame");
+        }
+
+        /// <summary>
+        /// Runs after the mod's own Player.UpdatePlacement prefix, which builds on the click and
+        /// leaves blueprint mode: the hammer goes on the back there and then, before the HUD and
+        /// the hammer's ghost are drawn. No put-away animation: it rocks the head, the camera hangs
+        /// off the head, and a picture that moves costs the GIF a megabyte.
+        /// </summary>
+        [HarmonyPatch(typeof(Player), nameof(Player.UpdatePlacement))]
+        private static class GifPutAwayPatch
+        {
+            [HarmonyPriority(Priority.Last)]
+            private static void Postfix(Player __instance)
+            {
+                if (_gifPutAwayOnBuild && __instance == Player.m_localPlayer && !BlueprintMode.Active)
+                {
+                    _gifPutAwayOnBuild = false;
+                    _gifPutAway = __instance.HideHandItems(false, false);
+                }
+            }
+        }
+
+        /// <summary>Every real piece (a ghost is none) within <see cref="GifSetRadius"/> of the set.</summary>
+        private static List<Piece> GifPiecesAround(Vector3 set)
+        {
+            var pieces = new List<Piece>();
+            Piece.GetAllPiecesInRadius(set, GifSetRadius, pieces);
+            return pieces.Where(p => p != null && p.m_nview != null && p.m_nview.IsValid()).ToList();
+        }
+
+        // ---------- gif: capturing a building ----------
+
+        /// <summary>
+        /// A Workshop stands turned to show its open front, a wall reaching across one side. F8 puts a
+        /// small rectangle down in front of it, the wheel turns it, it slides onto the house and grows
+        /// until the house glows yellow (the wall across the edge orange), and F8 again opens the copy
+        /// in the editor.
+        /// </summary>
+        private static IEnumerator GifCapture(Player player)
+        {
+            var kit = GifKit();
+            if (kit == null)
+            {
+                yield break;
+            }
+
+            yield return GifStage(player, kit, false);
+            var face = BuildFacing;
+            var forward = face * Vector3.forward;
+            var turn = Quaternion.Euler(0f, face.eulerAngles.y + 225f, 0f);
+            var rootPos = player.transform.position + (forward * 9f);
+            rootPos.y = ZoneSystem.instance.GetGroundHeight(rootPos);
+
+            // Built the way the hammer builds: the game's own PlacePiece, one call per piece, bottom up.
+            foreach (var part in kit.Parts.OrderBy(p => p.Source.Position.y))
+            {
+                player.PlacePiece(part.Piece, rootPos + (turn * part.Source.Position), turn * part.Source.Rotation, false, true);
+            }
+
+            // The footprint's middle and the rectangle that covers it, as the capture test works it out.
+            var lo = new Vector3(float.MaxValue, 0f, float.MaxValue);
+            var hi = new Vector3(float.MinValue, 0f, float.MinValue);
+            foreach (var part in kit.Parts)
+            {
+                var local = part.Source.Position;
+                lo = Vector3.Min(lo, new Vector3(local.x, 0f, local.z));
+                hi = Vector3.Max(hi, new Vector3(local.x, 0f, local.z));
+            }
+
+            var centre = rootPos + (turn * ((lo + hi) * 0.5f));
+            centre.y = ZoneSystem.instance.GetGroundHeight(centre);
+            var width = Mathf.Ceil((hi.x - lo.x + 0.999f) / WorldCapture.SideStep) * WorldCapture.SideStep;
+            var wall = PiecePrefab("woodwall");
+            if (wall != null)
+            {
+                var wallAt = centre + (turn * new Vector3(-((width * 0.5f) + 0.5f), 0f, 0f));
+                wallAt.y = rootPos.y + 1.0477f;
+                player.PlacePiece(wall, wallAt, turn, false, true);
+            }
+
+            yield return new WaitForSeconds(1f);
+
+            // The rectangle starts small this time: 2 x 2, not turned.
+            var camera = GameCamera.instance;
+            camera.m_maxDistance = 8f;
+            camera.m_distance = 7.5f;
+            GifFace(player, face.eulerAngles.y);
+            GifLook(player, face.eulerAngles.y, 25f);
+            yield return new WaitForSeconds(0.5f);
+            WorldCapture.ResetShape();
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            for (var i = 0; i < 3; i++)
+            {
+                yield return WheelNotch(-1f, UnityEngine.InputSystem.Key.LeftShift, UnityEngine.InputSystem.Key.LeftAlt);
+            }
+
+            WorldCapture.Cancel();
+            Check(Mathf.Approximately(WorldCapture.Width, 2f) && Mathf.Approximately(WorldCapture.Depth, 2f),
+                $"the rectangle starts at 2 x 2: {WorldCapture.Width} x {WorldCapture.Depth}");
+            yield return new WaitForSeconds(1.5f);
+            GifQuiet();
+
+            StartGif("capture");
+            yield return new WaitForSeconds(0.7f);
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            Check(WorldCapture.Active, "F8 put the rectangle down");
+            var from = WorldCapture.Centre;
+            WorldCapture.Pin(from);
+            yield return new WaitForSeconds(0.4f);
+            yield return WheelNotch(1f);
+            yield return new WaitForSeconds(0.25f);
+            yield return WheelNotch(1f);
+            yield return new WaitForSeconds(0.4f);
+            var start = Time.time;
+            while (true)
+            {
+                var t = Mathf.Clamp01((Time.time - start) / 1.1f);
+                var e = t * t * (3f - (2f * t));
+                WorldCapture.Pin(Vector3.Lerp(from, centre, e));
+                if (t >= 1f)
+                {
+                    break;
+                }
+
+                yield return null;
+            }
+
+            yield return new WaitForSeconds(0.5f);
+            yield return WheelNotch(1f, UnityEngine.InputSystem.Key.LeftShift, UnityEngine.InputSystem.Key.LeftAlt);
+            yield return new WaitForSeconds(0.5f);
+            yield return WheelNotch(1f, UnityEngine.InputSystem.Key.LeftShift);
+            Log($"gif capture: {WorldCapture.Width} x {WorldCapture.Depth} turned {WorldCapture.Yaw}, "
+                + $"inside {WorldCapture.InsideNow}, across the edge {WorldCapture.EdgeNow}");
+            yield return new WaitForSeconds(1.4f);
+            yield return PressKey(UnityEngine.InputSystem.Key.F8);
+            Check(ModUi.Open, "F8 again opened the copy in the editor");
+            yield return new WaitForSeconds(2.4f);
+            yield return StopGif();
         }
 
         // ---------- helpers ----------
