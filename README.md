@@ -264,7 +264,7 @@ let a piece fall; its materials drop on the ground.
 | Drag on the view | Select everything in the box. Only while the cursor is free. |
 | `W` `A` `S` `D` | Fly forward, back, left, right |
 | `Space` `Ctrl` | Fly up, down. Hold `Shift` to fly 3 times faster. |
-| `C` | Hold the mouse in the pane, so it looks around like flying in the game. `Esc` gives it back. |
+| `C` | Hold the mouse in the pane, so it looks around like flying in the game, at the game's own mouse sensitivity. `Esc` gives it back. |
 | `Ctrl+A` | Select all |
 | `G` | Move the selection |
 | `Ctrl+D` | Duplicate. Copies keep coming until `Esc`. |
@@ -349,7 +349,6 @@ Valheim/BepInEx/config/com.mikamarik.valheimtomrer.cfg
 | Editor | `ShowAllPieces` | `false` | Every piece in the editor, instead of only the ones this character has unlocked. |
 | Editor | `SnapDots` | `true` | Show the snap dots while placing. Snapping itself is always on. |
 | Editor | `Boxes` | `false` | Draw pieces as plain boxes instead of models. |
-| Editor | `LookSensitivity` | `1.0` | Mouse look speed in the 3D view. 2 is twice as fast. |
 | Build | `UseChests` | `true` | A blueprint build also takes materials from chests near you, after your bag. Off: the bag only. |
 | Build | `ChestRange` | `20` | How far a chest may be from you, in metres (0 to 100), and still give materials. |
 

@@ -144,6 +144,14 @@ with the cursor where the player left it. **C** hands the mouse to the pane for 
 A click must never call `Capture()`: it used to, and clicking a piece then hid the cursor and swung
 the view instead of selecting. There are no camera modes, the camera always flies.
 
+The look while the pane has the mouse is the game's own (`PlayerController.LateUpdate`): 0.05
+degrees a pixel (ZInput's mouse delta scale) times the game's Mouse sensitivity
+(`PlayerController.m_mouseSens`, `m_switchMouseSens` when the game says a pad's mouse is in use),
+with its invert mouse setting. It was 0.14 degrees a pixel times a `LookSensitivity` of our own,
+removed like `PadLookSensitivity` (§4). The 300 px clip on one frame's move stays: it stops the jump
+when the cursor is taken, which the game handles by skipping frames instead. Right drag is not a
+game look and keeps its own speed (a drag over the pane's height is 0.6 of a turn).
+
 ### The hint bar
 
 `Ui/HintBar.cs` draws the controls along the bottom of the pane as the game does: controller icons
@@ -360,8 +368,9 @@ The right stick in the 3D pane turns exactly like the game's camera (`PlayerCont
 110 degrees a second at full stick, times the game's own Gamepad sensitivity
 (`PlayerController.m_gamepadSens`), with its invert X and Y settings. The game's settings screen
 writes those statics live, so a change there shows in the editor at once. The mod has no pad look
-setting any more (`PadLookSensitivity` is gone, and `EditorConfig.Drop` takes its line, and the old
-`CameraMode` one, out of the player's file: BepInEx keeps an unknown line forever).
+setting any more (`PadLookSensitivity` is gone, and `EditorConfig.Drop` takes its line, the mouse's
+`LookSensitivity` (§3) and the old `CameraMode` one out of the player's file: BepInEx keeps an
+unknown line forever).
 
 - **The sticks are read raw** (`ReadUnprocessedValue`), then ZInput's radial dead zone (0.2, rescaled
   to 0..1), the way `ZInput.ReadValueDef` does. `ReadValue()` adds Unity's own stick filter, which the

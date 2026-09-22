@@ -432,7 +432,6 @@ namespace ValheimTomrer.Dev
             Default(EditorConfig.ShowAllPieces);
             Default(EditorConfig.SnapDots);
             Default(EditorConfig.Boxes);
-            Default(EditorConfig.LookSensitivity);
             Default(BuildConfig.UseChests);
             Default(BuildConfig.ChestRange);
         }
@@ -7147,10 +7146,34 @@ namespace ValheimTomrer.Dev
             Check(ViewportHost.Captured, "C gave the mouse to the pane");
             Check(Cursor.lockState == CursorLockMode.Locked, $"the cursor is held (is {Cursor.lockState})");
 
+            // The game's own mouse look (PlayerController.LateUpdate): 0.05 degrees a pixel times
+            // its Mouse sensitivity, and its invert setting.
+            var sens = ZInput.IsGamepadMouseActive() ? PlayerController.m_switchMouseSens : PlayerController.m_mouseSens;
             var yaw = camera.Yaw;
-            camera.MouseLook(new Vector2(100f, 0f));
-            Check(Mathf.Abs(Mathf.DeltaAngle(yaw, camera.Yaw) - 14f) < 0.5f,
-                $"100 mouse pixels turned the view {Mathf.DeltaAngle(yaw, camera.Yaw):0.0} degrees (0.14 each)");
+            var pitch = camera.Pitch;
+            camera.MouseLook(new Vector2(100f, 20f));
+            var lookTurn = Mathf.DeltaAngle(yaw, camera.Yaw);
+            var raised = camera.Pitch - pitch;
+            Check(Mathf.Abs(lookTurn - 5f * sens) < 0.01f && Mathf.Abs(raised - sens) < 0.01f,
+                $"100 by 20 mouse pixels turned the view {lookTurn:0.00} and up {raised:0.00} degrees,"
+                + $" the game's {5f * sens:0.00} and {sens:0.00} (0.05 a pixel x its Mouse sensitivity {sens})");
+
+            var wasSens = PlayerController.m_mouseSens;
+            var wasInvert = PlayerController.m_invertMouse;
+            var wasSwitch = PlayerController.m_switchMouseSens;
+            PlayerController.m_mouseSens = wasSens * 2f;
+            PlayerController.m_switchMouseSens = wasSwitch * 2f;
+            PlayerController.m_invertMouse = true;
+            yaw = camera.Yaw;
+            pitch = camera.Pitch;
+            camera.MouseLook(new Vector2(100f, 20f));
+            var fast = Mathf.DeltaAngle(yaw, camera.Yaw);
+            var lowered = camera.Pitch - pitch;
+            PlayerController.m_mouseSens = wasSens;
+            PlayerController.m_switchMouseSens = wasSwitch;
+            PlayerController.m_invertMouse = wasInvert;
+            Check(Mathf.Abs(fast - 2f * lookTurn) < 0.01f && Mathf.Abs(lowered + 2f * raised) < 0.01f,
+                $"the game's settings count: sensitivity x2 turns {fast:0.00} degrees, invert mouse turns up into down ({lowered:0.00})");
 
             var flyFrom = camera.Position;
             yield return HoldKey(UnityEngine.InputSystem.Key.W, 0.8f);

@@ -536,7 +536,8 @@ F7 opens a window with a 3D view, the piece list and the game's snapping. Read
   patch gated on `ModUi.Blocking`.
 - **The mouse.** The cursor is free the whole time. Only C gives it to the pane
   (`ViewportHost.Capture()`), Esc gives it back. A click must never call `Capture()`. There are no
-  camera modes, the camera always flies.
+  camera modes, the camera always flies. Its look is the game's (`EditorCamera.MouseLook`): 0.05
+  degrees a pixel times `PlayerController.m_mouseSens`, the game's invert, no setting of our own (§3).
 - **The hint bar.** `ViewportHost.ShowHints` runs every frame: the bar rebuilds only when its set
   changes. Its words are `UiTheme.TextOnPicture` on `UiTheme.FontMaterial`, no edge, no shadow (the
   user had a white edge taken out).
