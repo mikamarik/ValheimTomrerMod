@@ -291,7 +291,37 @@ you can change it in the game (F1).
 The Boxes and Snap dots buttons in the editor change these settings too. The controller buttons
 follow the game's controller layout.
 
-## Blueprint files
+## Gathering materials for travel
+
+Open a blueprint in the editor and press **Pull materials...** at the top of the
+right-hand blueprint panel. The button stays visible while the material card scrolls.
+Each row can be switched on or off. **Except wood/stone** selects special components,
+including flint, deer hide and obsidian for station upgrades when those pieces are in
+the blueprint. **Non-teleportable** selects requirements whose item definition forbids
+teleporting. **All** and **None** reset the selection. Choices last for this game session.
+
+**Pull selected** gathers only the required quantity minus what is already in your bag.
+Nearby containers use the existing `UseChests` and `ChestRange` settings (20 m by default).
+Matching stacks are filled first, then free slots. Materials that cannot fit stay in
+storage; weight is allowed to exceed your carry limit so you can load a cart or ship.
+The result reports how many items moved and what could not be gathered. Pulling again
+only fills the remaining requirement. It does not automatically add station upgrades
+absent from the blueprint or transfer directly into a vehicle.
+
+Keyboard: Tab/arrows navigate, Enter activates a row or button, Esc closes the panel.
+Controller: D-pad/left stick navigate, cross selects or activates, right stick scrolls,
+circle closes. The existing panel walk also reaches the new editor button.
+
+Editor menus scroll one row per mouse-wheel step, including when the pointer is in
+the gaps between icons or material rows. `Editor.MenuRowsPerNotch` sets the number
+of rows (1–10, default 1). Piece grids use their current icon-row height.
+The character camera ignores the wheel while the editor or capture mode is active.
+The editor's 3D camera keeps its zoom behavior; `Editor.MenuScrollMultiplier`
+controls that zoom only (0.25–20, default 10). Previously saved values are kept.
+`Build.PullExcludedPrefabs` controls the default wood/stone exclusion list.
+This addition targets single-player; it preserves the existing owned-container rules.
+
+## Blueprint file storage
 
 Your blueprints are in `BepInEx/config/ValheimTomrer/blueprints/`, one text file each with a line
 per piece. Put a file there and it shows up right away, no restart needed.

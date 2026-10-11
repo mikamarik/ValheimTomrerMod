@@ -31,8 +31,8 @@ namespace ValheimTomrer.Editor.Ui
             {
                 var system = EventSystem.current;
                 var selected = system != null ? system.currentSelectedGameObject : null;
-                var field = selected != null ? selected.GetComponent<TMP_InputField>() : null;
-                return field != null && field.isFocused;
+                var inputField = selected != null ? selected.GetComponent<TMP_InputField>() : null;
+                return inputField != null && inputField.isFocused;
             }
         }
 

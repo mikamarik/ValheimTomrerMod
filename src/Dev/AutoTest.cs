@@ -206,6 +206,12 @@ namespace ValheimTomrer.Dev
                 case "probe_build":
                     scenario = ProbeBuild(player);
                     break;
+                case "material_pull":
+                    scenario = TestMaterialPull(player);
+                    break;
+                case "menu_scroll":
+                    scenario = TestMenuScroll(player);
+                    break;
                 case "build_sources":
                     scenario = TestBuildSources(player);
                     break;
@@ -375,6 +381,8 @@ namespace ValheimTomrer.Dev
                 case "dump": return DumpPieces(player);
                 case "probe": return Probe(player);
                 case "probe_build": return ProbeBuild(player);
+                case "material_pull": return TestMaterialPull(player);
+                case "menu_scroll": return TestMenuScroll(player);
                 case "build_sources": return TestBuildSources(player);
                 case "build_partial": return TestBuildPartial(player);
                 case "build_sites": return TestBuildSites(player);
@@ -436,6 +444,9 @@ namespace ValheimTomrer.Dev
             Default(EditorConfig.ShowAllPieces);
             Default(EditorConfig.SnapDots);
             Default(EditorConfig.Boxes);
+            Default(EditorConfig.MenuScrollMultiplier);
+            Default(EditorConfig.MenuRowsPerNotch);
+            Default(BuildConfig.PullExcludedPrefabs);
             Default(BuildConfig.UseChests);
             Default(BuildConfig.ChestRange);
         }
@@ -3165,6 +3176,229 @@ namespace ValheimTomrer.Dev
         private static string V2(Vector2 v)
         {
             return $"({v.x:0.#},{v.y:0.#})";
+        }
+
+        // ---------- scenarios: menu_scroll / material_pull (throwaway test world only) ----------
+
+        private static IEnumerator TestMenuScroll(Player player)
+        {
+            EditorSession.OpenDocument(BlueprintDocument.New("scroll test"));
+            yield return new WaitForSeconds(0.5f);
+            var scroll = UiBuild.Scroll("ScrollRegression", EditorWindow.Root, 6f);
+            var rect = (RectTransform)scroll.transform;
+            rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.sizeDelta = new Vector2(360f, 180f);
+            rect.anchoredPosition = Vector2.zero;
+            var first = UiBuild.Button("First", scroll.content, "First", null, 58f);
+            var second = UiBuild.Button("Second", scroll.content, "Second", null, 58f);
+            for (var i = 0; i < 10; i++)
+                UiBuild.Button("Row" + i, scroll.content, "Row " + i, null, 58f);
+            UiBuild.ScrollStep(scroll, 64f);
+            var savedRows = EditorConfig.MenuRowsPerNotch.Value;
+            try
+            {
+                EditorConfig.MenuRowsPerNotch.Value = 1;
+                yield return null;
+                Canvas.ForceUpdateCanvases();
+                var a = new Vector3[4];
+                var b = new Vector3[4];
+                ((RectTransform)first.transform).GetWorldCorners(a);
+                ((RectTransform)second.transform).GetWorldCorners(b);
+                var gap = (a[0] + a[3] + b[1] + b[2]) * 0.25f;
+                var canvas = scroll.GetComponentInParent<Canvas>();
+                var events = UnityEngine.EventSystems.EventSystem.current;
+                var pointer = new UnityEngine.EventSystems.PointerEventData(events)
+                {
+                    position = RectTransformUtility.WorldToScreenPoint(canvas.worldCamera, gap),
+                    scrollDelta = new Vector2(0f, -1f),
+                };
+                var hits = new List<UnityEngine.EventSystems.RaycastResult>();
+                events.RaycastAll(pointer, hits);
+                Check(hits.Count > 0 && hits[0].gameObject == scroll.viewport.gameObject,
+                    "the gap between material rows receives pointer events");
+                if (hits.Count > 0)
+                    UnityEngine.EventSystems.ExecuteEvents.ExecuteHierarchy(hits[0].gameObject, pointer,
+                        UnityEngine.EventSystems.ExecuteEvents.scrollHandler);
+                Check(Mathf.Abs(scroll.content.anchoredPosition.y - 64f) < 0.1f,
+                    "scrolling a gap moves exactly one material row");
+                foreach (var delta in new[] { -0.1f, -120f })
+                {
+                    scroll.content.anchoredPosition = Vector2.zero;
+                    pointer.scrollDelta = new Vector2(0f, delta);
+                    scroll.OnScroll(pointer);
+                    Check(Mathf.Abs(scroll.content.anchoredPosition.y - 64f) < 0.1f,
+                        "wheel units do not change row distance: " + delta);
+                }
+                EditorConfig.MenuRowsPerNotch.Value = 2;
+                scroll.content.anchoredPosition = Vector2.zero;
+                pointer.scrollDelta = new Vector2(0f, -1f);
+                scroll.OnScroll(pointer);
+                Check(Mathf.Abs(scroll.content.anchoredPosition.y - 128f) < 0.1f,
+                    "the rows-per-notch setting moves two rows");
+                Check(RowScrollRect.NextOffset(150f, 150f, 64f, -1) == 128f
+                    && RowScrollRect.NextOffset(128f, 150f, 64f, 1) == 150f
+                    && RowScrollRect.NextOffset(63.5f, 150f, 64f, -1) == 0f
+                    && RowScrollRect.NextOffset(0f, 500f, 80f, 1) == 80f,
+                    "row steps align after dragging, clamp at the bottom, and follow resized grids");
+            }
+            finally
+            {
+                EditorConfig.MenuRowsPerNotch.Value = savedRows;
+                UnityEngine.Object.Destroy(scroll.gameObject);
+            }
+        }
+
+        private static IEnumerator TestMaterialPull(Player player)
+        {
+            yield return MoveToBuildSpot(player);
+            yield return EquipHammer(player);
+            RemoveOldTestBuildings(player);
+            yield return new WaitForSeconds(0.5f);
+            PieceCatalog.Ensure();
+            var document = BlueprintDocument.New("material pull test");
+            var tokens = new List<string>();
+            foreach (var name in new[] { "Flint", "DeerHide", "Obsidian" })
+            {
+                var drop = ObjectDB.instance.GetItemPrefab(name)?.GetComponent<ItemDrop>();
+                Check(drop != null, name + " exists");
+                if (drop == null) yield break;
+                var token = drop.m_itemData.m_shared.m_name;
+                tokens.Add(token);
+                var entry = PieceCatalog.All.FirstOrDefault(e =>
+                {
+                    var piece = PiecePrefab(e.PrefabName);
+                    return piece != null && piece.m_resources.Any(r =>
+                        r.m_resItem != null && r.m_resItem.m_itemData.m_shared.m_name == token && r.m_amount > 0);
+                });
+                Check(entry != null, "a blueprint piece requires " + name);
+                if (entry == null) yield break;
+                document.AddPiece(entry.PrefabName, Vector3.zero, Quaternion.identity);
+            }
+
+            var placed = new List<Piece>();
+            yield return PlaceTestPiece(player, "piece_chest_wood",
+                OnGround(player.transform.position, 180f, 5f), 0f, placed);
+            yield return new WaitForSeconds(1f);
+            var chest = placed[0]?.GetComponentInChildren<Container>();
+            Check(chest != null, "pull test chest exists");
+            if (chest == null) yield break;
+            var from = chest.GetInventory();
+            var bag = player.GetInventory();
+            bag.RemoveAll();
+            var tally = BlueprintCard.Materials(document, MaterialSources.Around(player), false);
+            foreach (var row in tally.Rows)
+            {
+                MaterialPull.Select(row.Item, tokens.Contains(row.Item));
+            }
+            foreach (var name in new[] { "Flint", "DeerHide", "Obsidian" })
+            {
+                var token = ObjectDB.instance.GetItemPrefab(name).GetComponent<ItemDrop>().m_itemData.m_shared.m_name;
+                var row = tally.Rows.First(r => r.Item == token);
+                AddTo(bag, name, 1);
+                AddTo(from, name, row.Need + 3);
+            }
+            var wood = ObjectDB.instance.GetItemPrefab("Wood").GetComponent<ItemDrop>().m_itemData.m_shared.m_name;
+            AddTo(from, "Wood", 20);
+            MaterialPull.Pull(player, document);
+            foreach (var token in tokens)
+            {
+                Check(bag.CountItems(token) == tally.Rows.First(r => r.Item == token).Need
+                    && from.CountItems(token) == 4, "exact required amount pulled, spare retained: " + token);
+            }
+            Check(from.CountItems(wood) == 20 && bag.CountItems(wood) == 0, "unchecked wood stays in storage");
+            var totalBefore = bag.GetAllItems().Sum(i => i.m_stack);
+            MaterialPull.Pull(player, document);
+            Check(bag.GetAllItems().Sum(i => i.m_stack) == totalBefore, "repeat pull does not overfill requirements");
+
+            // Full bag rejects a pull, but a partial matching stack still accepts exactly what is needed.
+            foreach (var row in tally.Rows) MaterialPull.Select(row.Item, row.Item == tokens[0]);
+            bag.RemoveAll();
+            var stone = ObjectDB.instance.GetItemPrefab("Stone").GetComponent<ItemDrop>().m_itemData;
+            for (var i = 0; i < bag.GetWidth() * bag.GetHeight(); i++) AddTo(bag, "Stone", stone.m_shared.m_maxStackSize);
+            var sourceBefore = from.CountItems(tokens[0]);
+            MaterialPull.Pull(player, document);
+            Check(bag.CountItems(tokens[0]) == 0 && from.CountItems(tokens[0]) == sourceBefore,
+                "full bag leaves source quantities intact");
+            bag.RemoveItem(bag.GetItemAt(0, 0));
+            var need = tally.Rows.First(r => r.Item == tokens[0]).Need;
+            AddTo(bag, "Flint", need - 1);
+            MaterialPull.Pull(player, document);
+            Check(bag.CountItems(tokens[0]) == need && from.CountItems(tokens[0]) == sourceBefore - 1,
+                "full bag with a partial Flint stack receives exactly one missing Flint");
+
+            from.RemoveItem(tokens[0], from.CountItems(tokens[0]));
+            AddTo(from, "Flint", 2);
+            bag.RemoveAll();
+            MaterialPull.Pull(player, document);
+            Check(bag.CountItems(tokens[0]) == 2 && from.CountItems(tokens[0]) == 0,
+                "short source gives only what exists");
+            var saved = new Inventory("pull save check", null, chest.m_width, chest.m_height);
+            saved.Load(new ZPackage(chest.m_nview.GetZDO().GetByteArray(ZDOVars.s_items)));
+            Check(saved.CountItems(tokens[0]) == 0 && saved.CountItems(wood) == 20,
+                "native container save reflects the transfers and preserves unchecked items");
+            AddTo(from, "Flint", 2);
+            bag.RemoveAll();
+            BuildConfig.UseChests.Value = false;
+            MaterialPull.Pull(player, document);
+            Check(bag.CountItems(tokens[0]) == 0 && from.CountItems(tokens[0]) == 2,
+                "UseChests off prevents pulling");
+            BuildConfig.UseChests.Value = true;
+            Check(MaterialPull.IsBulk(wood), "wood is excluded by default");
+            var iron = ObjectDB.instance.GetItemPrefab("Iron").GetComponent<ItemDrop>().m_itemData.m_shared.m_name;
+            Check(MaterialPull.IsNonTeleportable(iron) && !MaterialPull.IsNonTeleportable(tokens[0]),
+                "non-teleportable preset distinguishes Iron from Flint");
+
+            // Use the fake pad to activate a preset and dismiss the real modal.
+            EditorSession.OpenDocument(document);
+            yield return new WaitForSeconds(0.5f);
+            var pullButton = BlueprintPanel.PullButton;
+            Check(pullButton != null && pullButton.GetComponentInParent<UnityEngine.UI.ScrollRect>() == null,
+                "Pull materials button is outside the scrolling material list");
+            if (pullButton == null) yield break;
+            Check(pullButton.transform.parent == BlueprintPanel.Scroll.transform.parent,
+                "Pull materials button is pinned in the blueprint panel");
+            var readyUntil = Time.unscaledTime + 10f;
+            while (!ViewportHost.Ready && Time.unscaledTime < readyUntil) yield return null;
+            var editorCamera = ViewportHost.Camera;
+            Check(editorCamera != null, "editor camera is ready for scroll tests");
+            if (editorCamera != null)
+            {
+                var start = editorCamera.Position;
+                var pivot = editorCamera.Pivot;
+                var distance = editorCamera.Distance;
+                var previousMultiplier = EditorConfig.MenuScrollMultiplier.Value;
+                EditorConfig.MenuScrollMultiplier.Value = 1f;
+                Bindings.Wheel(1f, new Vector2(0.5f, 0.5f));
+                Check(Mathf.Abs(editorCamera.Distance / distance - 0.95f) < 1e-4f,
+                    "editor zoom at multiplier 1 keeps the original notch distance");
+                editorCamera.LookFrom(start, pivot);
+                EditorConfig.MenuScrollMultiplier.Value = 3f;
+                Bindings.Wheel(1f, new Vector2(0.5f, 0.5f));
+                Check(Mathf.Abs(editorCamera.Distance / distance - Mathf.Pow(0.95f, 3f)) < 1e-4f,
+                    "editor zoom applies the configured multiplier");
+                EditorConfig.MenuScrollMultiplier.Value = previousMultiplier;
+                editorCamera.LookFrom(start, pivot);
+            }
+            Check(ValheimTomrer.Patches.EditorCameraWheelPatch.FilterWheel(1f) == 0f,
+                "camera wheel guard blocks the world camera while editor is open");
+            var worldDistance = GameCamera.instance.m_distance;
+            yield return WheelNotch(120f);
+            Check(Mathf.Abs(GameCamera.instance.m_distance - worldDistance) < 1e-4f,
+                "real wheel input leaves the character camera distance unchanged");
+            _pad = new PadState();
+            PadReader.Fake = _pad;
+            pullButton.onClick.Invoke();
+            yield return null;
+            yield return Tap(PadButton.Cross);
+            Check(Dialogs.IsOpen && tokens.All(MaterialPull.Selected),
+                "controller activates the default special-material preset");
+            yield return Tap(PadButton.Circle);
+            Check(!Dialogs.IsOpen, "controller dismisses the material pull modal");
+            PadReader.Fake = null;
+            _pad = null;
+            EditorSession.Close();
+            foreach (var row in tally.Rows) MaterialPull.Select(row.Item, !MaterialPull.IsBulk(row.Item));
+            RemoveOldTestBuildings(player);
         }
 
         // ---------- scenario: build_sources ----------

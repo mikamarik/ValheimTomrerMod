@@ -8,6 +8,9 @@ namespace ValheimTomrer.Blueprints
     /// </summary>
     internal static class BuildConfig
     {
+        /// <summary>Prefab names left unchecked by default in the material-pull dialog.</summary>
+        public static ConfigEntry<string> PullExcludedPrefabs;
+
         /// <summary>Off: the hammer pays from the inventory only.</summary>
         public static ConfigEntry<bool> UseChests;
 
@@ -16,6 +19,11 @@ namespace ValheimTomrer.Blueprints
 
         public static void Bind(ConfigFile config)
         {
+            PullExcludedPrefabs = config.Bind(
+                "Build", "PullExcludedPrefabs",
+                "Wood,RoundLog,FineWood,ElderBark,YggdrasilWood,Blackwood,Stone,Grausten",
+                "Materials left unchecked in Pull materials by default (comma-separated prefab names). Individual selections last until the game restarts.");
+
             UseChests = config.Bind(
                 "Build",
                 "UseChests",
