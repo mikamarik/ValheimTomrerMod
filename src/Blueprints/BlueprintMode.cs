@@ -2,6 +2,9 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using ValheimTomrer.Blueprints.Sites;
+using ValheimTomrer.Editor.Input;
+using ValheimTomrer.Editor.Placement;
+using ValheimTomrer.Editor.View;
 
 namespace ValheimTomrer.Blueprints
 {
@@ -22,7 +25,7 @@ namespace ValheimTomrer.Blueprints
         public const float RotationStep = 22.5f;
 
         /// <summary>The key offers an unfinished build while the player is this close to its box.</summary>
-        public const float ContinueRange = 40f;
+        public const float ContinueRange = 50f;
 
         /// <summary>A character this close to a part's box (the box grows by this much in x and z) keeps it from going up.</summary>
         private const float CharacterMargin = 0.6f;
@@ -35,6 +38,28 @@ namespace ValheimTomrer.Blueprints
         private static float _padTurnTimer;
         private static bool _hasTarget;
         private static string _blockedReason;
+        private static BlueprintFoundation _foundation;
+        private static int _anchorIndex;
+        private static CaptureBox _anchorMarker;
+        private static CaptureBox _terrainOutline;
+        private static float _heightOffset;
+        private static float _nextHeightCheck;
+        private static Vector3 _heightCheckPosition;
+        private static Quaternion _heightCheckRotation;
+        private static bool _heightLimitsKnown;
+        private static float _minRootHeight;
+        private static float _maxRootHeight;
+        private static bool _terrainHeightBlocked;
+        private static float _placementDiagnosticAt;
+
+        public static float HeightOffset { get; private set; }
+        public const float HeightStep = 0.25f;
+        public const float MaxHeightOffset = 5f;
+
+        public static string AnchorName => BlueprintFoundation.Names[_anchorIndex];
+        public static bool PreparingGround => CurrentSite == null && BuildConfig.PrepareGround.Value;
+        public static System.Func<Vector3, float> ProposedGround => PreparingGround && _foundation != null && PreviewRoot != null
+            ? FoundationTerrain.ProjectedGround(_foundation, PreviewRoot.position, PreviewRoot.rotation) : null;
 
         public static ResolvedBlueprint Current { get; private set; }
 
@@ -127,6 +152,15 @@ namespace ValheimTomrer.Blueprints
             Current = blueprint;
             EntryName = blueprint.Name;
             _preview = BlueprintPreview.Create(blueprint);
+            _foundation = BlueprintFoundation.Measure(blueprint, _preview);
+            _anchorIndex = 0;
+            _heightOffset = HeightOffset = 0f;
+            _terrainHeightBlocked = false;
+            _nextHeightCheck = 0f;
+            _placementDiagnosticAt = Time.time + 1f;
+            var meshes = _preview.Root.GetComponentsInChildren<Renderer>(true);
+            var visibleMeshes = meshes.Count(mesh => mesh.enabled && mesh.gameObject.activeInHierarchy);
+            ValheimTomrerPlugin.Log.LogDebug($"Blueprint preview '{blueprint.Name}': {_preview.Built}/{_preview.Total} pieces, {visibleMeshes}/{meshes.Length} active renderers, bounds {_preview.LocalBounds}.");
 
             // Start with the blueprint's front (+Z) facing the player.
             _rotationSteps = Mathf.RoundToInt((player.transform.eulerAngles.y + 180f) / RotationStep);
@@ -189,6 +223,31 @@ namespace ValheimTomrer.Blueprints
             Current = null;
             CurrentSite = null;
             EntryName = null;
+            _foundation = null;
+            _anchorMarker?.Destroy();
+            _anchorMarker = null;
+            _terrainOutline?.Destroy();
+            _terrainOutline = null;
+        }
+
+        public static void CycleAnchor(int direction)
+        {
+            if (!Active || CurrentSite != null) return;
+            _anchorIndex = (_anchorIndex + direction + 5) % 5;
+            BlueprintInfoCard.RefreshSoon();
+        }
+
+        public static void ToggleGround()
+        {
+            if (!Active || CurrentSite != null) return;
+            BuildConfig.PrepareGround.Value = !BuildConfig.PrepareGround.Value;
+            BlueprintInfoCard.RefreshSoon();
+        }
+
+        public static void AdjustHeight(int direction)
+        {
+            _heightOffset = Mathf.Clamp(HeightOffset + direction * HeightStep, -MaxHeightOffset, MaxHeightOffset);
+            BlueprintInfoCard.RefreshSoon();
         }
 
         /// <summary>Which way the blueprint faces now, in steps of <see cref="RotationStep"/>.</summary>
@@ -210,16 +269,26 @@ namespace ValheimTomrer.Blueprints
             }
             else
             {
+                if (ZInput.GetKeyDown(BuildConfig.PreviousAnchorKey.Value) || WorldPad.Pressed(WorldPad.DpadLeft))
+                    CycleAnchor(-1);
+                if (ZInput.GetKeyDown(BuildConfig.NextAnchorKey.Value) || WorldPad.Pressed(WorldPad.DpadRight))
+                    CycleAnchor(1);
+                if (ZInput.GetKeyDown(BuildConfig.PrepareGroundKey.Value) || WorldPad.Pressed(WorldPad.DpadUp))
+                    ToggleGround();
+                if (ZInput.GetKeyDown(BuildConfig.RaiseHeightKey.Value)) AdjustHeight(1);
+                if (ZInput.GetKeyDown(BuildConfig.LowerHeightKey.Value)) AdjustHeight(-1);
                 _scroll += ZInput.GetMouseScrollWheel();
                 if (_scroll > player.m_scrollAmountThreshold)
                 {
                     _scroll = 0f;
-                    _rotationSteps++;
+                    if (ZInput.GetKey(KeyCode.LeftControl, false) || ZInput.GetKey(KeyCode.RightControl, false)) AdjustHeight(1);
+                    else _rotationSteps++;
                 }
                 else if (_scroll < -player.m_scrollAmountThreshold)
                 {
                     _scroll = 0f;
-                    _rotationSteps--;
+                    if (ZInput.GetKey(KeyCode.LeftControl, false) || ZInput.GetKey(KeyCode.RightControl, false)) AdjustHeight(-1);
+                    else _rotationSteps--;
                 }
 
                 PadTurn(Time.deltaTime);
@@ -398,7 +467,7 @@ namespace ValheimTomrer.Blueprints
                 _preview = BlueprintPreview.Create(Current);
             }
 
-            _hasTarget = player.PieceRayTest(out var point, out _, out _, out _, out _, false);
+            _hasTarget = PlacementRayTest(player, out var point);
 
             // The camera reads this to decide whether the wheel zooms or rotates.
             player.m_placementStatus = _hasTarget ? Player.PlacementStatus.Valid : Player.PlacementStatus.NoRayHits;
@@ -406,20 +475,55 @@ namespace ValheimTomrer.Blueprints
             if (!_hasTarget)
             {
                 _preview.SetVisible(false);
+                _anchorMarker?.Hide();
+                _terrainOutline?.Hide();
                 _blockedReason = null;
                 return;
             }
 
             var rotation = Quaternion.Euler(0f, _rotationSteps * RotationStep, 0f);
             _preview.SetVisible(true);
-            _preview.Root.SetPositionAndRotation(point - rotation * _preview.Anchor, rotation);
+            _foundation = _foundation ?? BlueprintFoundation.Measure(Current, _preview);
+            var target = ZInput.GetKey(KeyCode.LeftShift, false) || ZInput.GetKey(KeyCode.RightShift, false)
+                ? point : BlueprintFoundation.SnapTarget(point);
+            var rootPosition = target - rotation * _foundation.Anchors[_anchorIndex];
+            if (Time.time >= _nextHeightCheck || (rootPosition - _heightCheckPosition).sqrMagnitude > 0.25f
+                || Quaternion.Angle(rotation, _heightCheckRotation) > 0.1f)
+            {
+                _heightCheckPosition = rootPosition;
+                _heightCheckRotation = rotation;
+                _nextHeightCheck = Time.time + 0.25f;
+                _heightLimitsKnown = FoundationTerrain.TryHeightLimits(_foundation, rootPosition, rotation,
+                    out _minRootHeight, out _maxRootHeight);
+            }
+            var low = -MaxHeightOffset;
+            var high = MaxHeightOffset;
+            if (_heightLimitsKnown)
+            {
+                low = Mathf.Max(low, _minRootHeight - rootPosition.y);
+                if (PreparingGround) high = Mathf.Min(high, _maxRootHeight - rootPosition.y);
+            }
+            else low = 0f; // Do not lower into terrain whose editable depth cannot be read.
+            _terrainHeightBlocked = low > high;
+            HeightOffset = _terrainHeightBlocked ? _heightOffset : Mathf.Clamp(_heightOffset, low, high);
+            _preview.Root.SetPositionAndRotation(rootPosition + Vector3.up * HeightOffset, rotation);
+            _anchorMarker = _anchorMarker ?? new CaptureBox();
+            _anchorMarker.Show(target + Vector3.up * HeightOffset, rotation.eulerAngles.y, 0.4f, 0.4f, false);
+            if (PreparingGround)
+            {
+                _terrainOutline = _terrainOutline ?? new CaptureBox();
+                var bounds = _foundation.Bounds;
+                _terrainOutline.Show(_preview.Root.TransformPoint(bounds.center), rotation.eulerAngles.y,
+                    bounds.size.x + 2f * FoundationTerrain.Margin, bounds.size.z + 2f * FoundationTerrain.Margin);
+            }
+            else _terrainOutline?.Hide();
 
-            _blockedReason = null;
+            _blockedReason = _terrainHeightBlocked ? "No editable foundation height within the 5 m placement offset." : null;
             for (var i = 0; i < Current.Parts.Count; i++)
             {
                 var part = Current.Parts[i];
                 var reason = BlockedReason(part, _preview.Root.TransformPoint(part.Source.Position));
-                _preview.SetInvalid(i, reason != null);
+                _preview.SetInvalid(i, reason != null || _terrainHeightBlocked);
                 if (_blockedReason == null)
                 {
                     _blockedReason = reason;
@@ -430,6 +534,41 @@ namespace ValheimTomrer.Blueprints
             {
                 _blockedReason = "$msg_blocked";
             }
+            if (_placementDiagnosticAt > 0f && Time.time >= _placementDiagnosticAt)
+            {
+                _placementDiagnosticAt = 0f;
+                var renderers = _preview.Root.GetComponentsInChildren<Renderer>(true);
+                var active = renderers.Where(r => r.enabled && r.gameObject.activeInHierarchy).ToArray();
+                var bounds = new Bounds(_preview.Root.position, Vector3.zero);
+                foreach (var renderer in active) bounds.Encapsulate(renderer.bounds);
+                var camera = Camera.main;
+                var cameraState = camera != null
+                    ? $"position={camera.transform.position}, mask=0x{camera.cullingMask:X8}, clip={camera.nearClipPlane}/{camera.farClipPlane}"
+                    : "no main camera";
+                ValheimTomrerPlugin.Log.LogDebug($"Blueprint placement '{Current.Name}': aim={point}, root={_preview.Root.position}, anchor={_foundation.Anchors[_anchorIndex]}, foundation={_foundation.Bounds}, offset={HeightOffset}, ground={PreparingGround}, limits={_heightLimitsKnown}:{_minRootHeight}/{_maxRootHeight}, blocked={_blockedReason ?? "none"}.");
+                ValheimTomrerPlugin.Log.LogDebug($"Blueprint render '{Current.Name}': active={active.Length}/{renderers.Length}, forcedOff={active.Count(r => r.forceRenderingOff)}, visible={active.Count(r => r.isVisible)}, worldBounds={bounds}, layers={string.Join(",", active.Select(r => r.gameObject.layer).Distinct())}, camera {cameraState}.");
+            }
+        }
+
+        private static bool PlacementRayTest(Player player, out Vector3 point)
+        {
+            point = default;
+            if (!GameCamera.instance || !player.m_eye) return false;
+
+            var camera = GameCamera.instance.transform;
+            var eye = player.m_eye.position;
+            var range = BuildConfig.PlacementRange.Value;
+            // Include the camera's offset so a target 50 m from the player remains reachable
+            // with a zoomed-out third-person camera. Measure the final hit from the eyes.
+            var rayLength = range + Vector3.Distance(camera.position, eye);
+            if (!Physics.Raycast(camera.position, camera.forward, out var hit, rayLength,
+                    player.m_placeRayMask, QueryTriggerInteraction.Ignore)
+                || !hit.collider || hit.collider.attachedRigidbody
+                || (hit.point - eye).sqrMagnitude > range * range)
+                return false;
+
+            point = hit.point;
+            return true;
         }
 
         /// <summary>
@@ -494,6 +633,16 @@ namespace ValheimTomrer.Blueprints
                 return false;
             }
 
+            // Re-read at the exact placement point: the preview's cached limits are for display.
+            if (FoundationTerrain.TryHeightLimits(_foundation, _preview.Root.position, _preview.Root.rotation,
+                    out var minimumHeight, out var maximumHeight)
+                && (_preview.Root.position.y < minimumHeight - 0.001f
+                    || (PreparingGround && _preview.Root.position.y > maximumHeight + 0.001f)))
+            {
+                Say(player, MessageHud.MessageType.Center, "This foundation exceeds the editable terrain height limits.");
+                return false;
+            }
+
             var error = BlueprintRules.CheckCanBuild(player, Current);
             if (error != null)
             {
@@ -516,30 +665,77 @@ namespace ValheimTomrer.Blueprints
             var root = _preview.Root;
             var noCost = player.PlacementCostDisabled;
             var sources = noCost ? null : MaterialSources.Around(player);
-            var plan = PartialBuild.Plan(Current, root.position, root.eulerAngles.y, null, sources, noCost);
+            var plan = PartialBuild.Plan(Current, root.position, root.eulerAngles.y, null, sources, noCost, ProposedGround);
+            FoundationTerrain terrain = null;
+            if (PreparingGround)
+            {
+                if (plan.Count == 0)
+                {
+                    Say(player, MessageHud.MessageType.Center, "No pieces can be built with the available materials. Ground unchanged.");
+                    return false;
+                }
+                if (!FoundationTerrain.TryPlan(_foundation, root.position, root.rotation, out terrain, out var terrainError))
+                {
+                    Say(player, MessageHud.MessageType.Center, terrainError);
+                    return false;
+                }
+                var support = Support.Solve(PartialBuild.SceneOf(Current), terrain.GroundAt);
+                if (support.Fallen.Count > 0)
+                {
+                    Say(player, MessageHud.MessageType.Center, "This blueprint still has unsupported pieces after leveling. Fix its structure first.");
+                    return false;
+                }
+                if (!terrain.Apply(out terrainError))
+                {
+                    Say(player, MessageHud.MessageType.Center, terrainError);
+                    return false;
+                }
+                try
+                {
+                    support = Support.Solve(PartialBuild.SceneOf(Current), PartialBuild.GroundUnder(root.position, root.eulerAngles.y));
+                    if (support.Fallen.Count > 0)
+                    {
+                        terrain.Dispose();
+                        Say(player, MessageHud.MessageType.Center, "The prepared ground could not support this foundation. Ground restored.");
+                        return false;
+                    }
+                    plan = PartialBuild.Plan(Current, root.position, root.eulerAngles.y, null, sources, noCost);
+                }
+                catch { terrain.Dispose(); throw; }
+            }
 
             // In plan order: bottom-up, so nothing waits for support from a piece that does not exist yet.
             var cheated = player.NoCostCheat() && !PlayerProfile.s_bypassCheatChecks;
             var built = new bool[Current.Parts.Count];
             var placed = 0;
-            foreach (var index in plan)
+            try
             {
-                var part = Current.Parts[index];
-
-                // The plan counted these materials, so this only fails if a chest emptied since.
-                if (!noCost && !BlueprintRules.PayFor(sources, part.Piece))
+                foreach (var index in plan)
                 {
-                    continue;
-                }
+                    var part = Current.Parts[index];
 
-                player.PlacePiece(
-                    part.Piece,
-                    root.TransformPoint(part.Source.Position),
-                    root.rotation * part.Source.Rotation,
-                    doAttack: false,
-                    cheated);
-                built[index] = true;
-                placed++;
+                    // The plan counted these materials, so this only fails if a chest emptied since.
+                    if (!noCost && !BlueprintRules.PayFor(sources, part.Piece))
+                    {
+                        continue;
+                    }
+
+                    player.PlacePiece(
+                        part.Piece,
+                        root.TransformPoint(part.Source.Position),
+                        root.rotation * part.Source.Rotation,
+                        doAttack: false,
+                        cheated);
+                    built[index] = true;
+                    placed++;
+                }
+            }
+            finally
+            {
+                // Once construction has started, keep its ground. With no placed parts,
+                // restore the exact previous height/smoothing flags, including tile seams.
+                if (placed > 0) terrain?.Commit();
+                terrain?.Dispose();
             }
 
             var total = Current.Parts.Count;

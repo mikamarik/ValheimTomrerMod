@@ -256,6 +256,10 @@ namespace ValheimTomrer.Blueprints
                     list.Add(Make("Next blueprint", Pad(WorldPad.Square), next));
                     AddEdit(list, edit);
                     list.Add(Make(Word("$hud_buildmenu", "Build Menu"), Pad(BuildMenuButton()), Bound("BuildMenu")));
+                    list.Add(Make("Anchor", Pair(WorldPad.DpadLeft, WorldPad.DpadRight),
+                        KeyName(BuildConfig.PreviousAnchorKey.Value), "/", KeyName(BuildConfig.NextAnchorKey.Value)));
+                    list.Add(Make("Ground", Pad(WorldPad.DpadUp), KeyName(BuildConfig.PrepareGroundKey.Value)));
+                    list.Add(Make("Height", "", KeyName(BuildConfig.RaiseHeightKey.Value), "/", KeyName(BuildConfig.LowerHeightKey.Value)));
                     list.Add(Make(Word("$hud_rotate", "Rotate"), RotatePad(), "wheel"));
                     break;
                 case Mode.Continue:
@@ -428,9 +432,9 @@ namespace ValheimTomrer.Blueprints
             label.text = hint.Label;
             foreach (var part in hint.Keys)
             {
-                if (part == "+")
+                if (part == "+" || part == "/")
                 {
-                    Copy(_kbPlus, entry).text = "+";
+                    Copy(_kbPlus, entry).text = part;
                 }
                 else if (part == "wheel")
                 {

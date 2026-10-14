@@ -1,5 +1,8 @@
 # ValheimTomrer
 
+This README covers the **0.2.0 fork update**. See [CHANGELOG.md](CHANGELOG.md) for
+the release history and the complete list of changes since 0.1.0.
+
 Blueprints for Valheim 1.0, with an editor inside the game. Design a building in 3D, or copy one
 you already built, and put the whole thing up with the hammer.
 
@@ -25,6 +28,13 @@ As far as I know, no other Valheim mod lets you draw a blueprint inside the game
 - In the editor, a piece shows the hammer's support colours while you place it, so you see what
   would fall down before you build it.
 - The build card lists every material: what you have and what you need.
+- Choose which required materials to pull into your inventory, including
+  non-teleportable items and crafting-station upgrade components.
+- Place a whole blueprint using its bottom-center or four foundation-corner anchors,
+  with a 50 m aiming range and an adjustable height offset of up to +/-5 m.
+- Optionally raise and lower the terrain under the foundation when building.
+  Ground preparation is off until you enable it.
+- Scroll editor lists by rows across their entire area, with separate editor zoom speed.
 - Blueprints are small text files you can share. It also reads `.blueprint` files from PlanBuild,
   Buildheim and Infinity Hammer, and `.vbuild` files from BuildShare.
 
@@ -169,6 +179,10 @@ the default controller layout, L1 (LB) in the alternative one.
 | Next blueprint (unfinished builds nearby come first) | B | □ (X) |
 | Build | Left click | R2 (RT) |
 | Turn 22.5° | Wheel | L2 (LT) + right stick left, right |
+| Previous / next blueprint foundation anchor | Q / E | D-pad left / right |
+| Raise / lower whole-blueprint placement by 0.25 m | Page Up / Page Down, or Ctrl + wheel | Keyboard controls |
+| Toggle blueprint ground preparation | T | D-pad up |
+| Position the blueprint without snapping | Hold Shift | Keyboard modifier |
 | Remove the unfinished build (in Continue) | The hammer's Remove key | R1 (RB) |
 | Open the editor with the blueprint in hand | F7 | L2 (LT) + □ (X) |
 | Start copying a building, press again to copy | F8 | L2 (LT) + △ (Y) |
@@ -285,13 +299,105 @@ you can change it in the game (F1).
 | Editor | `ShowAllPieces` | `false` | Shows every piece in the editor, not only the ones you have unlocked |
 | Editor | `SnapDots` | `true` | Shows the snap points while you place a piece. Snapping works either way. |
 | Editor | `Boxes` | `false` | Draws pieces as plain boxes instead of models |
+| Editor | `MenuRowsPerNotch` | `1` | Rows moved per wheel step in editor lists (1 to 10) |
+| Editor | `MenuScrollMultiplier` | `10` | Editor 3D zoom multiplier (0.25 to 20); existing saved values are kept |
 | Build | `UseChests` | `true` | Takes materials from nearby chests too, not only from your inventory |
 | Build | `ChestRange` | `20` | How close a chest must be, in metres (0 to 100) |
+| Build | `PlacementRange` | `50` | Whole-blueprint aiming range in metres (50 to 100) |
+| Build | `PrepareGround` | `false` | Raise and lower terrain under a new blueprint on placement |
+| Build | `PreviousAnchorKey` | `Q` | Previous lowest-layer foundation anchor |
+| Build | `NextAnchorKey` | `E` | Next lowest-layer foundation anchor |
+| Build | `PrepareGroundKey` | `T` | Toggle ground preparation while aiming |
+| Build | `RaiseHeightKey` | `PageUp` | Raise whole-blueprint placement by 0.25 m |
+| Build | `LowerHeightKey` | `PageDown` | Lower whole-blueprint placement by 0.25 m |
+| Build | `PullExcludedPrefabs` | See below | Comma-separated prefab names initially unchecked in Pull materials |
+
+The default `PullExcludedPrefabs` list is
+`Wood,RoundLog,FineWood,ElderBark,YggdrasilWood,Blackwood,Stone,Grausten`.
+Individual material selections are remembered until the game restarts.
 
 The Boxes and Snap dots buttons in the editor change these settings too. The controller buttons
 follow the game's controller layout.
 
-## Blueprint files
+## Placing a blueprint on uneven ground
+
+Whole blueprints can be aimed up to 50 metres from the player's eyes by default.
+`Build.PlacementRange` allows 50 to 100 metres. The limit applies to the aimed
+anchor; parts of a large blueprint can extend beyond it. Continue offers unfinished
+builds within 50 metres of their footprint. Normal hammer pieces keep their usual
+reach. Materials still come from your inventory and containers near you, using
+the separate `Build.ChestRange` setting. Ground preparation still requires the
+entire affected footprint to be loaded and active.
+
+Whole-blueprint placement offers five anchors on its lowest solid foundation layer:
+the bottom center and four corners. Q/E cycle between them (controller: D-pad
+left/right). A small yellow square marks the selected anchor. Aim near an existing
+piece's snap point to align that anchor to it.
+Hold Shift to position it freely without snapping.
+
+Page Up/Page Down, or Ctrl + mouse wheel, adjust height in 0.25 m steps, up to
+5 m above or below the aimed position. Ordinary wheel input still rotates.
+The build card displays the effective height offset, and changing blueprints
+resets it to zero. The height keys can be rebound in the Build settings.
+The lower offset is constrained by the editable terrain depth across the whole
+foundation. With Prepare ground on, the upper terrain limit also constrains it.
+If the entire foundation cannot fit within the terrain limits, placement is
+blocked. Lowering is unavailable when the terrain depth cannot be read.
+
+**Prepare ground** is optional and starts off. Toggle it with T while aiming
+(controller: D-pad up), or use the **Prepare ground: ON/OFF** button in the editor's
+right-hand material card. The build card shows the selected anchor and whether
+ground preparation is on. These keys can be rebound in the Build settings.
+
+When enabled, the yellow outline marks the rectangular footprint of the lowest
+foundation pieces, with a 1.5 m margin for the terrain grid. On a valid build click,
+the ground in that area is raised or lowered to the foundation's bottom height.
+The rectangle can include gaps between foundation pieces, such as a courtyard.
+The preview itself does not change the terrain. Roof overhangs do not enlarge
+the leveling area unless they are themselves part of the lowest layer.
+
+Ground preparation respects loaded outdoor terrain, wards, no-build areas, local
+terrain ownership and the game's height limit. The mod checks support with the
+proposed ground before applying it and checks it again after the terrain update.
+If no pieces are placed, the terrain height and smoothing data are restored.
+Once any pieces are built, their prepared ground is kept, including for a partial
+build. Continue uses that fixed site and does not level the area again.
+
+Terrain paint is preserved, and this feature adds no separate stone cost for
+leveling. Removing the completed building does not restore its former terrain.
+This implementation targets single-player.
+
+## Gathering materials for travel
+
+Open a blueprint in the editor and press **Pull materials...** at the top of the
+right-hand blueprint panel. The button stays visible while the material card scrolls.
+Each row can be switched on or off. **Except wood/stone** selects special components,
+including flint, deer hide and obsidian for station upgrades when those pieces are in
+the blueprint. **Non-teleportable** selects requirements whose item definition forbids
+teleporting. **All** and **None** reset the selection. Choices last for this game session.
+
+**Pull selected** gathers only the required quantity minus what is already in your bag.
+Nearby containers use the existing `UseChests` and `ChestRange` settings (20 m by default).
+Matching stacks are filled first, then free slots. Materials that cannot fit stay in
+storage; weight is allowed to exceed your carry limit so you can load a cart or ship.
+The result reports how many items moved and what could not be gathered. Pulling again
+only fills the remaining requirement. It does not automatically add station upgrades
+absent from the blueprint or transfer directly into a vehicle.
+
+Keyboard: Tab/arrows navigate, Enter activates a row or button, Esc closes the panel.
+Controller: D-pad/left stick navigate, cross selects or activates, right stick scrolls,
+circle closes. The existing panel walk also reaches the new editor button.
+
+## Editor scrolling and zoom
+
+Editor menus scroll one row per mouse-wheel step, including when the pointer is in
+the gaps between icons or material rows. `Editor.MenuRowsPerNotch` sets the number
+of rows (1–10, default 1). Piece grids use their current icon-row height.
+The character camera ignores the wheel while the editor or capture mode is active.
+The editor's 3D camera keeps its zoom behavior; `Editor.MenuScrollMultiplier`
+controls that zoom only (0.25–20, default 10). Previously saved values are kept.
+
+## Blueprint file storage
 
 Your blueprints are in `BepInEx/config/ValheimTomrer/blueprints/`, one text file each with a line
 per piece. Put a file there and it shows up right away, no restart needed.
@@ -308,7 +414,9 @@ skips it until it has pieces.
 - Client-side. Nobody else needs the mod, and there is nothing to install on a server.
 - Safe to remove. It adds no pieces or items, so nothing in your world breaks, and what you built
   stays.
-- Works in multiplayer, I play it with friends. The others see your builds as normal pieces.
+- The original blueprint-building features support multiplayer; other players see
+  builds as normal pieces. The 0.2.0 material-pull and terrain-preparation additions
+  currently target single-player and have not been validated in multiplayer.
 - I haven't tested it together with other building mods yet. If something breaks, please open an
   issue.
 
@@ -334,8 +442,13 @@ Updating BepInEx puts the old line back, so do it again after an update.
 
 ## About
 
-Made by mikamarik. I wrote the code together with Claude Opus 5, an AI model by Anthropic. Every
-feature was tested in the game, by hand and with automated test runs.
+Made by mikamarik. The original mod was written together with Claude Opus 5, an AI
+model by Anthropic, and tested in the game by hand and with automated test runs.
+
+The 0.2.0 additions are maintained in
+[NRICE88's fork](https://github.com/NRICE88/ValheimTomrerMod). Successive patches
+were built and tested locally in single-player, including the fix for the Baza1
+preview. See [CHANGELOG.md](CHANGELOG.md) for the added features and scope.
 
 Found a bug or have an idea? Open an issue on
 [GitHub](https://github.com/mikamarik/ValheimTomrerMod/issues).

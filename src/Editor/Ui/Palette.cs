@@ -353,6 +353,7 @@ namespace ValheimTomrer.Editor.Ui
             grid.offsetMax = new Vector2(0f, -y);
 
             _tileSize = Mathf.Max(24f, (width - (Columns - 1) * TileGap) / Columns);
+            UiBuild.ScrollStep(_scroll, _tileSize + TileGap);
             var rows = Mathf.CeilToInt(Shown.Count / (float)Columns);
             _content.sizeDelta = new Vector2(0f, rows * (_tileSize + TileGap));
             _firstRow = -1;
@@ -480,6 +481,7 @@ namespace ValheimTomrer.Editor.Ui
 
             _materialButton = MakeChip(_root, null, "Filter by material", () => SetMaterialsOpen(!_materialsOpen), out _materialLabel, out _).Rect;
             _materialScroll = UiBuild.Scroll("Materials", _root);
+            UiBuild.ScrollStep(_materialScroll, ChipHeight + ChipGap);
             _materialRow = _materialScroll.content;
             UnityEngine.Object.Destroy(_materialRow.GetComponent<VerticalLayoutGroup>());
             UnityEngine.Object.Destroy(_materialRow.GetComponent<ContentSizeFitter>());

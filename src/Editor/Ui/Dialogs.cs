@@ -261,6 +261,7 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             var scroll = UiBuild.Scroll("Files", _body, 2f);
+            UiBuild.ScrollStep(scroll, RowHeight + 2f);
             UiBuild.Stretch((RectTransform)scroll.transform);
 
             AddRows(scroll.content, DocumentStore.ListKits(), false);
@@ -399,6 +400,105 @@ namespace ValheimTomrer.Editor.Ui
             UiBuild.Stretch(label.rectTransform);
             var cancel = Foot("Cancel", () => Dismiss(), ok, Answer);
             Start(risky ? cancel : _submit);
+        }
+
+        /// <summary>Uses the existing modal lifecycle, keyboard navigation and controller walk.</summary>
+        public static void PullMaterials(string result = null)
+        {
+            var player = Player.m_localPlayer;
+            var document = EditorState.Document;
+            if (player == null || document == null)
+            {
+                Toasts.Error("Open a blueprint while in a world first.");
+                return;
+            }
+
+            if (!Begin("pullMaterials", "Pull blueprint materials", 880f, 600f))
+            {
+                return;
+            }
+
+            var sources = MaterialSources.Around(player);
+            var tally = BlueprintCard.Materials(document, sources, false);
+            var scroll = UiBuild.Scroll("PullMaterials", _body, 6f);
+            UiBuild.ScrollStep(scroll, 58f + 6f);
+            UiBuild.Stretch((RectTransform)scroll.transform);
+            Dim(scroll.content, "Only this blueprint's requirements, including crafting stations and their upgrades. "
+                + "Pulls from nearby containers into your bag. Weight may exceed your carry limit.");
+            if (result != null)
+            {
+                Dim(scroll.content, result);
+            }
+
+            // Two compact rows also fit the modal at small UI resolutions.
+            var presets = UiBuild.Row("Presets", scroll.content, 6f);
+            var morePresets = UiBuild.Row("MorePresets", scroll.content, 6f);
+            var labels = new List<Action>();
+            Action redraw = () => { foreach (var update in labels) update(); };
+            Action<int> preset = mode =>
+            {
+                foreach (var row in tally.Rows)
+                {
+                    var on = mode == 0 ? !MaterialPull.IsBulk(row.Item)
+                        : mode == 1 ? MaterialPull.IsNonTeleportable(row.Item)
+                        : mode == 2;
+                    MaterialPull.Select(row.Item, on);
+                }
+                redraw();
+            };
+            var first = UiBuild.Button("Special", presets, "Except wood/stone", () => preset(0), 34f);
+            UiBuild.Button("NonTeleportable", presets, "Non-teleportable", () => preset(1), 34f);
+            UiBuild.Button("All", morePresets, "All", () => preset(2), 34f);
+            UiBuild.Button("None", morePresets, "None", () => preset(3), 34f);
+            foreach (var host in new[] { presets, morePresets })
+            {
+                foreach (var button in host.GetComponentsInChildren<Button>())
+                {
+                    button.GetComponent<LayoutElement>().flexibleWidth = 1f;
+                    button.GetComponentInChildren<TextMeshProUGUI>().fontSize = 14f;
+                }
+            }
+
+            Dim(scroll.content, "Nearby containers: " + sources.ChestCount + " within " + sources.Range.ToString("0.#") + " m. "
+                + "Rows: required / in bag / nearby / still needed. Select rows to include or exclude them.");
+            foreach (var row in tally.Rows)
+            {
+                var captured = row;
+                var button = UiBuild.Button("Material", scroll.content, "", () =>
+                {
+                    MaterialPull.Select(captured.Item, !MaterialPull.Selected(captured.Item));
+                    redraw();
+                }, 58f);
+                var label = button.GetComponentInChildren<TextMeshProUGUI>();
+                label.fontSize = 14f;
+                label.alignment = TextAlignmentOptions.MidlineLeft;
+                label.overflowMode = TextOverflowModes.Ellipsis;
+                label.textWrappingMode = TextWrappingModes.NoWrap;
+                labels.Add(() =>
+                {
+                    var bag = player.GetInventory().CountItems(captured.Item);
+                    var nearby = Mathf.Max(0, sources.Count(captured.Item) - bag);
+                    label.text = (MaterialPull.Selected(captured.Item) ? "[x] " : "[ ] ")
+                        + captured.Name + (MaterialPull.IsNonTeleportable(captured.Item) ? " (non-teleportable)" : "")
+                        + "\nNeed " + captured.Need + " | Bag " + bag + " | Nearby " + nearby
+                        + " | Missing " + Mathf.Max(0, captured.Need - bag);
+                });
+            }
+            redraw();
+            if (tally.Rows.Count == 0)
+            {
+                Dim(scroll.content, "This blueprint has no material requirements.");
+            }
+
+            Foot("Close", () => Dismiss(), "Pull selected", () =>
+            {
+                // Re-read recipes, bag contents and nearby chests at click time.
+                var message = MaterialPull.Pull(Player.m_localPlayer, EditorState.Document);
+                PullMaterials(message);
+            });
+            _submit.interactable = tally.Rows.Count > 0;
+            LayoutRebuilder.ForceRebuildLayoutImmediate(scroll.content);
+            Start(first);
         }
 
         // ---------- building ----------

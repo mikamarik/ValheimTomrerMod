@@ -15,7 +15,7 @@ namespace ValheimTomrer
     {
         public const string PluginGuid = "com.mikamarik.valheimtomrer";
         public const string PluginName = "ValheimTomrer";
-        public const string PluginVersion = "0.1.0";
+        public const string PluginVersion = "0.2.0";
 
         internal static ValheimTomrerPlugin Instance;
         internal static ManualLogSource Log;

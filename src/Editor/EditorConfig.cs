@@ -18,6 +18,9 @@ namespace ValheimTomrer.Editor
         /// </summary>
         public const int Layer = 30;
 
+        public static ConfigEntry<float> MenuScrollMultiplier;
+        public static ConfigEntry<int> MenuRowsPerNotch;
+
         public static ConfigEntry<KeyCode> Key;
 
         /// <summary>Puts down the rectangle that turns a standing building into a blueprint, and captures it.</summary>
@@ -34,6 +37,16 @@ namespace ValheimTomrer.Editor
 
         public static void Bind(ConfigFile config)
         {
+            MenuScrollMultiplier = config.Bind(
+                "Editor", "MenuScrollMultiplier", 10f,
+                new ConfigDescription("Mouse-wheel zoom speed in the editor's 3D view. Menus use MenuRowsPerNotch instead. Existing values are preserved.",
+                    new AcceptableValueRange<float>(0.25f, 20f)));
+
+            MenuRowsPerNotch = config.Bind(
+                "Editor", "MenuRowsPerNotch", 1,
+                new ConfigDescription("Rows per mouse-wheel step in editor menus. Independent of 3D zoom speed.",
+                    new AcceptableValueRange<int>(1, 10)));
+
             Key = config.Bind(
                 "Editor",
                 "Key",

@@ -143,9 +143,15 @@ namespace ValheimTomrer.Editor.Ui
         public static ScrollRect Scroll(string name, Transform parent, float spacing = 4f)
         {
             var root = Rect(name, parent);
-            var scroll = root.gameObject.AddComponent<ScrollRect>();
+            var scroll = root.gameObject.AddComponent<RowScrollRect>();
 
             var viewport = Stretch(Rect("Viewport", root));
+            // Icons and buttons do not cover their gaps. The whole viewport must receive
+            // pointer events, including empty space, then pass them to its scroll parent.
+            var surface = viewport.gameObject.AddComponent<Image>();
+            surface.color = Color.clear;
+            surface.raycastTarget = true;
+            surface.canvasRenderer.cullTransparentMesh = false;
             viewport.gameObject.AddComponent<RectMask2D>();
 
             var content = Rect("Content", viewport);
@@ -166,8 +172,16 @@ namespace ValheimTomrer.Editor.Ui
             scroll.content = content;
             scroll.horizontal = false;
             scroll.movementType = ScrollRect.MovementType.Clamped;
-            scroll.scrollSensitivity = 30f;
             return scroll;
+        }
+
+        /// <summary>Row pitch for hand-laid and virtualised lists, updated when their layout changes.</summary>
+        public static void ScrollStep(ScrollRect scroll, float step)
+        {
+            if (scroll is RowScrollRect rows)
+            {
+                rows.RowStep = step;
+            }
         }
 
         /// <summary>

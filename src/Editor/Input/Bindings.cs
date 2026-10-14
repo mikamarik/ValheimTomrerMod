@@ -291,7 +291,7 @@ namespace ValheimTomrer.Editor.Input
             }
 
             // The UI module reports one notch as 1; the zoom curve is written for the browser's 100.
-            camera.Zoom(-notches * 100f, viewport);
+            camera.Zoom(-notches * 100f * (EditorConfig.MenuScrollMultiplier?.Value ?? 10f), viewport);
         }
 
         /// <summary>

@@ -59,6 +59,10 @@ namespace ValheimTomrer.Editor.Ui
         private static RectTransform _materials;
         private static LayoutElement _materialsSize;
         private static MaterialList _list;
+        private static Button _pullButton;
+        private static TextMeshProUGUI _groundLabel;
+
+        public static Button PullButton => _pullButton;
 
         /// <summary>The last <see cref="MaterialSources.Around"/>, and when it was made (unscaled time).</summary>
         private static MaterialSources _sources;
@@ -147,6 +151,7 @@ namespace ValheimTomrer.Editor.Ui
 
         public static void Tick()
         {
+            GroundLabel();
             if (_root == null || _document == null)
             {
                 return;
@@ -168,8 +173,8 @@ namespace ValheimTomrer.Editor.Ui
             }
 
             // The region grows with a long list, as far as the window lets it (the height of the
-            // last layout, plus the scroll view's 4 px inset at the top and the bottom).
-            EditorWindow.FitBlueprint(_scroll.content.rect.height + 8f);
+            // last layout, plus the pinned button and the scroll view's insets).
+            EditorWindow.FitBlueprint(_scroll.content.rect.height + 50f);
         }
 
         public static void Close()
@@ -386,10 +391,20 @@ namespace ValheimTomrer.Editor.Ui
 
         private static void Build(RectTransform host)
         {
+            // Keep gathering reachable even when the blueprint has a very long material list.
+            _pullButton = UiBuild.Button("PullMaterials", host, "Pull materials...", () => Dialogs.PullMaterials(), 34f);
+            var pullRect = (RectTransform)_pullButton.transform;
+            pullRect.anchorMin = new Vector2(0f, 1f);
+            pullRect.anchorMax = new Vector2(1f, 1f);
+            pullRect.pivot = new Vector2(0.5f, 1f);
+            pullRect.offsetMin = new Vector2(4f, -38f);
+            pullRect.offsetMax = new Vector2(-4f, -4f);
+
             // One scroll view round everything: when even the grown band is too short for a long
             // materials list, the wheel (or the right stick in the panel walk) scrolls it.
             _scroll = UiBuild.Scroll("Blueprint", host, 4f);
-            UiBuild.Stretch((RectTransform)_scroll.transform, 4f, 4f, 4f, 4f);
+            UiBuild.ScrollStep(_scroll, MaterialList.RowHeight + MaterialList.RowGap);
+            UiBuild.Stretch((RectTransform)_scroll.transform, 4f, 4f, 4f, 46f);
             _root = _scroll.content;
             _root.GetComponent<VerticalLayoutGroup>().padding = new RectOffset(2, 2, 2, 2);
 
@@ -442,6 +457,14 @@ namespace ValheimTomrer.Editor.Ui
             var card = _cardPanel;
 
             _cardName = Line(card, 17f, UiTheme.Accent);
+            var ground = UiBuild.Button("PrepareGround", card, "", () =>
+            {
+                BuildConfig.PrepareGround.Value = !BuildConfig.PrepareGround.Value;
+                GroundLabel();
+                BlueprintInfoCard.RefreshSoon();
+            }, 34f);
+            _groundLabel = ground.GetComponentInChildren<TextMeshProUGUI>();
+            GroundLabel();
 
             var body = Row("Body", card, 8f);
             body.gameObject.AddComponent<LayoutElement>().minHeight = 46f;
@@ -461,6 +484,13 @@ namespace ValheimTomrer.Editor.Ui
             // No "Can build now" here: the blueprint stands nowhere in the world, so there is no
             // spot to plan at, and the card text above already counts the pieces.
             _list.FooterShown = false;
+        }
+
+        private static void GroundLabel()
+        {
+            if (_groundLabel == null) return;
+            var text = "Prepare ground: " + (BuildConfig.PrepareGround.Value ? "ON" : "OFF");
+            if (_groundLabel.text != text) _groundLabel.text = text;
         }
 
         private static Choice NewChoice(string prefab, string text, Sprite icon)

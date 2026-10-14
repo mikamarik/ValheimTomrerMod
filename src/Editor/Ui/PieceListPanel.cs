@@ -239,6 +239,7 @@ namespace ValheimTomrer.Editor.Ui
             UiBuild.Stretch(_root, Pad, Pad, Pad, Pad);
 
             _scroll = UiBuild.Scroll("Rows", _root);
+            UiBuild.ScrollStep(_scroll, RowHeight + RowGap);
             var grid = (RectTransform)_scroll.transform;
             grid.anchorMin = Vector2.zero;
             grid.anchorMax = Vector2.one;

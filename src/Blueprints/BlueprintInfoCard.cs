@@ -112,6 +112,10 @@ namespace ValheimTomrer.Blueprints
             // A click that leaves parts goes to Continue on its own, so the title says which mode this is.
             hud.m_buildSelection.text = site != null ? $"Continue: {site.Name}" : blueprint.Name;
             hud.m_pieceDescription.text = Description(blueprint, site != null);
+            if (site == null)
+                hud.m_pieceDescription.text += "\nAnchor: " + BlueprintMode.AnchorName
+                    + $"\nHeight offset: {BlueprintMode.HeightOffset:+0.00;-0.00;0.00} m"
+                    + "\nPrepare ground: " + (BlueprintMode.PreparingGround ? "ON (raise/lower)" : "OFF");
             hud.m_buildIcon.enabled = blueprint.Icon != null;
             hud.m_buildIcon.sprite = blueprint.Icon;
             hud.m_snappingIcon.enabled = false;
@@ -216,7 +220,7 @@ namespace ValheimTomrer.Blueprints
         }
 
         /// <summary>
-        /// What a click would build where the preview stands now. <see cref="PartialBuild.Plan(ResolvedBlueprint, Vector3, float, bool[], MaterialSources, bool)"/>
+        /// What a click would build where the preview stands now. <see cref="PartialBuild.Plan(ResolvedBlueprint, Vector3, float, bool[], MaterialSources, bool, System.Func{Vector3, float})"/>
         /// is not cheap on a big blueprint, so it runs again only when what it reads changed: the item
         /// counts, the stations near the preview, the free-build keys, costs on or off, or the preview's
         /// spot (moved 0.5 m or turned 7.5 degrees from where the last plan was made). A slow plan also
@@ -282,7 +286,7 @@ namespace ValheimTomrer.Blueprints
 
             LastPlanReason = fresh ? "new blueprint" : rest != _planRest ? "materials, stations or keys" : firstAim ? "first aim" : "moved";
             var watch = Stopwatch.StartNew();
-            _planCount = PartialBuild.Plan(blueprint, position, yaw, null, sources, noCost).Count;
+            _planCount = PartialBuild.Plan(blueprint, position, yaw, null, sources, noCost, BlueprintMode.ProposedGround).Count;
             _planMs = watch.Elapsed.TotalMilliseconds;
             _planRest = rest;
             _planPosition = position;
@@ -297,6 +301,7 @@ namespace ValheimTomrer.Blueprints
         {
             Key.Length = 0;
             Key.Append(noCost ? 'f' : 'c').Append('|');
+            Key.Append(BlueprintMode.PreparingGround ? 'g' : '-').Append('|');
             foreach (var cost in blueprint.TotalCost)
             {
                 Key.Append(sources != null ? sources.Count(cost.m_resItem.m_itemData.m_shared.m_name) : 0).Append(',');

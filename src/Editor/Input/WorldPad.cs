@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using ValheimTomrer.Editor.Ui;
+using ValheimTomrer.Blueprints;
 
 namespace ValheimTomrer.Editor.Input
 {
@@ -177,6 +178,10 @@ namespace ValheimTomrer.Editor.Input
             if (WorldCapture.Active)
             {
                 wanted |= Group.Dpad | Group.Circle;
+            }
+            if (BlueprintMode.Active && BlueprintMode.CurrentSite == null)
+            {
+                wanted |= Group.Dpad;
             }
 
             if (ModifierHeld)

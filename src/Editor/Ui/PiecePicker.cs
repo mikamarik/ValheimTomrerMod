@@ -358,6 +358,7 @@ namespace ValheimTomrer.Editor.Ui
             grid.offsetMax = new Vector2(-Pad, -top);
 
             _tileSize = Mathf.Max(24f, (width - ((Columns - 1) * TileGap)) / Columns);
+            UiBuild.ScrollStep(_scroll, _tileSize + TileGap);
             var rows = Mathf.CeilToInt(InTab.Count / (float)Columns);
             _content.sizeDelta = new Vector2(0f, rows * (_tileSize + TileGap));
         }

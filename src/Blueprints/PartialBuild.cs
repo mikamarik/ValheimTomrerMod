@@ -8,7 +8,7 @@ using ValheimTomrer.Editor.Placement;
 
 namespace ValheimTomrer.Blueprints
 {
-    /// <summary>What one <see cref="PartialBuild.Plan(ResolvedBlueprint, Vector3, float, bool[], MaterialSources, bool)"/> call did. For the log and the tests.</summary>
+    /// <summary>What one <see cref="PartialBuild.Plan(ResolvedBlueprint, Vector3, float, bool[], MaterialSources, bool, System.Func{Vector3, float})"/> call did. For the log and the tests.</summary>
     internal sealed class PlanStats
     {
         /// <summary>"nothing left", "no cost", "all paid" or "passes": which step of the plan answered.</summary>
@@ -48,16 +48,17 @@ namespace ValheimTomrer.Blueprints
 
         /// <summary>The parts to build, in the order to build them. Empty when nothing can go up now.</summary>
         public static List<int> Plan(
-            ResolvedBlueprint blueprint, Vector3 rootPosition, float rootYaw, bool[] built, MaterialSources sources, bool noCost)
+            ResolvedBlueprint blueprint, Vector3 rootPosition, float rootYaw, bool[] built, MaterialSources sources, bool noCost,
+            Func<Vector3, float> proposedGround = null)
         {
             var budget = noCost || sources == null ? new Dictionary<string, int>() : Budget(blueprint, built, sources);
-            return Plan(blueprint, rootPosition, rootYaw, built, budget, noCost, null);
+            return Plan(blueprint, rootPosition, rootYaw, built, budget, noCost, null, proposedGround);
         }
 
         /// <summary>The same, with the budget given as item name to count. The tests call this one.</summary>
         internal static List<int> Plan(
             ResolvedBlueprint blueprint, Vector3 rootPosition, float rootYaw, bool[] built,
-            IDictionary<string, int> budget, bool noCost, PlanStats stats)
+            IDictionary<string, int> budget, bool noCost, PlanStats stats, Func<Vector3, float> proposedGround = null)
         {
             var watch = Stopwatch.StartNew();
             var parts = blueprint.Parts;
@@ -85,7 +86,7 @@ namespace ValheimTomrer.Blueprints
             }
 
             // 3. The whole blueprint, once.
-            var ground = GroundUnder(rootPosition, rootYaw);
+            var ground = proposedGround ?? GroundUnder(rootPosition, rootYaw);
             var scene = SceneOf(blueprint);
             var exempt = Exempt(scene, ground, stats);
 

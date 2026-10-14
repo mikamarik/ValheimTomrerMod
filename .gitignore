@@ -17,3 +17,7 @@ thunderstore/build/
 
 # Automatic test output (scripts/autotest.sh)
 .devtest/
+
+# Optional root-level build/package helpers
+Package/
+dist/

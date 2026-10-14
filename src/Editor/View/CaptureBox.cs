@@ -33,6 +33,7 @@ namespace ValheimTomrer.Editor.View
         private float _yaw;
         private float _width;
         private float _depth;
+        private bool _followTerrain;
 
         /// <summary>The outline stands in the world right now.</summary>
         public bool Visible => _object != null && _object.activeSelf;
@@ -47,7 +48,7 @@ namespace ValheimTomrer.Editor.View
         }
 
         /// <summary>Draws the rectangle around <paramref name="centre"/>, turned by <paramref name="yaw"/> degrees.</summary>
-        public void Show(Vector3 centre, float yaw, float width, float depth)
+        public void Show(Vector3 centre, float yaw, float width, float depth, bool followTerrain = true)
         {
             Build();
             if (_object == null)
@@ -55,7 +56,8 @@ namespace ValheimTomrer.Editor.View
                 return;
             }
 
-            var same = Visible && centre == _centre && yaw == _yaw && width == _width && depth == _depth;
+            var same = Visible && centre == _centre && yaw == _yaw && width == _width && depth == _depth
+                && followTerrain == _followTerrain;
             if (same)
             {
                 return;
@@ -65,6 +67,7 @@ namespace ValheimTomrer.Editor.View
             _yaw = yaw;
             _width = width;
             _depth = depth;
+            _followTerrain = followTerrain;
 
             var turn = Quaternion.Euler(0f, yaw, 0f);
             var x = width * 0.5f;
@@ -87,7 +90,7 @@ namespace ValheimTomrer.Editor.View
                 for (var i = 0; i < steps; i++)
                 {
                     var point = centre + (turn * Vector3.Lerp(from, to, i / (float)steps));
-                    if (zones != null)
+                    if (followTerrain && zones != null)
                     {
                         point.y = zones.GetGroundHeight(point);
                     }
